@@ -1,10 +1,12 @@
 #include <chrono>
 #include <ostream> 
-
 #include <torch/extension.h>
+
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
+#define MAX_SORB_LEN  3
+#define MAX_NELE 100
 
 std::chrono::high_resolution_clock::time_point get_time(){
    return std::chrono::high_resolution_clock::now();
@@ -124,7 +126,8 @@ double get_Hii_cpu(unsigned long *bra, unsigned long *ket,
 {
     double Hii = 0.00;
     // int olst[nele] ={0};
-    int *olst = new int[nele];
+    // int *olst = new int[nele];
+    int olst[MAX_NELE] = {0}; 
     get_olst_cpu(bra, olst, bra_len);
     
     for(int i=0; i<nele; i++){  
@@ -135,7 +138,7 @@ double get_Hii_cpu(unsigned long *bra, unsigned long *ket,
             Hii += h2e_get_cpu(h2e, p, q, p, q); //<pq||pq> Storage not continuous
         }
     }
-    delete []olst;
+    // delete []olst;
     return Hii;
 }
 
@@ -203,9 +206,10 @@ double get_Hij_cpu(uint8_t *bra_uint8, uint8_t *ket_uint8,
     ket: unsigned long 
     */
     double Hij = 0.00;
-    unsigned long *bra = new unsigned long[bra_len];  
-    unsigned long *ket = new unsigned long[bra_len];  
-
+    // unsigned long *bra = new unsigned long[bra_len];  
+    // unsigned long *ket = new unsigned long[bra_len];  
+    unsigned long bra[MAX_SORB_LEN] = {0};
+    unsigned long ket[MAX_SORB_LEN] = {0};
     // unsigned long bra[bra_len], ket[bra_len]; 
 
     tensor_to_array_cpu(bra_uint8, bra, tensor_len, bra_len);
@@ -220,8 +224,8 @@ double get_Hij_cpu(uint8_t *bra_uint8, uint8_t *ket_uint8,
     }else if (type[0] == 2 && type[1] == 2){
         Hij = get_HijD_cpu(bra, ket, h1e, h2e, sorb, bra_len);
     }
-    delete []bra;
-    delete []ket;
+    // delete []bra;
+    // delete []ket;
     return Hij;
 }
 
@@ -266,4 +270,3 @@ torch::Tensor get_Hij_mat_cpu(
 
     return Hmat;
 }
-
