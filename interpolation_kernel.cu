@@ -3,11 +3,9 @@
 #include<torch/extension.h>
 #include<cuda.h>
 
-
-__device__ inline int popcnt( unsigned long x) {return __popcll(x);}
+__device__ inline int popcnt( unsigned long x) {return __popcll(x);}    
 __device__ inline int get_parity( unsigned long x) {return __popcll(x) & 1;}
 __device__ inline unsigned long get_ones( int n){return (1ULL<<n) - 1ULL;}// parenthesis must be added due to priority
-
 
 __device__ inline int __ctzl(unsigned long x)
 {
@@ -132,8 +130,8 @@ __device__ double get_Hii(unsigned long *bra, unsigned long *ket,
                double *h1e, double *h2e, int sorb, const int nele, int bra_len)
 {
     double Hii = 0.00;
-    // int olst[nele] ={0};
-    int *olst = new int[nele];
+    // int *olst = new int[nele];
+    int olst[MAX_NELE] = {0}; 
     get_olst(bra, olst, bra_len);
     
     for(int i=0; i<nele; i++){  
@@ -145,7 +143,7 @@ __device__ double get_Hii(unsigned long *bra, unsigned long *ket,
         }
         // std::cout << "  " << std::endl;
     }
-    delete []olst;
+    // delete []olst;
     return Hii;
 }
 
@@ -213,10 +211,12 @@ __device__ double get_Hij(uint8_t *bra_uint8, uint8_t *ket_uint8,
     ket: unsigned long 
     */
     double Hij = 0.00;
-    unsigned long *bra = new unsigned long[bra_len];  
-    unsigned long *ket = new unsigned long[bra_len];  
+    // unsigned long *bra = new unsigned long[bra_len];  
+    // unsigned long *ket = new unsigned long[bra_len];
 
-    // unsigned long bra[bra_len], ket[bra_len]; 
+    unsigned long bra[MAX_SORB_LEN] = {0};
+    unsigned long ket[MAX_SORB_LEN] = {0};
+
 
     tensor_to_array(bra_uint8, bra, tensor_len, bra_len);
     tensor_to_array(ket_uint8, ket, tensor_len, bra_len);
@@ -230,8 +230,9 @@ __device__ double get_Hij(uint8_t *bra_uint8, uint8_t *ket_uint8,
     }else if (type[0] == 2 && type[1] == 2){
         Hij = get_HijD(bra, ket, h1e, h2e, sorb, bra_len);
     }
-    delete []bra;
-    delete []ket;
+
+    // delete []bra;
+    // delete []ket;
     return Hij;
 }
 
@@ -287,7 +288,7 @@ torch::Tensor get_Hij_cuda(
     uint8_t *bra_ptr = bra_tensor.data_ptr<uint8_t>();
     uint8_t *ket_ptr = ket_tensor.data_ptr<uint8_t>();
     double *Hmat_ptr = Hmat.data_ptr<double>();
-    dim3 threads(16, 16);
+    dim3 threads(32, 32);
     dim3 blocks((n+threads.x-1)/threads.x, (m+threads.y-1)/threads.y);
     
     cudaEventRecord(end);
