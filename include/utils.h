@@ -1,3 +1,4 @@
+#include "default.h"
 #include <chrono>
 #include <ostream> 
 #include <torch/extension.h>
@@ -5,8 +6,7 @@
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
-#define MAX_SORB_LEN  3
-#define MAX_NELE 100
+
 
 std::chrono::high_resolution_clock::time_point get_time(){
    return std::chrono::high_resolution_clock::now();
@@ -177,6 +177,7 @@ double get_HijD_cpu(unsigned long *bra, unsigned long *ket,
     return Hij ;
 }
 
+/***
 void tensor_to_array_cpu(uint8_t *bra_tensor, unsigned long *new_bra, int len1, int len2)
 {
     int idx_bra = 0;
@@ -196,24 +197,26 @@ void tensor_to_array_cpu(uint8_t *bra_tensor, unsigned long *new_bra, int len1, 
     }
     new_bra[len2-1] =tmp;
 }
+***/
 
-double get_Hij_cpu(uint8_t *bra_uint8, uint8_t *ket_uint8,
+double get_Hij_cpu(unsigned long *bra, unsigned long *ket,
               double *h1e, double *h2e, size_t sorb, size_t nele,
               size_t tensor_len, size_t bra_len)
 {
     /*
-    bra_uint8: uint8_t
-    ket: unsigned long 
+    bra/ket: unsigned long 
     */
     double Hij = 0.00;
-    // unsigned long *bra = new unsigned long[bra_len];  
-    // unsigned long *ket = new unsigned long[bra_len];  
+
+    /***
     unsigned long bra[MAX_SORB_LEN] = {0};
     unsigned long ket[MAX_SORB_LEN] = {0};
-    // unsigned long bra[bra_len], ket[bra_len]; 
-
     tensor_to_array_cpu(bra_uint8, bra, tensor_len, bra_len);
     tensor_to_array_cpu(ket_uint8, ket, tensor_len, bra_len);
+    ***/
+
+    // unsigned long *bra = reinterpret_cast<unsigned long*>(bra_uint8);
+    // unsigned long *ket = reinterpret_cast<unsigned long*>(ket_uint8);
 
     int type[2] = {0};
     diff_type_cpu(bra, ket, type, bra_len);
@@ -224,8 +227,6 @@ double get_Hij_cpu(uint8_t *bra_uint8, uint8_t *ket_uint8,
     }else if (type[0] == 2 && type[1] == 2){
         Hij = get_HijD_cpu(bra, ket, h1e, h2e, sorb, bra_len);
     }
-    // delete []bra;
-    // delete []ket;
     return Hij;
 }
 
@@ -237,15 +238,16 @@ torch::Tensor get_Hij_mat_cpu(
 
     auto t3 = get_time();
     int n = bra_tensor.size(0), m = ket_tensor.size(0);
-    const int tensor_len = bra_tensor.size(1);
-    const int bra_len = (tensor_len-1)/8 + 1;
+    const int bra_len = (sorb-1)/64 + 1;
+    // notice: tensor_len： 是bra_tensor[1] 除去尾部0的长度
+    const int tensor_len = (sorb-1)/8 + 1;
 
     torch::Tensor Hmat = torch::zeros({n, m}, h1e_tensor.options());
 
     double *h1e_ptr = h1e_tensor.data_ptr<double>();
     double *h2e_ptr = h2e_tensor.data_ptr<double>();
-    uint8_t *bra_ptr = bra_tensor.data_ptr<uint8_t>();
-    uint8_t *ket_ptr = ket_tensor.data_ptr<uint8_t>();
+    unsigned long *bra_ptr = reinterpret_cast<unsigned long*>(bra_tensor.data_ptr<uint8_t>());
+    unsigned long *ket_ptr = reinterpret_cast<unsigned long*>(ket_tensor.data_ptr<uint8_t>());
     double *Hmat_ptr = Hmat.data_ptr<double>();
 
     auto t2 = get_time();
@@ -253,11 +255,10 @@ torch::Tensor get_Hij_mat_cpu(
     std::cout << std::setprecision(6);
     std::cout << "CPU Hmat initialization time: " << delta1/1000000 << " ms" << std::endl;
 
-
     auto t0 = get_time();
     for(int i=0; i<n; i++){
         for(int j=0; j<m; j++){
-            Hmat_ptr[i * m + j] = get_Hij_cpu(&bra_ptr[i*tensor_len], &ket_ptr[j*tensor_len], 
+            Hmat_ptr[i * m + j] = get_Hij_cpu(&bra_ptr[i*bra_len], &ket_ptr[j*bra_len], 
                                       h1e_ptr, h2e_ptr, sorb, nele, tensor_len, bra_len);
         }
     }
@@ -270,3 +271,4 @@ torch::Tensor get_Hij_mat_cpu(
 
     return Hmat;
 }
+
