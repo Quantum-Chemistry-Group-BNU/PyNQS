@@ -1,11 +1,15 @@
+#include "default.h"
 #include<iostream>
 #include<cuda_runtime.h>
 #include<torch/extension.h>
 #include<cuda.h>
 
+
+
 __device__ inline int popcnt( unsigned long x) {return __popcll(x);}    
 __device__ inline int get_parity( unsigned long x) {return __popcll(x) & 1;}
 __device__ inline unsigned long get_ones( int n){return (1ULL<<n) - 1ULL;}// parenthesis must be added due to priority
+
 
 __device__ inline int __ctzl(unsigned long x)
 {
@@ -130,7 +134,6 @@ __device__ double get_Hii(unsigned long *bra, unsigned long *ket,
                double *h1e, double *h2e, int sorb, const int nele, int bra_len)
 {
     double Hii = 0.00;
-    // int *olst = new int[nele];
     int olst[MAX_NELE] = {0}; 
     get_olst(bra, olst, bra_len);
     
@@ -141,9 +144,7 @@ __device__ double get_Hii(unsigned long *bra, unsigned long *ket,
             int q = olst[j];
             Hii += h2e_get(h2e, p, q, p, q); //<pq||pq> Storage not continuous
         }
-        // std::cout << "  " << std::endl;
     }
-    // delete []olst;
     return Hii;
 }
 
@@ -182,6 +183,7 @@ __device__ double get_HijD(unsigned long *bra, unsigned long *ket,
     return Hij ;
 }
 
+/***
 __device__ void tensor_to_array(uint8_t *bra_tensor, unsigned long *new_bra, int len1, int len2)
 {
     int idx_bra = 0;
@@ -201,25 +203,16 @@ __device__ void tensor_to_array(uint8_t *bra_tensor, unsigned long *new_bra, int
     }
     new_bra[len2-1] =tmp;
 }
+***/
 
-__device__ double get_Hij(uint8_t *bra_uint8, uint8_t *ket_uint8,
+__device__ double get_Hij(unsigned long *bra, unsigned long *ket_uint8,
               double *h1e, double *h2e, size_t sorb, size_t nele,
               size_t tensor_len, size_t bra_len)
 {
     /*
-    bra_uint8: uint8_t
-    ket: unsigned long 
+    bra/ket: unsigned long 
     */
     double Hij = 0.00;
-    // unsigned long *bra = new unsigned long[bra_len];  
-    // unsigned long *ket = new unsigned long[bra_len];
-
-    unsigned long bra[MAX_SORB_LEN] = {0};
-    unsigned long ket[MAX_SORB_LEN] = {0};
-
-
-    tensor_to_array(bra_uint8, bra, tensor_len, bra_len);
-    tensor_to_array(ket_uint8, ket, tensor_len, bra_len);
 
     int type[2] = {0};
     diff_type(bra, ket, type, bra_len);
@@ -230,14 +223,11 @@ __device__ double get_Hij(uint8_t *bra_uint8, uint8_t *ket_uint8,
     }else if (type[0] == 2 && type[1] == 2){
         Hij = get_HijD(bra, ket, h1e, h2e, sorb, bra_len);
     }
-
-    // delete []bra;
-    // delete []ket;
     return Hij;
 }
 
 __global__ void get_Hij_kernel(double *Hmat_ptr,
-              uint8_t *bra_uint8, uint8_t *ket_uint8,
+              unsigned long *bra, unsigned long *ket,
               double *h1e, double *h2e,
               const size_t sorb, const size_t nele,
               const size_t tensor_len, const size_t bra_len, 
@@ -247,7 +237,7 @@ __global__ void get_Hij_kernel(double *Hmat_ptr,
     int idm = blockIdx.y * blockDim.y + threadIdx.y;
     if (idn >= n || idm >= m ) return;
 
-    Hmat_ptr[idn * m + idm] = get_Hij(&bra_uint8[idn*tensor_len], &ket_uint8[idm*tensor_len], 
+    Hmat_ptr[idn * m + idm] = get_Hij(&bra[idn*bra_len], &ket[idm*bra_len], 
                                       h1e, h2e, sorb, nele, tensor_len, bra_len);
 
 }
@@ -258,8 +248,8 @@ torch::Tensor get_Hij_cuda(
     const int sorb, const int nele)
 {
     /*
-    bra_tensor: shape(N, a): a = (sorb-1)/8+1
-    ket_tensor: shape(M, a): a = (sorb-1)/8+1
+    bra_tensor: shape(N, a): a = 
+    ket_tensor: shape(M, a): a = ((sorb-1)/64 + 1)
     h1e_tensor/h2e_tensor: one dim
     sorb: the number of spin orbital
     nele: the number of eletron
@@ -277,17 +267,18 @@ torch::Tensor get_Hij_cuda(
     cudaEventRecord(start);
 
     int n = bra_tensor.size(0), m = ket_tensor.size(0);
-    const int tensor_len = bra_tensor.size(1);
-    const int bra_len = (tensor_len-1)/8 + 1;
+    const int tensor_len = (sorb-1)/8 + 1;
+    const int bra_len = (sorb-1)/64 + 1;
 
     torch::Tensor Hmat = torch::zeros({n, m}, h1e_tensor.options());
     cudaDeviceSynchronize();
 
     double *h1e_ptr = h1e_tensor.data_ptr<double>();
     double *h2e_ptr = h2e_tensor.data_ptr<double>();
-    uint8_t *bra_ptr = bra_tensor.data_ptr<uint8_t>();
-    uint8_t *ket_ptr = ket_tensor.data_ptr<uint8_t>();
+    unsigned long *bra = reinterpret_cast<unsigned long*>(bra_tensor.data_ptr<uint8_t>());
+    unsigned long *ket = reinterpret_cast<unsigned long*>(ket_tensor.data_ptr<uint8_t>());
     double *Hmat_ptr = Hmat.data_ptr<double>();
+
     dim3 threads(32, 32);
     dim3 blocks((n+threads.x-1)/threads.x, (m+threads.y-1)/threads.y);
     
@@ -320,7 +311,6 @@ torch::Tensor get_Hij_cuda(
     std::cout << std::setprecision(6);
     std::cout << "Total function GPU function time: " << total_time_ms << " ms\n" << std::endl;
     
-
     return Hmat;
 
 }
