@@ -205,7 +205,7 @@ __device__ void tensor_to_array(uint8_t *bra_tensor, unsigned long *new_bra, int
 }
 ***/
 
-__device__ double get_Hij(unsigned long *bra, unsigned long *ket_uint8,
+__device__ double get_Hij(unsigned long *bra, unsigned long *ket,
               double *h1e, double *h2e, size_t sorb, size_t nele,
               size_t tensor_len, size_t bra_len)
 {
@@ -275,8 +275,8 @@ torch::Tensor get_Hij_cuda(
 
     double *h1e_ptr = h1e_tensor.data_ptr<double>();
     double *h2e_ptr = h2e_tensor.data_ptr<double>();
-    unsigned long *bra = reinterpret_cast<unsigned long*>(bra_tensor.data_ptr<uint8_t>());
-    unsigned long *ket = reinterpret_cast<unsigned long*>(ket_tensor.data_ptr<uint8_t>());
+    unsigned long *bra_ptr = reinterpret_cast<unsigned long*>(bra_tensor.data_ptr<uint8_t>());
+    unsigned long *ket_ptr = reinterpret_cast<unsigned long*>(ket_tensor.data_ptr<uint8_t>());
     double *Hmat_ptr = Hmat.data_ptr<double>();
 
     dim3 threads(32, 32);
