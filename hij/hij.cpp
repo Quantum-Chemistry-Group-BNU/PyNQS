@@ -1,11 +1,9 @@
-#include "utils.h"
-#include <ostream>
 #include <vector>
 #include <tuple>
+#include <torch/extension.h>
+#include "utils_hij.h"
 
 using namespace std;
-
-
 
 torch::Tensor get_Hij_torch(
     torch::Tensor &bra_tensor, torch::Tensor &ket_tensor, 
@@ -24,13 +22,7 @@ torch::Tensor get_Hij_torch(
     else{
         return get_Hij_mat_cpu(bra_tensor, ket_tensor, h1e_tensor, h2e_tensor, sorb, nele);
     }
-    // CHECK_INPUT(ket_tensor);
-    // CHECK_INPUT(ket_tensor);
-    // CHECK_INPUT(h1e_tensor);
-    // CHECK_INPUT(h2e_tensor);
-    // return get_Hij_cuda(bra_tensor, ket_tensor, h1e_tensor, h2e_tensor, sorb, nele);
 }
-
 
 auto trilinear_interpolation(
     torch::Tensor feats,  // shape: (N, 8, F) F:特征数目 N 正方体的数目
@@ -59,7 +51,6 @@ auto trilinear_interpolation(
     return v;
 }
 
-
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
     m.def("trilinear_interpolation", &trilinear_interpolation);
     m.def("get_Hij_torch", &get_Hij_torch);
@@ -71,14 +62,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
         auto delta = get_duration_nano(t1-t0);
         return make_tuple(value, delta);
         });
-    /***
-    m.def("tensor_to_vector", &tensor_to_vector);
-    m.def("diff_type", &diff_type);
-    m.def("get_HijD", &get_HijD);
-    m.def("parity", &parity);
-    m.def("diff_orb",[](const torch::Tensor bra, const torch::Tensor ket){
-        std::vector<int> cre, ann;
-        diff_orb(bra, ket, cre, ann);
-        return std::make_tuple(cre, ann);});
-    ***/
+    m.def("get_comb_tensor", &get_comb_tensor);
 }

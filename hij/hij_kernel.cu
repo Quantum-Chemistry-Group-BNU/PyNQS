@@ -1,15 +1,13 @@
 #include "default.h"
 #include<iostream>
 #include<cuda_runtime.h>
+#include<device_launch_parameters.h>
 #include<torch/extension.h>
 #include<cuda.h>
-
-
 
 __device__ inline int popcnt( unsigned long x) {return __popcll(x);}    
 __device__ inline int get_parity( unsigned long x) {return __popcll(x) & 1;}
 __device__ inline unsigned long get_ones( int n){return (1ULL<<n) - 1ULL;}// parenthesis must be added due to priority
-
 
 __device__ inline int __ctzl(unsigned long x)
 {
@@ -239,7 +237,6 @@ __global__ void get_Hij_kernel(double *Hmat_ptr,
 
     Hmat_ptr[idn * m + idm] = get_Hij(&bra[idn*bra_len], &ket[idm*bra_len], 
                                       h1e, h2e, sorb, nele, tensor_len, bra_len);
-
 }
 
 torch::Tensor get_Hij_cuda(
@@ -279,9 +276,10 @@ torch::Tensor get_Hij_cuda(
     unsigned long *ket_ptr = reinterpret_cast<unsigned long*>(ket_tensor.data_ptr<uint8_t>());
     double *Hmat_ptr = Hmat.data_ptr<double>();
 
-    dim3 threads(32, 32);
+    dim3 threads(1, 512);
     dim3 blocks((n+threads.x-1)/threads.x, (m+threads.y-1)/threads.y);
     
+    std::cout << "threads: " << THREAD << " " << THREAD << std::endl;
     cudaEventRecord(end);
     cudaEventSynchronize(end);
     float time_ms = 0.f;

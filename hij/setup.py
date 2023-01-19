@@ -12,13 +12,13 @@ include_dirs = [osp.join(ROOT_DIR, "include")]
 
 sources = glob.glob('*.cpp')+glob.glob('*.cu')
 
-s = "cppcuda_tutorial_pt_cuda"
+s = "hij_tensor"
 
 setup(
     name=s,
     version='1.0',
-    author='kwea123',
-    author_email='kwea123@gmail.com',
+    author='zbwu',
+    author_email='zbwu1996@gmail.com',
     description=s,
     long_description=s,
     ext_modules=[
