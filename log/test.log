@@ -1,0 +1,47 @@
+<n|H|m>
+Date:
+    2023/1/13
+Platform
+    i5-9300H/32G 1650 Archlinux 5.15.86-1-lts
+Content:
+    GPU 函数 get_Hij 中各部分耗时：
+    1.tensor_to_array
+    2. get_Hij 计算部分
+Version	0
+Key paraments
+    H8 STO-3G threads(16, 16)
+Result：
+    Kernel time/ms	a	    b   	c	    d
+                    15.591	2.78035	2.76442	0.2456
+                    15.6099	2.75386	2.81952	0.250208
+                    15.6107	2.76659	2.7511	0.245024
+    Average time:	15.604 	2.767 	2.778 	0.247
+		a:	get_Hij 正常
+		b：	注释 get_Hij 计算部分
+		c：	注释 get_Hij 计算部分和tensor_to_array 函数,有显示retuen值 0.00
+		d：	get_Hij 是空函数，无显示return值
+Summary：
+    1. tensor_to_array 耗时不明显 2.767-2.778 = - 0.011ms,
+    2. get_Hij 计算部分耗时 15.604 - 2.767 = 12.837 ms
+    3. device ->global 耗时:  2.778 - 0.247 = 2.531 ms
+log file:
+    0-no-Hij.log
+
+Version: 1
+Key paraments
+    H8 STO-3G threads(16, 16)
+Result：
+    Kernel time/ms	e	       f	      g
+                    5.6832	3.04154	0.256288
+                    5.65635	3.04074	0.253344
+                    5.62381	3.03693	0.258944
+    Average time:	5.654 	3.040 	0.256
+        e:	get_Hij 正常
+        f:	注释 get_Hij 计算部分，有显示retuen值 0.00
+        g:	get_Hij 是空函数，无显示return值
+Summary：
+	1: get_Hij 计算部分耗时 5.654 - 3.040 = 2.614 ms
+	2: device -> global 耗时 3.040 - 0.256 = 2.784 ms
+log file：	1-no-Hij.log
+
+
