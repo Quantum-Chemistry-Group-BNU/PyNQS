@@ -4,10 +4,12 @@
 #include<device_launch_parameters.h>
 #include<torch/extension.h>
 #include<cuda.h>
+#include <stdio.h>
 
 __device__ inline int popcnt( unsigned long x) {return __popcll(x);}    
 __device__ inline int get_parity( unsigned long x) {return __popcll(x) & 1;}
 __device__ inline unsigned long get_ones( int n){return (1ULL<<n) - 1ULL;}// parenthesis must be added due to priority
+__device__ inline int num_parity(unsigned long x, int i){return (x >> (i-1) & 1);}
 
 __device__ inline int __ctzl(unsigned long x)
 {
@@ -224,7 +226,45 @@ __device__ double get_Hij(unsigned long *bra, unsigned long *ket,
     return Hij;
 }
 
-__global__ void get_Hij_kernel(double *Hmat_ptr,
+__device__ void get_zvec(unsigned long *bra, double *lst ,const size_t sorb, const size_t bra_len)
+{
+    int idx =0;
+    bool flag = true;
+    for(int i=0; i<bra_len; i++){
+        if (flag){
+            for(int j=1; j<=64; j++){
+                lst[idx] = num_parity(bra[i], j);
+                idx++;
+                if (idx>=sorb){
+                    flag = false;
+                    break;
+                }
+            }
+        }else{break;}
+    }
+}
+
+__global__ void get_zvec_kernel_3D(double *comb_ptr, unsigned long *bra,
+                                const size_t sorb, const size_t bra_len,
+                                int n, int m)
+{
+    int idn = blockIdx.x * blockDim.x + threadIdx.x;
+    int idm = blockIdx.y * blockDim.y + threadIdx.y;
+    if (idn >= n || idm >= m) return ;
+    get_zvec(&bra[idn*m*bra_len+idm*bra_len], &comb_ptr[idn*m*sorb+idm*sorb], sorb, bra_len);
+}
+
+__global__ void get_zvec_kernel_2D(double *comb_ptr, unsigned long *bra,
+                                const size_t sorb, const size_t bra_len,
+                                int n)
+{
+    int idn = blockIdx.x ;
+    int idm = blockIdx.x *blockDim.x + threadIdx.x;
+    if (idn >= n ) return ;
+    // get_zvec(&bra[], &comb_ptr[idn*m*sorb+idm*sorb], sorb, bra_len); 
+}
+
+__global__ void get_Hij_kernel_2D(double *Hmat_ptr,
               unsigned long *bra, unsigned long *ket,
               double *h1e, double *h2e,
               const size_t sorb, const size_t nele,
@@ -237,7 +277,23 @@ __global__ void get_Hij_kernel(double *Hmat_ptr,
 
     Hmat_ptr[idn * m + idm] = get_Hij(&bra[idn*bra_len], &ket[idm*bra_len], 
                                       h1e, h2e, sorb, nele, tensor_len, bra_len);
+
 }
+
+__global__ void get_Hij_kernel_3D( double *Hmat_ptr,
+              unsigned long *bra, unsigned long *ket,
+              double *h1e, double *h2e,
+              const size_t sorb, const size_t nele,
+              const size_t tensor_len, const size_t bra_len, 
+              int n, int m)
+{
+    int idn = blockIdx.x * blockDim.x + threadIdx.x;
+    int idm = blockIdx.y * blockDim.y + threadIdx.y;
+    if (idn >= n || idm >= m ) return;
+    Hmat_ptr[idn * m + idm] = get_Hij(&bra[idn*bra_len], &ket[idn*m*bra_len+idm*bra_len],
+                                     h1e, h2e, sorb, nele, tensor_len, bra_len);
+}
+
 
 torch::Tensor get_Hij_cuda(
     torch::Tensor &bra_tensor, torch::Tensor &ket_tensor, 
@@ -263,9 +319,25 @@ torch::Tensor get_Hij_cuda(
     cudaEventCreate(&end);
     cudaEventRecord(start);
 
-    int n = bra_tensor.size(0), m = ket_tensor.size(0);
+    const int ket_dim = ket_tensor.dim();
+    std::cout << "ket dim: " << ket_dim << std::endl;
+    bool flag_3d = false;
     const int tensor_len = (sorb-1)/8 + 1;
     const int bra_len = (sorb-1)/64 + 1;
+    int n, m;
+    if (ket_dim == 3){
+        flag_3d = true;
+        // bra: (n, tensor_len), ket: (n, m, tensor_len)
+        n = bra_tensor.size(0), m = ket_tensor.size(1);
+    }else if ( ket_dim ==2) {
+        flag_3d = false;
+        // bra: (n, tensor_len), ket: (m, tensor_len)
+        n = bra_tensor.size(0), m = ket_tensor.size(0);
+    }else{
+        // do not throw exception
+        throw "ket dim error";
+    }
+    
 
     torch::Tensor Hmat = torch::zeros({n, m}, h1e_tensor.options());
     cudaDeviceSynchronize();
@@ -276,10 +348,10 @@ torch::Tensor get_Hij_cuda(
     unsigned long *ket_ptr = reinterpret_cast<unsigned long*>(ket_tensor.data_ptr<uint8_t>());
     double *Hmat_ptr = Hmat.data_ptr<double>();
 
-    dim3 threads(1, 512);
+    dim3 threads(THREAD, THREAD);
     dim3 blocks((n+threads.x-1)/threads.x, (m+threads.y-1)/threads.y);
     
-    std::cout << "threads: " << THREAD << " " << THREAD << std::endl;
+    // std::cout << "threads: " << THREAD << " " << THREAD << std::endl;
     cudaEventRecord(end);
     cudaEventSynchronize(end);
     float time_ms = 0.f;
@@ -291,9 +363,13 @@ torch::Tensor get_Hij_cuda(
     cudaEventCreate(&start0);
     cudaEventCreate(&end0);
     cudaEventRecord(start0);
-
-    get_Hij_kernel<<<blocks, threads>>>(Hmat_ptr, bra_ptr, ket_ptr, h1e_ptr, h2e_ptr, 
-                                        sorb, nele, tensor_len, bra_len, n, m);
+    if (flag_3d){
+        get_Hij_kernel_3D<<<blocks, threads>>>(Hmat_ptr, bra_ptr, ket_ptr, h1e_ptr, h2e_ptr, 
+                                            sorb, nele, tensor_len, bra_len, n, m);
+    }else{
+        get_Hij_kernel_2D<<<blocks, threads>>>(Hmat_ptr, bra_ptr, ket_ptr, h1e_ptr, h2e_ptr, 
+                                            sorb, nele, tensor_len, bra_len, n, m);
+    }
     cudaDeviceSynchronize();
     cudaEventRecord(end0);
     cudaEventSynchronize(end0);
@@ -311,4 +387,62 @@ torch::Tensor get_Hij_cuda(
     
     return Hmat;
 
+}
+
+torch::Tensor uint8_to_bit_cuda(
+    torch::Tensor &bra_tensor, const int sorb)
+{
+    bool flag_3d;
+    const int bra_len  = (sorb-1)/64 + 1;
+    const int bra_dim = bra_tensor.dim();
+    int n, m; 
+    torch::Tensor comb_bit;
+    auto options =  torch::TensorOptions()
+                        .dtype(torch::kDouble)
+                        .layout(bra_tensor.layout())
+                        .device(bra_tensor.device())
+                        .requires_grad(false);
+
+
+    if (bra_dim ==3){
+        flag_3d = true;
+        // [batch, ncomb, sorb]
+        n = bra_tensor.size(0), m = bra_tensor.size(1);
+        comb_bit = torch::zeros({n, m, sorb}, options);
+        // dim3 threads(THREAD, THREAD);
+        // dim3 blocks((n+threads.x-1)/threads.x, (m+threads.y-1)/threads.y);
+    }else if(bra_dim ==2){
+        flag_3d = false;
+        n = bra_tensor.size(0);
+        comb_bit = torch::zeros({n, sorb}, options);
+        // dim3 threads = (512);
+        // dim3 blocks((n+threads.x-1)/threads.x);
+    }else{
+        throw "bra dim error";
+    }
+
+    unsigned long *bra_ptr = reinterpret_cast<unsigned long*>(bra_tensor.data_ptr<uint8_t>());
+    double *comb_ptr = comb_bit.data_ptr<double>();
+    
+    dim3 threads(THREAD, THREAD);
+    dim3 blocks((n+threads.x-1)/threads.x, (m+threads.y-1)/threads.y);
+    cudaEvent_t start, end;
+    cudaEventCreate(&start);
+    cudaEventCreate(&end);
+    cudaEventRecord(start);
+    
+    if (flag_3d){
+        get_zvec_kernel_3D<<<blocks, threads>>>(comb_ptr, bra_ptr, sorb, bra_len, n, m);
+    }else{
+        get_zvec_kernel_2D<<<blocks, threads>>>(comb_ptr, bra_ptr, sorb, bra_len, n);
+    }
+    cudaDeviceSynchronize();
+    cudaEventRecord(end);
+    cudaEventSynchronize(end);
+    float kernel_time_ms = 0.f;
+    cudaEventElapsedTime(&kernel_time_ms, start, end);
+    std::cout << std::setprecision(6);
+    std::cout << "GPU calculate comb(unit8->bit) time: " << kernel_time_ms<<  "ms\n" << std::endl;
+    
+    return comb_bit * 2 - 1;
 }

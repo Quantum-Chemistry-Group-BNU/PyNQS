@@ -1,10 +1,5 @@
-#include "ATen/core/TensorBody.h"
-#include "ATen/ops/from_blob.h"
-#include "ATen/ops/zero.h"
-#include "c10/core/ScalarType.h"
-#include "c10/core/TensorOptions.h"
-#include "c10/util/ArrayRef.h"
 #include "default.h"
+#include "torch/types.h"
 #include <bitset>
 #include <chrono>
 #include <cstdint>
@@ -21,7 +16,6 @@
 // see:https://stackoverflow.com/questions/47981/how-do-i-set-clear-and-toggle-a-single-bit/263738#263738
 #define BIT_SET(a,b) ((a) |= (1ULL<<(b)))
 #define BIT_CLEAR(a,b) ((a) &= ~(1ULL<<(b)))
-#define BIT_FLIP(a,b) ((a) ^= (1ULL<<(b)))
 
 std::chrono::high_resolution_clock::time_point get_time(){
    return std::chrono::high_resolution_clock::now();
@@ -37,6 +31,8 @@ torch::Tensor get_Hij_cuda(
     torch::Tensor &h1e_tensor, torch::Tensor &h2e_tensor,
     const int sorb, const int nele);
 
+torch::Tensor uint8_to_bit_cuda(
+    torch::Tensor &bra_tensor,  const int sorb);
 
 inline int popcnt_cpu(const unsigned long x) {return __builtin_popcountl(x);}
 inline int get_parity_cpu(const unsigned long x) {return __builtin_parityl(x);}
@@ -115,6 +111,7 @@ int parity_cpu(unsigned long *bra, int n)
     for (int i=0; i<n/64; i++){
         p ^= get_parity_cpu(bra[i]);
     }
+    // TODO why???? 
     if (n%64 !=0){
         p ^= get_parity_cpu((bra[n/64] & get_ones_cpu(n%64)));
     }
@@ -150,81 +147,103 @@ double h2e_get_cpu(double *h2e,
     return val;
 }
 
-// TODO: This is error, spin multiplicity is not equal for very comb
-void get_comb(unsigned long *bra, unsigned long *comb, int n, int len, int no, int nv){
+// TODO: This maybe error, spin multiplicity is not equal for very comb
+void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len, int no, int nv, bool ms=true)
+{
     int *vlst = new int[nv] ();
     int *olst = new int[no] ();
     get_olst_cpu(bra, olst, len);
     get_vlst_cpu(bra, vlst, n, len);
-    // std::cout << "olst: "; 
-    // for(int i =0; i<no; i++){
-    //     std::cout << olst[i] << " ";
-    // }
-    // std::cout << std::endl;
-    // std::cout << "vlst: ";
-    // for(int i =0; i<nv; i++){
-    //     std::cout << vlst[i] << " ";
-    // }
-    // std::cout << std::endl;
 
     for(int i =0; i<len; i++){
         comb[i] = bra[i];
     }
     int idx = 1;
-    // Singles 
+    // spin multiplicity(ms) is equal??
+    bool flag = false;
+    // Singles nv/2 * na * nb
+    int idx_s = 0;
     for(int i=0; i<no; i++){
         for (int j=0; j<nv; j++){
-            int idi = len * idx + olst[i]/64; 
-            int idj = len * idx + vlst[j]/64;
-            comb[idi] = bra[olst[i]/64];
-            comb[idj] = bra[vlst[j]/64];
-            // std::cout << "olst[i] " << olst[i] << " ";
-            // std::cout << "idi: " << idi << " ";
-            // std::cout << "comb[idi]: " << std::bitset<64> (comb[idi]) << std::endl;
-            // std::cout << "olst[j] " << vlst[j] << " ";
-            // std::cout << "idj: " << idj << " ";
-            // std::cout << "comb[idj]: " << std::bitset<64> (comb[idj]) << std::endl;
-            BIT_FLIP(comb[idi], olst[i]%64);
-            BIT_FLIP(comb[idj], vlst[j]%64);
-            idx++;
+            if (ms){
+                // olst[i] and vlst[j] is identical spin orbital
+                if ((olst[i] &1) == (vlst[j] & 1)){
+                    flag = true;
+                }else{
+                    // flag = false;
+                    continue;
+                }
+            }
+            if ((not ms) || (ms && flag)){
+                int idi = len * idx + olst[i]/64;
+                int idj = len * idx + vlst[j]/64;
+                comb[idi] = bra[olst[i]/64];
+                comb[idj] = bra[vlst[j]/64];
+                BIT_FLIP(comb[idi], olst[i]%64);
+                BIT_FLIP(comb[idj], vlst[j]%64);
+                idx++;
+                flag = false;
+                idx_s++;
+                // std::cout << "comb[idj]: " << std::bitset<8> (comb[idj]) << std::endl;
+            }
         }
     }
+    // std::cout << "Singles: " << idx_s << std::endl;
+    int idx_double = 0;
     // Doubles
     for(int i=0; i<no; i++){
         for(int j=i+1; j<no; j++){
             for(int k=0; k<nv; k++){
                 for(int l=k+1; l<nv; l++){
-                    int idi = len * idx + olst[i]/64;
-                    int idj = len * idx + olst[j]/64;
-                    int idk = len * idx + vlst[k]/64;
-                    int idl = len * idx + vlst[l]/64;
-                    comb[idi] = bra[olst[i]/64];
-                    comb[idj] = bra[olst[j]/64];
-                    comb[idk] = bra[vlst[k]/64];
-                    comb[idl] = bra[vlst[l]/64];
-                    BIT_FLIP(comb[idi], olst[i]%64);
-                    BIT_FLIP(comb[idj], olst[j]%64);
-                    BIT_FLIP(comb[idk], vlst[k]%64);
-                    BIT_FLIP(comb[idl], vlst[l]%64);
-                    idx++;
+                    if (ms){
+                        // flag_one: olst[i] and vlst[k] is identical spin orbital;
+                        bool flag_one = ((olst[i] & 1) == (vlst[k] & 1) && ((olst[j] & 1) == (vlst[l] & 1)));
+                        // flag_two: olst[i] and vlst[l] is identical spin orbital;
+                        bool flag_two = ((olst[i] & 1) == (vlst[l] & 1) && ((olst[j] & 1) == (vlst[k] & 1)));
+                        if (flag_one || flag_two){
+                            flag = true;
+                        }else{
+                            continue;
+                        }
+                    }
+                    if ((not ms) ||(ms && flag)){
+                        int idi = len * idx + olst[i]/64;
+                        int idj = len * idx + olst[j]/64;
+                        int idk = len * idx + vlst[k]/64;
+                        int idl = len * idx + vlst[l]/64;
+                        comb[idi] = bra[olst[i]/64];
+                        comb[idj] = bra[olst[j]/64];
+                        comb[idk] = bra[vlst[k]/64];
+                        comb[idl] = bra[vlst[l]/64];
+                        BIT_FLIP(comb[idi], olst[i]%64);
+                        BIT_FLIP(comb[idj], olst[j]%64);
+                        BIT_FLIP(comb[idk], vlst[k]%64);
+                        BIT_FLIP(comb[idl], vlst[l]%64);
+                        idx++;
+                        flag = false;
+                        idx_double++;
+                        // std::cout << "comb[idj]: " << std::bitset<8> (comb[idj]) << std::endl;
+                    }
                 }
             }
         }
     }
+    // std::cout << "Double: " << idx_double  << std::endl;
     delete [] olst;
     delete [] vlst;
 }
 
-void get_comb_1(unsigned long *bra, unsigned long *comb, 
-                int n, int len, int no, int nv, int alpha_ele, int beta_ele)
-{    
-    int *vlst = new int[nv] ();
-    int *olst = new int[no] ();
-    get_olst_cpu(bra, olst, len);
-    get_vlst_cpu(bra, vlst, n, len);
-    delete [] olst;
-    delete [] vlst;
-}
+
+// void get_comb_1(unsigned long *bra, unsigned long *comb, 
+//                 int n, int len, int no, int nv, int alpha_ele, int beta_ele)
+// {    
+//     int *vlst = new int[nv] ();
+//     int *olst = new int[no] ();
+//     get_olst_cpu(bra, olst, len);
+//     get_vlst_cpu(bra, vlst, n, len);
+//     delete [] olst;
+//     delete [] vlst;
+// }
 
 double get_Hii_cpu(unsigned long *bra, unsigned long *ket,
                double *h1e, double *h2e, int sorb, const int nele, int bra_len)
@@ -312,29 +331,18 @@ double get_Hij_cpu(unsigned long *bra, unsigned long *ket,
     bra/ket: unsigned long 
     */
     double Hij = 0.00;
-
-    /***
-    unsigned long bra[MAX_SORB_LEN] = {0};
-    unsigned long ket[MAX_SORB_LEN] = {0};
-    tensor_to_array_cpu(bra_uint8, bra, tensor_len, bra_len);
-    tensor_to_array_cpu(ket_uint8, ket, tensor_len, bra_len);
-    ***/
-
-    // unsigned long *bra = reinterpret_cast<unsigned long*>(bra_uint8);
-    // unsigned long *ket = reinterpret_cast<unsigned long*>(ket_uint8);
-
     int type[2] = {0};
     diff_type_cpu(bra, ket, type, bra_len);
     if (type[0] == 0 && type[1] == 0){
         Hij = get_Hii_cpu(bra, ket, h1e, h2e, sorb, nele, bra_len);
     }else if(type[0] == 1 && type[1] == 1){
         Hij = get_HijS_cpu(bra, ket, h1e, h2e, sorb, bra_len);
-        std::cout << "Singles: " << std::bitset<8>(bra[0]) << " " << std::bitset<8>(ket[0])  << " ";   
-        std::cout << "Hij: " << Hij << std::endl;
+        // std::cout << "Singles: " << std::bitset<8>(bra[0]) << " " << std::bitset<8>(ket[0])  << " ";   
+        // std::cout << "Hij: " << Hij << std::endl;
     }else if (type[0] == 2 && type[1] == 2){
         Hij = get_HijD_cpu(bra, ket, h1e, h2e, sorb, bra_len);
-        std::cout << "Double: " << std::bitset<8>(bra[0]) << " " << std::bitset<8>(ket[0])  << " ";   
-        std::cout << "Hij: " << Hij << std::endl;
+        // std::cout << "Double: " << std::bitset<8>(bra[0]) << " " << std::bitset<8>(ket[0])  << " ";   
+        // std::cout << "Hij: " << Hij << std::endl;
     }
     return Hij;
 }
@@ -346,10 +354,23 @@ torch::Tensor get_Hij_mat_cpu(
 {
 
     auto t3 = get_time();
-    int n = bra_tensor.size(0), m = ket_tensor.size(0);
+    int n, m; 
+    const int ket_dim = ket_tensor.dim();
+    bool flag_3d = false;
     const int bra_len = (sorb-1)/64 + 1;
     // notice: tensor_len： 是bra_tensor[1] 除去尾部0的长度
     const int tensor_len = (sorb-1)/8 + 1;
+    if(ket_dim == 3){
+        flag_3d = true;
+        // bra: (n, tensor_len), ket: (n, m, tensor_len)
+        n = bra_tensor.size(0), m = ket_tensor.size(1);
+    }else if ( ket_dim ==2) {
+        flag_3d = false;
+        // bra: (n, tensor_len), ket: (m, tensor_len)
+        n = bra_tensor.size(0), m = ket_tensor.size(0);
+    }else{
+        throw "bra dim error";
+    }
 
     torch::Tensor Hmat = torch::zeros({n, m}, h1e_tensor.options());
 
@@ -365,10 +386,21 @@ torch::Tensor get_Hij_mat_cpu(
     std::cout << "CPU Hmat initialization time: " << delta1/1000000 << " ms" << std::endl;
 
     auto t0 = get_time();
-    for(int i=0; i<n; i++){
-        for(int j=0; j<m; j++){
-            Hmat_ptr[i * m + j] = get_Hij_cpu(&bra_ptr[i*bra_len], &ket_ptr[j*bra_len], 
-                                      h1e_ptr, h2e_ptr, sorb, nele, tensor_len, bra_len);
+    if (flag_3d){
+        for(int i=0; i<n; i++){
+            for(int j=0; j<m; j++){
+                // Hmat_ptr[i, j] = get_Hij_cpu(bra_ptr[i], ket[i, m])
+                Hmat_ptr[i * m+ j] = get_Hij_cpu(&bra_ptr[i*bra_len], &ket_ptr[i*m*bra_len+j*bra_len],
+                                            h1e_ptr, h2e_ptr, sorb, nele, tensor_len, bra_len);
+            }
+        }
+    }else{
+        for(int i=0; i<n; i++){
+            for(int j=0; j<m; j++){
+                // Hmat_ptr[i, j] = get_Hij_cpu(bra_ptr[i], ket_ptr[m])
+                Hmat_ptr[i * m + j] = get_Hij_cpu(&bra_ptr[i*bra_len], &ket_ptr[j*bra_len], 
+                                          h1e_ptr, h2e_ptr, sorb, nele, tensor_len, bra_len);
+            }
         }
     }
 
@@ -383,16 +415,54 @@ torch::Tensor get_Hij_mat_cpu(
 
 torch::Tensor get_comb_tensor(
     torch::Tensor &bra_tensor, 
-    const int sorb, const int nele)
+    const int sorb, const int nele,
+    bool ms_equal)
 {
     const int no = nele; 
     const int nv = sorb - nele;
     // const int tensor_len =(sorb-1)/8 + 1;
     const int bra_len = (sorb-1)/64 + 1;
-    const int ncomb = 1 + no * nv + no * (no-1) * nv * (nv-1) / 4; 
-    torch::Tensor comb = torch::zeros({ncomb, 8*bra_len}, bra_tensor.options());
+    int ncomb;
+    // spin multiplicity is equal for very comb
+    if (ms_equal){
+        int nvb = nv/2;
+        int nva = nv - nvb;
+        int nob = no/2;
+        int noa = no - nob;
+        // std::cout << noa << " "<< nob << " " << nva  << " "<< nvb << std::endl;
+        int nsingles = noa * nva + nob * nvb;
+        // std::cout << "nsingles: " << nsingles << std::endl;
+        // this is error for radical e.g. H3 H5 ...
+        int ndoubles = noa*(noa-1)*nva*(nva-1)/4 + nob*(nob-1)*nvb*(nvb-1)/4 + noa*nva*nob*nvb;
+        // std::cout << "ndoubles: " << ndoubles << std::endl;
+        ncomb =  1 + nsingles + ndoubles;
+    }else{
+        ncomb = 1 + no * nv + no * (no-1) * nv * (nv-1) / 4; 
+    } 
+    
+    // TODO: how to achieve CPU to CUDA using torch::KCPU in *.cpp or *.cu file?
+    // std::cout << bra_tensor.options()<< std::endl;
+    const int batch = bra_tensor.size(0);
+    const int dim = bra_tensor.dim();
+    bool flag_3d = false;
+    torch::Tensor comb; 
+    if ( batch == 1 && dim == 2){
+        comb = torch::zeros({ncomb, 8*bra_len}, bra_tensor.options());
+    }else if ( batch > 1 && dim ==2){
+        flag_3d = true;
+        comb = torch::zeros({batch, ncomb, 8*bra_len}, bra_tensor.options());
+    }else{
+        throw "bra dim may be error";
+    }
     unsigned long *bra_ptr = reinterpret_cast<unsigned long*>(bra_tensor.data_ptr<uint8_t>());
     unsigned long *comb_ptr = reinterpret_cast<unsigned long*>(comb.data_ptr<uint8_t>());
-    get_comb(bra_ptr, comb_ptr, sorb, bra_len, no, nv);
+    if (flag_3d){
+        for(int i=0; i<batch; i++){
+            // Notice the index in 3D tensor
+            get_comb_2d(&bra_ptr[i], &comb_ptr[i*ncomb*bra_len], sorb, bra_len, no, nv, ms_equal);
+        }
+    }else{
+        get_comb_2d(bra_ptr, comb_ptr, sorb, bra_len, no, nv, ms_equal);
+    }
     return comb;
 }

@@ -1,6 +1,7 @@
 import torch 
 from torch import Tensor
 import libs.hij_tensor as pt
+from vmc.PublicFunction import unit8_to_bit, check_para
 
 from vmc.ansatz import RBM
 
@@ -9,21 +10,33 @@ from vmc.ansatz import RBM
 def ansatz(x: Tensor):
     print(x.device)
 
-def local_energy(x: Tensor,h1e: Tensor, h2e: Tensor, sorb: int, nele: int,) -> Tensor:
-    if x.dtype != torch.uint8:
-        raise Exception("The type of x is uint8")
-    
-    # TODO: "get_comb_tensor" in cuda 
-    # TODO: python version x->comb_x
+def local_energy(x: Tensor, h1e: Tensor, h2e: Tensor, ansatz, sorb: int, nele: int,) -> Tensor:
+    """
+    Calculate the local energy for given state.
+       E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'> 
+    1. the all Singles and Doubles excitations about given state using cpu:
+        x: (1, sorb)/(batch, sorb) -> comb_x: (batch, ncomb, sorb)/(ncomb, sorb)
+    2. matrix <x|H|x'> (1, ncomb)/(batch, ncomb)
+    3. psi(x), psi(comb_x)[ncomb] using NAQS. 
+    4. calculate the local energy
+    """
+    check_para(x)
+    # TODO: "get_comb_tensor" in cuda, python version x->comb_x
+
     # the function only use in "CPU"
-    # question: 单双激发矩阵元是否为零
     device = x.device
-    comb_x_cpu = pt.get_comb_tensor(x.to("cpu"), sorb, nele) #unit8
-    comb_x = comb_x_cpu.to(device)
-    del comb_x_cpu
-    # <x|H|x'>
-    comb_hij = pt.get_hij_torch(x, comb_x, h1e, h2e) # double
-    psi_x0 = ansatz(x)
-    psi_x1 = ansatz(comb_x)
-    eloc = torch.sum(comb_hij * psi_x1 / psi_x0)
-    return eloc
+    dim: int   = x.dim()
+    batch: int = x.shape[0]
+    comb_x = pt.get_comb_tensor(x.to("cpu"), sorb, nele, True).to(device)
+    # calculate matrix <x|H|x'>
+    comb_hij = pt.get_hij_torch(x, comb_x, h1e, h2e, sorb, nele) # shape (1, n)/(batch, n)
+    # TODO: time consuming
+    x_bit =  unit8_to_bit(comb_x, sorb)
+    psi_x1 = ansatz(x_bit)
+
+    if dim == 2 and batch == 1:
+        eloc  = torch.sum(comb_hij * psi_x1 / psi_x1[..., 0]) # scalar
+    elif dim == 2 and batch > 1:
+        eloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * comb_hij, -1) # (batch)
+
+    return eloc, psi_x1[..., 0]
