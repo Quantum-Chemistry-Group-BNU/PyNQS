@@ -1,7 +1,9 @@
+#include "ATen/core/TensorBody.h"
 #include "default.h"
 #include "torch/types.h"
 #include <bitset>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <ostream>
 #include <iomanip> 
@@ -16,6 +18,7 @@
 // see:https://stackoverflow.com/questions/47981/how-do-i-set-clear-and-toggle-a-single-bit/263738#263738
 #define BIT_SET(a,b) ((a) |= (1ULL<<(b)))
 #define BIT_CLEAR(a,b) ((a) &= ~(1ULL<<(b)))
+
 
 std::chrono::high_resolution_clock::time_point get_time(){
    return std::chrono::high_resolution_clock::now();
@@ -37,6 +40,7 @@ torch::Tensor uint8_to_bit_cuda(
 inline int popcnt_cpu(const unsigned long x) {return __builtin_popcountl(x);}
 inline int get_parity_cpu(const unsigned long x) {return __builtin_parityl(x);}
 inline unsigned long get_ones_cpu(const int n){return (1ULL<<n) - 1ULL;}// parenthesis must be added due to priority
+inline double num_parity_cpu(unsigned long x, int i){return (x >> (i-1) & 1)?1.00:-1.00;}
 
 void diff_type_cpu(unsigned long *bra, unsigned long *ket, int *p, int _len)
 {
@@ -118,6 +122,17 @@ int parity_cpu(unsigned long *bra, int n)
     return -2*p+1;
 }
 
+void get_zvec_cpu(unsigned long *bra, double *lst ,const int sorb, const int bra_len)
+{
+    int idx =0;
+    for(int i=0; i<bra_len; i++){
+        for(int j=1; j<=64; j++){
+            if (idx>=sorb) break;
+            lst[idx] = num_parity_cpu(bra[i], j);
+            idx++;
+        }
+    }
+}
 
 double h1e_get_cpu(double *h1e, 
                     size_t i, size_t j, size_t sorb)
@@ -465,4 +480,51 @@ torch::Tensor get_comb_tensor(
         get_comb_2d(bra_ptr, comb_ptr, sorb, bra_len, no, nv, ms_equal);
     }
     return comb;
+}
+
+// RBM
+torch::Tensor uint8_to_bit_cpu(
+    torch::Tensor &bra_tensor, const int sorb)
+{
+    bool flag_3d;
+    const int bra_len  = (sorb-1)/64 + 1;
+    const int bra_dim = bra_tensor.dim();
+    int n, m; 
+    torch::Tensor comb_bit;
+    auto options =  torch::TensorOptions()
+                        .dtype(torch::kDouble)
+                        .layout(bra_tensor.layout())
+                        .device(bra_tensor.device())
+                        .requires_grad(false);
+    
+    if (bra_dim ==3){
+        // [batch, ncomb, sorb]
+        flag_3d = true;
+        n = bra_tensor.size(0), m = bra_tensor.size(1);
+        comb_bit = torch::zeros({n, m, sorb}, options);
+    }else if(bra_dim ==2){
+        // [ncomb, sorb]
+        flag_3d = false;
+        n = bra_tensor.size(0);
+        comb_bit = torch::zeros({n, sorb}, options);
+    }else{
+        throw "bra dim error";
+    }
+
+    unsigned long *bra_ptr = reinterpret_cast<unsigned long*>(bra_tensor.data_ptr<uint8_t>());
+    double *comb_ptr = comb_bit.data_ptr<double>();
+
+    if (flag_3d){
+        for(int i=0; i<n; i++){
+            for(int j=0; j<m; j++){
+                get_zvec_cpu(&bra_ptr[i*m*bra_len+j*bra_len], &comb_ptr[i*m*sorb+j*sorb], sorb, bra_len);
+            }
+        }
+    }else{
+        for(int i=0; i<n; i++){
+            get_zvec_cpu(&bra_ptr[i*bra_len], &comb_ptr[i*sorb], sorb, bra_len);
+        }
+    }
+
+    return comb_bit;
 }

@@ -1,7 +1,7 @@
+import random
 import torch
 import numpy as np
 from torch import Tensor
-from abc import ABC, abstractmethod
 
 def unit8_to_bit(bra: Tensor, sorb: int) -> Tensor:
     # TODO: the function is time consuming
@@ -38,6 +38,8 @@ def unit8_to_bit(bra: Tensor, sorb: int) -> Tensor:
     dim = bra.dim()
     if dim == 2:
         return _tensor_2d(bra, sorb) * 2 - 1.0
+    elif dim == 1:
+        return (_tensor_2d(bra.reshape(1, -1), sorb) * 2 - 1.0).squeeze()
     elif dim == 3:
         n = bra.shape[0]
         m = bra.shape[1]
@@ -50,13 +52,10 @@ def check_para(bra: Tensor):
     if bra.dtype != torch.uint8:
         raise Exception(f"The type of bra {bra.dtype} must be torch.uint8")
 
-class PublicFunction(ABC):
-    @abstractmethod
-    def ansatz(self, string: str):
-        """
-        Args:
-            string: The type of ansatz, e.g. RBM
-        Return:
-            I do not known.
-        """
-        pass 
+def setup_seed(x: int):
+    torch.manual_seed(x)
+    np.random.seed(x)
+    random.seed(x)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(x)
+        torch.cuda.manual_seed_all(x)

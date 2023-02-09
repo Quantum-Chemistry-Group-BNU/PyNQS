@@ -27,13 +27,14 @@ torch::Tensor get_Hij_torch(
     }
 }
 
+// RBM
 torch::Tensor unit8_to_bit(torch::Tensor &bra_tensor, const int sorb)
 {
     CHECK_CONTIGUOUS(bra_tensor);
     if (bra_tensor.is_cuda()){
         return uint8_to_bit_cuda(bra_tensor, sorb);
     }else{
-        return bra_tensor;
+        return uint8_to_bit_cpu(bra_tensor, sorb);
     }
 }
 

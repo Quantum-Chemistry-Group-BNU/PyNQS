@@ -9,7 +9,7 @@
 __device__ inline int popcnt( unsigned long x) {return __popcll(x);}    
 __device__ inline int get_parity( unsigned long x) {return __popcll(x) & 1;}
 __device__ inline unsigned long get_ones( int n){return (1ULL<<n) - 1ULL;}// parenthesis must be added due to priority
-__device__ inline int num_parity(unsigned long x, int i){return (x >> (i-1) & 1);}
+__device__ inline double num_parity(unsigned long x, int i){return (x >> (i-1) & 1)?1.00:-1.00;}
 
 __device__ inline int __ctzl(unsigned long x)
 {
@@ -226,21 +226,15 @@ __device__ double get_Hij(unsigned long *bra, unsigned long *ket,
     return Hij;
 }
 
-__device__ void get_zvec(unsigned long *bra, double *lst ,const size_t sorb, const size_t bra_len)
+__device__ void get_zvec(unsigned long *bra, double *lst ,const int sorb, const int bra_len)
 {
     int idx =0;
-    bool flag = true;
     for(int i=0; i<bra_len; i++){
-        if (flag){
-            for(int j=1; j<=64; j++){
-                lst[idx] = num_parity(bra[i], j);
-                idx++;
-                if (idx>=sorb){
-                    flag = false;
-                    break;
-                }
-            }
-        }else{break;}
+        for(int j=1; j<=64; j++){
+            if (idx>=sorb) break;
+            lst[idx] = num_parity(bra[i], j);
+            idx++;
+        }
     }
 }
 
@@ -444,5 +438,5 @@ torch::Tensor uint8_to_bit_cuda(
     std::cout << std::setprecision(6);
     std::cout << "GPU calculate comb(unit8->bit) time: " << kernel_time_ms<<  "ms\n" << std::endl;
     
-    return comb_bit * 2 - 1;
+    return comb_bit;
 }
