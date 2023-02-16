@@ -397,8 +397,10 @@ torch::Tensor get_Hij_mat_cpu(
 
     auto t2 = get_time();
     auto delta1 = get_duration_nano(t2-t3);
-    std::cout << std::setprecision(6);
-    std::cout << "CPU Hmat initialization time: " << delta1/1000000 << " ms" << std::endl;
+    if (VERBOSE){
+        std::cout << std::setprecision(6);
+        std::cout << "CPU Hmat initialization time: " << delta1/1000000 << " ms" << std::endl;
+    }
 
     auto t0 = get_time();
     if (flag_3d){
@@ -421,9 +423,11 @@ torch::Tensor get_Hij_mat_cpu(
 
     auto t1 = get_time();
     auto delta = get_duration_nano(t1-t0);
-    std::cout << std::setprecision(6);
-    std::cout << "CPU calculate <n|H|m> time: " << delta/1000000 << " ms" << std::endl;
-    std::cout << "Total CPU function time: " << get_duration_nano(t1-t3)/1000000 << " ms\n" << std::endl;
+    if (VERBOSE){
+        std::cout << std::setprecision(6);
+        std::cout << "CPU calculate <n|H|m> time: " << delta/1000000 << " ms" << std::endl;
+        std::cout << "Total CPU function time: " << get_duration_nano(t1-t3)/1000000 << " ms\n" << std::endl;
+    }
 
     return Hmat;
 }

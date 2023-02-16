@@ -314,7 +314,9 @@ torch::Tensor get_Hij_cuda(
     cudaEventRecord(start);
 
     const int ket_dim = ket_tensor.dim();
-    std::cout << "ket dim: " << ket_dim << std::endl;
+    if (VERBOSE){
+        std::cout << "ket dim: " << ket_dim << std::endl;
+    }
     bool flag_3d = false;
     const int tensor_len = (sorb-1)/8 + 1;
     const int bra_len = (sorb-1)/64 + 1;
@@ -350,8 +352,10 @@ torch::Tensor get_Hij_cuda(
     cudaEventSynchronize(end);
     float time_ms = 0.f;
     cudaEventElapsedTime(&time_ms, start, end);
-    std::cout << std::setprecision(6);
-    std::cout << "GPU Hmat initialization time: " << time_ms << " ms" << std::endl;
+    if (VERBOSE){
+        std::cout << std::setprecision(6);
+        std::cout << "GPU Hmat initialization time: " << time_ms << " ms" << std::endl;
+    }
     
     cudaEvent_t start0, end0;
     cudaEventCreate(&start0);
@@ -369,15 +373,19 @@ torch::Tensor get_Hij_cuda(
     cudaEventSynchronize(end0);
     float kernel_time_ms = 0.f;
     cudaEventElapsedTime(&kernel_time_ms, start0, end0);
-    std::cout << std::setprecision(6);
-    std::cout << "GPU calculate <n|H|m> time: " << kernel_time_ms << " ms" << std::endl;
+    if (VERBOSE){
+        std::cout << std::setprecision(6);
+        std::cout << "GPU calculate <n|H|m> time: " << kernel_time_ms << " ms" << std::endl;
+    }
     
     cudaEventRecord(t1);
     cudaEventSynchronize(t1);
     float total_time_ms = 0.f;
     cudaEventElapsedTime(&total_time_ms, t0, t1);
-    std::cout << std::setprecision(6);
-    std::cout << "Total function GPU function time: " << total_time_ms << " ms\n" << std::endl;
+    if (VERBOSE){
+        std::cout << std::setprecision(6);
+        std::cout << "Total function GPU function time: " << total_time_ms << " ms\n" << std::endl;
+    }
     
     return Hmat;
 
@@ -435,8 +443,10 @@ torch::Tensor uint8_to_bit_cuda(
     cudaEventSynchronize(end);
     float kernel_time_ms = 0.f;
     cudaEventElapsedTime(&kernel_time_ms, start, end);
-    std::cout << std::setprecision(6);
-    std::cout << "GPU calculate comb(unit8->bit) time: " << kernel_time_ms<<  "ms\n" << std::endl;
+    if (VERBOSE){
+        std::cout << std::setprecision(6);
+        std::cout << "GPU calculate comb(unit8->bit) time: " << kernel_time_ms<<  "ms\n" << std::endl;
+    }
     
     return comb_bit;
 }

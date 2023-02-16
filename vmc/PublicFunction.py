@@ -2,6 +2,12 @@ import random
 import torch
 import numpy as np
 from torch import Tensor
+from typing import Tuple
+
+import libs.py_fock as fock
+import libs.py_integral as integral
+
+__all__ =["unit8_to_bit", "check_para", "setup_seed", "read_integral"]
 
 def unit8_to_bit(bra: Tensor, sorb: int) -> Tensor:
     # TODO: the function is time consuming
@@ -59,3 +65,42 @@ def setup_seed(x: int):
     if torch.cuda.is_available():
         torch.cuda.manual_seed(x)
         torch.cuda.manual_seed_all(x)
+
+def read_integral(filename: str, nele: int, 
+                  device=None ) -> Tuple[Tensor, Tensor, Tensor, float, int]:
+    """
+    read the int2e, int1e, ecore for integral file 
+    return 
+        h1e, h2e with torch.float64
+        onstate with torch.int8 in Full-CI space
+        ecore: float 
+        sorb: int 
+    """
+    def string_to_lst(sorb: int, string: str):
+        arr = np.array(list(map(int, string)))[::-1]
+        lst = [0] * ((sorb-1)//64 +1)*8
+        for i in range((sorb-1)//8+1):
+            begin = i * 8
+            end = (i+1) * 8 if (i+1)*8 < sorb else sorb
+            idx = arr[begin:end]
+            lst[i] = np.sum(2**np.arange(len(idx)) * idx)
+        return lst
+
+    int2e, int1e, ecore = integral.load(integral.two_body(), integral.one_body(), 0.0, filename)
+    sorb = int2e.sorb
+    alpha_ele = nele//2 
+    beta_ele = nele//2
+    space = fock.get_fci_space(int(sorb//2), alpha_ele, beta_ele)
+    dim = len(space)
+
+    # h1e/h2e 
+    h1e = torch.tensor(int1e.data, dtype=torch.float64).to(device)
+    h2e = torch.tensor(int2e.data, dtype=torch.float64).to(device)
+
+    # bra/ket
+    lst = []
+    for i in range(dim):
+        lst.append(string_to_lst(sorb, space[i].to_string()))
+    onstate1 = torch.tensor(lst, dtype=torch.uint8).to(device)
+    
+    return (h1e, h2e, onstate1, ecore, sorb)
