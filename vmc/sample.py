@@ -13,7 +13,7 @@ class MCMCSampler():
     """
     def __init__(self, nqs: Callable, initial_state: Tensor,
                  h1e: Tensor, h2e: Tensor,
-                 n_sample: int, sorb: int, nele: int,
+                 sorb: int, nele: int, n_sample: int = 100, 
                  therm_step: int = 2000, verbose: bool = False, 
                  debug_exact: bool = False, full_space: Tensor = None
                  ) -> None:

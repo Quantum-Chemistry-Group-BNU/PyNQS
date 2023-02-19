@@ -60,7 +60,7 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz,
                 ecore: float,
                 sorb: int, nele: int,
                 verbose: bool = False, 
-                exact: bool = False) -> Tuple[Tensor, Tensor]:
+                exact: bool = False) -> float:
     
     dim: int = x.shape[0]
     device = x.device
@@ -90,19 +90,28 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz,
 
     return e_total
 
-def energy_grad(eloc: Tensor, dlnPsi_lst: List[Tensor], N_state: int) -> List[Tensor]:
+def energy_grad(eloc: Tensor, dlnPsi_lst: List[Tensor], 
+                N_state: int, psi: Tensor = None,
+                exact: bool = False) -> List[Tensor]:
     """
-    calculate the energy grad F_p= <E_loc * O*> - <E_loc> * <O*>
+    calculate the energy gradients in sampling and exact:
+        sampling:
+            F_p = 2*Real(<E_loc * O*> - <E_loc> * <O*>)
+        exact:
+            F_p = 2*Real(P(n) * (O*_n * E_loc(n) - O*_n * <E_loc> 
+             <E_loc> = \sum_n[ P(n)* E_loc(n)]
       return
          List, length: n_para, element: [N_para],one dim
     """
     lst = []
+    psi_norm = psi.pow(2)/(psi.pow(2).sum())
     for para in dlnPsi_lst:
         dlnPsi = para.reshape(N_state, -1) # (N_state, N_para), two dim
-        F_p = torch.sum(eloc.transpose(1, 0) * dlnPsi.conj(), axis=0)/N_state
-        # print(f"<E_loc * O*>:\n {F_p} {F_p.shape}")
-        F_p -= torch.sum(eloc.transpose(1, 0), axis=0) * torch.sum(dlnPsi.conj(), axis=0)/(N_state**2)
-        x = torch.sum(eloc.transpose(1, 0), axis=0) * torch.sum(dlnPsi.conj(), axis=0)/(N_state**2)
-        # print(f"<E_loc> * <O*>:\n {x}")
-        lst.append(F_p)
+        if not exact: 
+            F_p = torch.einsum("i, ij ->j", eloc, dlnPsi.conj())/N_state
+            F_p -= eloc.mean() * dlnPsi.conj().mean(axis=0)
+        else:
+            F_p = torch.einsum("i, ij, i ->j", eloc, dlnPsi.conj(), psi_norm)
+            F_p -= torch.einsum("i, ij ->j", psi_norm, dlnPsi.conj()) * ((psi_norm * eloc).sum())
+        lst.append(2 * F_p.real)
     return lst
