@@ -54,7 +54,7 @@ if __name__ == "__main__":
 
     # opt = SR(model.parameters(), lr=0.01, N_state=N, opt_gd=True, comb=True)
     opt = optim.SGD(model.parameters(), lr=0.005, momentum=0.9)
-    for p in range(2000):
+    for p in range(1):
         if p <= 800:
             initial_state = onstate1[random.randrange(
                 len(onstate1))].clone().detach()
@@ -64,7 +64,7 @@ if __name__ == "__main__":
         dln_grad_lst = []
         out_lst = []
         t0 = time.time_ns()
-        sample = MCMCSampler(model, initial_state, h1e, h2e, n, sorb, nele,
+        sample = MCMCSampler(model, initial_state, h1e, h2e, sorb, nele, n_sample=n,
                              verbose=True, debug_exact=exact_solve, full_space=onstate1)
         state, eloc = sample.run()  # eloc [n_sample]
         n_sample = len(state)

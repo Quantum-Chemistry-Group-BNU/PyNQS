@@ -120,9 +120,9 @@ class RBMWavefunction(nn.Module):
         dw = torch.einsum("...i,...j->...ij", db, x)
 
         if self.rbm_type == "cos":
-            return (db.detach(), dw.detach())
+            return ((db.detach(), dw.detach()), self.psi(x))
         else:
-            return (da.detach(), db.detach(), dw.detach())
+            return ((da.detach(), db.detach(), dw.detach()), self.psi(x))
 
     def forward(self, x: Tensor, dlnPsi: bool = False):
         if dlnPsi:
