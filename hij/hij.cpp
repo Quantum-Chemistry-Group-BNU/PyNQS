@@ -1,7 +1,8 @@
-#include <vector>
 #include <tuple>
+#include <vector>
 #include <torch/extension.h>
 #include "ATen/core/TensorBody.h"
+#include "c10/core/DeviceType.h"
 #include "pybind11/cast.h"
 #include "pybind11/pytypes.h"
 #include "utils_hij.h"
@@ -28,18 +29,43 @@ torch::Tensor get_Hij_torch(
 }
 
 // RBM
-torch::Tensor unit8_to_bit(torch::Tensor &bra_tensor, const int sorb)
+torch::Tensor uint8_to_bit(torch::Tensor &bra_tensor, const int sorb)
 {
     CHECK_CONTIGUOUS(bra_tensor);
     if (bra_tensor.is_cuda()){
+        // TODO: cuda 2D/1D has not finished
         return uint8_to_bit_cuda(bra_tensor, sorb);
     }else{
         return uint8_to_bit_cpu(bra_tensor, sorb);
     }
 }
+auto get_olst_vlst(torch::Tensor &bra_tensor, const int sorb, const int nele)
+{
+    CHECK_CONTIGUOUS(bra_tensor);
+    auto device = bra_tensor.device();
+    if (bra_tensor.is_cuda()){
+        torch::Tensor bra_cpu = bra_tensor.to(torch::kCPU);
+        auto x = get_olst_vlst_cpu(bra_cpu, sorb, nele);
+        torch::Tensor olst = std::get<0>(x).to(device);
+        torch::Tensor vlst = std::get<0>(x).to(device);
+        return std::make_tuple(olst, vlst);
+    }else{
+       return get_olst_vlst_cpu(bra_tensor, sorb, nele);
+    }
+}
 
-int add(int i = 1, int j = 2) {
-    return i + j;
+torch::Tensor get_comb_tensor(torch::Tensor &bra_tensor, const int sorb,
+                              const int nele, bool ms_equal)
+{
+    CHECK_CONTIGUOUS(bra_tensor);
+    auto device =bra_tensor.device();
+    if (bra_tensor.is_cuda()){
+        torch::Tensor bra_cpu = bra_tensor.to(torch::kCPU);
+        torch::Tensor x = get_comb_tensor_cpu(bra_cpu, sorb, nele, ms_equal);
+        return x.to(device);
+    }else{
+        return get_comb_tensor_cpu(bra_tensor, sorb, nele, ms_equal);
+    }
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
@@ -52,6 +78,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m){
         auto delta = get_duration_nano(t1-t0);
         return make_tuple(value, delta);
         });
-    m.def("get_comb_tensor", &get_comb_tensor, "Return all singles and doubles excitation for given x(3D/2D)");
-    m.def("unit8_to_bit", &unit8_to_bit, "convert from unit8 to bit[-1, 1] for given x(3D)");
+    m.def("get_comb_tensor", &get_comb_tensor, "Return all singles and doubles excitation for given x(3D/2D) in the cpu");
+    m.def("uint8_to_bit", &uint8_to_bit, "convert from unit8 to bit[-1, 1] for given x(3D)");
+    m.def("get_olst_vlst", &get_olst_vlst, "get occupied and virtual orbitals in the cpu ");
 }

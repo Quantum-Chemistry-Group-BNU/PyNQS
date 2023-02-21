@@ -1,7 +1,10 @@
 #include "ATen/core/TensorBody.h"
+#include "c10/core/TensorOptions.h"
 #include "default.h"
+#include "torch/csrc/autograd/generated/variable_factories.h"
 #include "torch/types.h"
 #include <bitset>
+#include <tuple>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -248,18 +251,6 @@ void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len, int no
     delete [] vlst;
 }
 
-
-// void get_comb_1(unsigned long *bra, unsigned long *comb, 
-//                 int n, int len, int no, int nv, int alpha_ele, int beta_ele)
-// {    
-//     int *vlst = new int[nv] ();
-//     int *olst = new int[no] ();
-//     get_olst_cpu(bra, olst, len);
-//     get_vlst_cpu(bra, vlst, n, len);
-//     delete [] olst;
-//     delete [] vlst;
-// }
-
 double get_Hii_cpu(unsigned long *bra, unsigned long *ket,
                double *h1e, double *h2e, int sorb, const int nele, int bra_len)
 {
@@ -314,29 +305,6 @@ double get_HijD_cpu(unsigned long *bra, unsigned long *ket,
     Hij *= static_cast<double>(sgn);
     return Hij ;
 }
-
-
-/***
-void tensor_to_array_cpu(uint8_t *bra_tensor, unsigned long *new_bra, int len1, int len2)
-{
-    int idx_bra = 0;
-    for(int i=0; i <len2-1; i++){
-        unsigned long tmp = 0;
-        for(int j=0; j<8; j++){
-            unsigned long value = bra_tensor[8*i+j];
-            tmp += value << (8*j);
-        }
-        new_bra[idx_bra] = tmp;
-        idx_bra++;
-    }
-    unsigned long tmp =0;
-    for(int i=0; i<len1%8; i++){
-        unsigned long value = bra_tensor[(len2-1)*8+i];
-        tmp += value << (8*i);
-    }
-    new_bra[len2-1] =tmp;
-}
-***/
 
 double get_Hij_cpu(unsigned long *bra, unsigned long *ket,
               double *h1e, double *h2e, size_t sorb, size_t nele,
@@ -432,7 +400,7 @@ torch::Tensor get_Hij_mat_cpu(
     return Hmat;
 }
 
-torch::Tensor get_comb_tensor(
+torch::Tensor get_comb_tensor_cpu(
     torch::Tensor &bra_tensor, 
     const int sorb, const int nele,
     bool ms_equal)
@@ -465,7 +433,7 @@ torch::Tensor get_comb_tensor(
     const int dim = bra_tensor.dim();
     bool flag_3d = false;
     torch::Tensor comb; 
-    if ( batch == 1 && dim == 2){
+    if ((dim == 1) or (batch == 1 && dim == 2)){
         comb = torch::zeros({ncomb, 8*bra_len}, bra_tensor.options());
     }else if ( batch > 1 && dim ==2){
         flag_3d = true;
@@ -490,7 +458,6 @@ torch::Tensor get_comb_tensor(
 torch::Tensor uint8_to_bit_cpu(
     torch::Tensor &bra_tensor, const int sorb)
 {
-    bool flag_3d;
     const int bra_len  = (sorb-1)/64 + 1;
     const int bra_dim = bra_tensor.dim();
     int n, m; 
@@ -501,16 +468,16 @@ torch::Tensor uint8_to_bit_cpu(
                         .device(bra_tensor.device())
                         .requires_grad(false);
     
-    if (bra_dim ==3){
+    if (bra_dim == 3){
         // [batch, ncomb, sorb]
-        flag_3d = true;
         n = bra_tensor.size(0), m = bra_tensor.size(1);
         comb_bit = torch::zeros({n, m, sorb}, options);
-    }else if(bra_dim ==2){
+    }else if(bra_dim == 2){
         // [ncomb, sorb]
-        flag_3d = false;
         n = bra_tensor.size(0);
         comb_bit = torch::zeros({n, sorb}, options);
+    }else if(bra_dim == 1){
+        comb_bit = torch::zeros({sorb}, options);
     }else{
         throw "bra dim error";
     }
@@ -518,17 +485,43 @@ torch::Tensor uint8_to_bit_cpu(
     unsigned long *bra_ptr = reinterpret_cast<unsigned long*>(bra_tensor.data_ptr<uint8_t>());
     double *comb_ptr = comb_bit.data_ptr<double>();
 
-    if (flag_3d){
+    if (bra_dim == 3){
         for(int i=0; i<n; i++){
             for(int j=0; j<m; j++){
                 get_zvec_cpu(&bra_ptr[i*m*bra_len+j*bra_len], &comb_ptr[i*m*sorb+j*sorb], sorb, bra_len);
             }
         }
-    }else{
+    }else if (bra_dim == 2){
         for(int i=0; i<n; i++){
             get_zvec_cpu(&bra_ptr[i*bra_len], &comb_ptr[i*sorb], sorb, bra_len);
         }
+    }else if(bra_dim == 1){
+        get_zvec_cpu(bra_ptr, comb_ptr, sorb, bra_len);
     }
 
     return comb_bit;
+}
+
+auto get_olst_vlst_cpu(torch::Tensor &bra_tensor, const int sorb, const int nele)
+{   
+    const int no = nele; 
+    const int nv = sorb - nele;
+    // const int tensor_len =(sorb-1)/8 + 1;
+    const int bra_len = (sorb-1)/64 + 1;
+
+    auto options = torch::TensorOptions()
+                    .dtype(torch::kInt32)
+                    .layout(bra_tensor.layout())
+                    .device(bra_tensor.device())
+                    .requires_grad(false);
+    torch::Tensor vlst = torch::zeros({nv}, options);
+    torch::Tensor olst = torch::zeros({no}, options);
+    int *vlst_ptr = vlst.data_ptr<int32_t>();
+    int *olst_ptr = olst.data_ptr<int32_t>();
+    unsigned long *bra_ptr =  reinterpret_cast<unsigned long*>(bra_tensor.data_ptr<uint8_t>());
+
+    get_olst_cpu(bra_ptr, olst_ptr, bra_len);
+    get_vlst_cpu(bra_ptr, vlst_ptr, sorb, bra_len);
+    
+    return std::make_tuple(olst, vlst);
 }

@@ -13,7 +13,8 @@ from typing import List, Tuple
 
 from .sample import MCMCSampler
 from .eloc import total_energy, energy_grad
-from .PublicFunction import unit8_to_bit, setup_seed, read_integral
+from .PublicFunction import read_integral
+from libs.hij_tensor import uint8_to_bit
 
 __all__ = ["SR", "_calculate_sr", "sr_grad"]
 print = partial(print, flush=True)
@@ -29,7 +30,8 @@ class VMCOptimizer():
     def __init__(self, nqs: nn.Module, opt_type: Optimizer,
                 sampler_param: dict,
                 integral_file: str,
-                nele: int, 
+                nele: int,
+                lr_scheduler = None,
                 max_iter: int = 2000,
                 num_diff: bool = False,
                 verbose: bool = False,
@@ -47,6 +49,7 @@ class VMCOptimizer():
         self.verbose = verbose
         self.model = nqs
         self.opt = opt_type
+        self.lr_scheduler = lr_scheduler
         self.sampler = MCMCSampler
         self.sampler_param = sampler_param
         self.exact = self.sampler_param["debug_exact"]
@@ -80,7 +83,7 @@ class VMCOptimizer():
                                  self.sorb, self.nele, full_space=self.onstate, 
                                  **self.sampler_param)
             state, eloc = sample.run()
-            sample_state = unit8_to_bit(state, self.sorb)
+            sample_state = uint8_to_bit(state, self.sorb)
             
             delta = (time.time_ns() - t0)/1.00E06
             self.time_sample.append(delta)
@@ -118,6 +121,8 @@ class VMCOptimizer():
             
             self.opt.step()
             self.opt.zero_grad()
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
 
             with torch.no_grad():
                 e = self._total_energy(state.detach())
@@ -212,7 +217,7 @@ class VMCOptimizer():
         ax.plot(idx_e[idx:], e[idx:])
         if e_ref is not None:
             ax.axhline(e_ref,color='coral',ls='--')
-            axins = inset_axes(ax, width="50%", height="40%", loc=1, 
+            axins = inset_axes(ax, width="50%", height="45%", loc=1, 
                                bbox_to_anchor=(0.2, 0.1, 0.8, 0.8), 
                                bbox_transform=ax.transAxes)
             axins.plot(e[idx:])
@@ -220,18 +225,18 @@ class VMCOptimizer():
             zone_left = len(e) - len(e)//10
             zone_right = len(e) - 1
             x_ratio = 0
-            y_ratio = 10
+            y_ratio = 1
             xlim0 = idx_e[zone_left]-(idx_e[zone_right] -idx_e[zone_left])*x_ratio
             xlim1 = idx_e[zone_right]+(idx_e[zone_right]-idx_e[zone_left])*x_ratio
             y = e[zone_left: zone_right]
-            ylim0 = e_ref - (np.max(y)-np.min(y))*y_ratio
-            ylim1 = np.max(y) + (np.max(y)-np.min(y))*y_ratio
+            ylim0 = e_ref - (np.min(y) - e_ref)*y_ratio
+            ylim1 = np.max(y) + (np.min(y) - e_ref)*y_ratio
             axins.set_xlim(xlim0, xlim1)
             axins.set_ylim(ylim0, ylim1)
+            print(f"last energy: {e[-1]:.9f}")
             print(f"reference energy: {e_ref:.9f}")
 
         # grad L2-norm/max
-        
         for i in range(self.n_para):
             ax = fig.add_subplot(self.n_para+1, 1, i+2)
             x = np.linalg.norm(np.array(self.grad_e_lst[i]), axis=1) # ||g||
@@ -341,6 +346,11 @@ def sr_grad(params: List[Tensor],
 
 def _calculate_sr(grad_total: Tensor, F_p: Tensor,
                   N_state: int, p: int, opt_gd: bool = False) -> Tensor:
+    """
+    see: time-dependent variational principle(TDVP)
+        Natural Gradient descent in steepest descent method on
+    a Riemannian manifold.
+    """
     if opt_gd:
         return F_p
 

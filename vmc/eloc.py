@@ -36,13 +36,13 @@ def local_energy(x: Tensor, h1e: Tensor, h2e: Tensor,
     
     t1 = time.time_ns()
     # TODO: time consuming
-    x = pt.unit8_to_bit(comb_x, sorb)
+    x = pt.uint8_to_bit(comb_x, sorb)
     delta1 = (time.time_ns()-t1)/1.0E06
 
     t2 = time.time_ns()
     psi_x1 = ansatz(x)
     # print(f"psi_x1: \n {psi_x1[..., 0]}")
-    if torch.cuda.is_available():
+    if x.is_cuda:
         torch.cuda.synchronize()
     delta2 = (time.time_ns()-t2)/1.0E06
 
