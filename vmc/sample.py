@@ -3,8 +3,9 @@ import random
 import torch
 from typing import Callable, Tuple
 from torch import Tensor 
-from vmc.PublicFunction import check_para, unit8_to_bit
+from vmc.PublicFunction import check_para
 from vmc.eloc import local_energy
+from libs.hij_tensor import get_olst_vlst, uint8_to_bit 
 
 class MCMCSampler():
     """
@@ -58,13 +59,13 @@ class MCMCSampler():
 
         print('Starting MCMC Sampling')
         t0 = time.time_ns()
-        prob_current = self.nqs(unit8_to_bit(self.current_state, self.sorb))**2
+        prob_current = self.nqs(uint8_to_bit(self.current_state, self.sorb))**2
         spin_time = torch.zeros(n_sweep)
         for i in range(n_sweep):
             t1 = time.time_ns()
             # TODO: Time-consuming
             self.spin_flip_rand(self.next_state)
-            psi = unit8_to_bit(self.next_state, self.sorb)
+            psi = uint8_to_bit(self.next_state, self.sorb)
             spin_time[i] = (time.time_ns() - t1)/1.0E06
             prob_next = self.nqs(psi)**2
             prob_accept = min(1.00, (prob_next/prob_current).item())
@@ -81,19 +82,22 @@ class MCMCSampler():
         
         delta = time.time_ns() - t0
         print(f'Completed Monte Carlo Sampling {delta/1.0E09:.3f} s, acceptance ratio = {self.n_accept/self.n_sample:.3f}')
- 
-        if self.verbose:
-            print(f"spin flip average time: {spin_time.mean():.3f} ms, total time {spin_time.sum():.3f} ms")
 
         # calculate local energy
         self.eloc = local_energy(self.state_sample, self.h1e, self.h2e, 
                                  self.nqs, self.sorb, 
                                  self.nele, self.verbose)[0]
 
+        if self.verbose:
+            print(f"spin flip average time: {spin_time.mean():.3f} ms, total time {spin_time.sum():.3f} ms")
+            print(f"sample state:\n{(uint8_to_bit(self.state_sample.detach(), self.sorb)+1)//2}")
+            print(f"eloc energy:\n {self.eloc.detach()}")
+
         return self.state_sample.detach(), self.eloc.detach()
 
     def spin_flip_rand(self, x: Tensor):
-        olst, vlst = self.get_olst(x, self.sorb, self.nele)
+        # olst, vlst = self.get_olst(x, self.sorb, self.nele)
+        olst, vlst = get_olst_vlst(x, self.sorb, self.nele)
 
         while True:
             ia = random.randrange(self.no * self.nv)

@@ -7,10 +7,10 @@ from typing import Tuple
 import libs.py_fock as fock
 import libs.py_integral as integral
 
-__all__ =["unit8_to_bit", "check_para", "setup_seed", "read_integral"]
+__all__ =["uint8_to_bit", "check_para", "setup_seed", "read_integral"]
 
-def unit8_to_bit(bra: Tensor, sorb: int) -> Tensor:
-    # TODO: the function is time consuming
+def uint8_to_bit(bra: Tensor, sorb: int) -> Tensor:
+    # TODO: the function is time consuming cuda and cpu
     """
     Args:
         bra: torch.uint8
@@ -62,9 +62,8 @@ def setup_seed(x: int):
     torch.manual_seed(x)
     np.random.seed(x)
     random.seed(x)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(x)
-        torch.cuda.manual_seed_all(x)
+    torch.cuda.manual_seed(x)
+    torch.cuda.manual_seed_all(x)
 
 def read_integral(filename: str, nele: int, 
                   device=None ) -> Tuple[Tensor, Tensor, Tensor, float, int]:
