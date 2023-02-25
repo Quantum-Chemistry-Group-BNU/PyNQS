@@ -50,11 +50,12 @@ class VMCOptimizer():
         self.model = nqs
         self.opt = opt_type
         self.lr_scheduler = lr_scheduler
-        self.sampler = MCMCSampler
         self.sampler_param = sampler_param
         self.exact = self.sampler_param["debug_exact"]
         self.dim = self.onstate.shape[0]
         self.n_sample = self.dim if self.exact else self.sampler_param["n_sample"]
+        self.sampler = MCMCSampler(self.model, self.h1e, self.h2e,
+            self.sorb, self.nele, full_space=self.onstate, **self.sampler_param)
         self.sr = sr
         self.HF_init = HF_init
         self.n_para = len(list(self.model.parameters()))
@@ -74,15 +75,13 @@ class VMCOptimizer():
         for p in range(self.max_iter):
             t0 = time.time_ns()
             
-            if self.HF_init is None or p <= self.HF_init:
+            if self.HF_init is None or p < self.HF_init:
                 initial_state = self.onstate[random.randrange(self.dim)].clone().detach()
             else:
-                initial_state = self.onstate[0].clone.detach()
+                initial_state = self.onstate[0].clone().detach()
 
-            sample = self.sampler(self.model, initial_state, self.h1e, self.h2e,
-                                 self.sorb, self.nele, full_space=self.onstate, 
-                                 **self.sampler_param)
-            state, eloc = sample.run()
+            print(f"initial_state : {initial_state}")
+            state, eloc = self.sampler.run(initial_state)
             sample_state = uint8_to_bit(state, self.sorb)
             
             delta = (time.time_ns() - t0)/1.00E06
@@ -205,10 +204,13 @@ class VMCOptimizer():
         
         return (grad_comb_lst, psi_lst)
 
-    def summary(self, filename: str = None, 
-                e_ref: float = None):
-        if filename is None:
-            filename = r"vmc-energy-grad"
+    def summary(self, grad_figure: str = "vmc-energy-grad", 
+                e_ref: float = None, 
+                sample_file: str = "MCMC-sampling.csv", 
+                model_file: str = "nqs.pth"):
+        if not self.exact:
+            self.sampler.frame_sample.to_csv(sample_file)
+        torch.save({"model": self.model.state_dict()}, model_file)
         fig = plt.figure()
         ax = fig.add_subplot(self.n_para+1, 1, 1)
         e = np.array(self.e_lst)
@@ -247,7 +249,7 @@ class VMCOptimizer():
             plt.legend(loc="best")
 
         plt.subplots_adjust(wspace=0, hspace=0.5)
-        plt.savefig(filename, dpi=1000, bbox_inches='tight')
+        plt.savefig(grad_figure, dpi=1000, bbox_inches='tight')
         plt.close()
 
 

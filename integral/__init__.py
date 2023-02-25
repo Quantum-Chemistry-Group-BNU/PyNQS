@@ -5,7 +5,8 @@ from pyscf import gto, scf, fci
 
 def integral_pyscf(atom: str, 
                   basis = "sto-3g", 
-                  integral_file: str = "integral.info") -> Tuple[int, int, float]:
+                  integral_file: str = "integral.info", 
+                  ci: bool = False) -> Tuple[int, int, float]:
     mol = gto.Mole(
         atom = atom,
         verbose = 3,
@@ -27,6 +28,9 @@ def integral_pyscf(atom: str,
     info = iface.get_integral(mf.mo_coeff)
     iface.dump(info, fname=integral_file)
     cisolver = fci.FCI(mf) 
-    e_fci = cisolver.kernel()[0]
+    e_fci, coeff = cisolver.kernel()
 
-    return (sorb * 2, nele, e_fci)
+    if not ci:
+        return (sorb * 2, nele, e_fci)
+    else:
+        return (sorb * 2, nele, e_fci, coeff)
