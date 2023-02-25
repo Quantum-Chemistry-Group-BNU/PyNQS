@@ -4,8 +4,8 @@ import os.path as osp
 from setuptools import setup
 from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 
-os.environ["CC"] = "gcc-11"
-os.environ["CXX"] = "g++-11"
+# os.environ["CC"] = "gcc-11"
+# os.environ["CXX"] = "g++-11"
 
 ROOT_DIR = osp.dirname(osp.abspath(__file__))
 include_dirs = [osp.join(ROOT_DIR, "include")]
