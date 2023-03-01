@@ -1,7 +1,3 @@
-// #include "ATen/core/TensorBody.h"
-// #include "c10/core/DeviceType.h"
-// #include "pybind11/cast.h"
-// #include "pybind11/pytypes.h"
 #include "utils_hij.h"
 
 using namespace std;
