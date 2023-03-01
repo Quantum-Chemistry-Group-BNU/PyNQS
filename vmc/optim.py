@@ -1,7 +1,9 @@
 import time
-import random 
+import random
+import cProfile
 import torch
 import numpy as np
+from line_profiler import LineProfiler
 from functools import partial
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
@@ -29,35 +31,50 @@ class VMCOptimizer():
 
     def __init__(self, nqs: nn.Module, opt_type: Optimizer,
                 sampler_param: dict,
-                integral_file: str,
-                nele: int,
+                nele: int = None,
                 lr_scheduler = None,
+                integral_file: str = None,
+                electron_info: dict = None,
                 max_iter: int = 2000,
                 num_diff: bool = False,
                 verbose: bool = False,
                 analytic_derivate: bool = True,
                 device = None,
                 sr: bool = False,
-                HF_init: int = None) -> None:
+                HF_init: int = None,
+                external_model: any = None,
+                only_sample: bool = False) -> None:
+        if external_model is not None:
+            self.read_model(external_model)
+        else:
+            self.model = nqs 
+            self.opt = opt_type
+            self.lr_scheduler = lr_scheduler
+            self.HF_init = HF_init
+            self.sr = sr
+        self.device = device
+        if integral_file is not None and nele is not None:
+            self.integral_file = integral_file
+            self.nele = nele
+            self.read_integral_info()
+        else:
+            s = 'h1e, h2e, onstate, ecore, sorb, nele'
+            print(f"Read the {s} from dict 'electron_info' ")
+            info = ("h1e", "h2e", "onstate", "ecore", "sorb", "nele")
+            result = tuple(electron_info[i] for i in info)
+            self.h1e, self.h2e, self.onstate, self.ecore, self.sorb, self.nele = result
+        
         self.max_iter = max_iter
         self.num_diff = num_diff
-        self.nele = nele
         self.analytic_derivate = analytic_derivate
-        self.device = device
-        self.integral_file = integral_file
-        self._read_integral()
         self.verbose = verbose
-        self.model = nqs
-        self.opt = opt_type
-        self.lr_scheduler = lr_scheduler
         self.sampler_param = sampler_param
         self.exact = self.sampler_param["debug_exact"]
         self.dim = self.onstate.shape[0]
         self.n_sample = self.dim if self.exact else self.sampler_param["n_sample"]
         self.sampler = MCMCSampler(self.model, self.h1e, self.h2e,
             self.sorb, self.nele, full_space=self.onstate, **self.sampler_param)
-        self.sr = sr
-        self.HF_init = HF_init
+        self.only_sample = only_sample
         self.n_para = len(list(self.model.parameters()))
         self.grad_e_lst: List[Tensor] = [[] for _ in range(self.n_para)]
         self.grad_param_lst: List[Tensor] = [[] for _ in range(self.n_para)]
@@ -67,21 +84,41 @@ class VMCOptimizer():
         print(f"NQS model:\n{self.model}")
         print(f"Optimizer:\n{self.opt}")
 
-    def _read_integral(self):
+    # TODO: unpack from params
+    def read_integral_info(self):
         result = read_integral(self.integral_file, self.nele, self.device)
         self.h1e, self.h2e, self.onstate, self.ecore, self.sorb = result
+
+    def read_model(self, external_model):
+        print(f"Read nqs model from '.pth' file {external_model}")
+        state = torch.load(external_model)
+        self.model = state["model"]
+        self.opt = state["optimizer"]
+        self.lr_scheduler = state["lr_scheduler"]
+        self.HF_init = state["HF_init"]
+        self.sr = state["sr"]
 
     def run(self):
         for p in range(self.max_iter):
             t0 = time.time_ns()
-            
             if self.HF_init is None or p < self.HF_init:
                 initial_state = self.onstate[random.randrange(self.dim)].clone().detach()
             else:
                 initial_state = self.onstate[0].clone().detach()
 
-            print(f"initial_state : {initial_state}")
+            # print(f"initial_state : {initial_state}")
+            # lp = LineProfiler()
+            # lp_wrapper = lp(self.sampler.run)
+            # lp_wrapper(initial_state)
+            # lp.print_stats()
+            # exit()
             state, eloc = self.sampler.run(initial_state)
+
+            if self.only_sample:
+                delta = (time.time_ns() - t0)/1.00E06
+                print(f"{p} only Sampling finished, cost time {delta:.3f} ms")
+                continue
+
             sample_state = uint8_to_bit(state, self.sorb)
             
             delta = (time.time_ns() - t0)/1.00E06
@@ -204,13 +241,24 @@ class VMCOptimizer():
         
         return (grad_comb_lst, psi_lst)
 
-    def summary(self, grad_figure: str = "vmc-energy-grad", 
-                e_ref: float = None, 
-                sample_file: str = "MCMC-sampling.csv", 
-                model_file: str = "nqs.pth"):
-        if not self.exact:
+    def summary(self, e_ref: float = None, prefix: str = "VMC"):
+        self.save(prefix)
+        self.plot_figure(e_ref, prefix)
+
+    def save(self, prefix: str = "VMC", nqs: bool =True, sample: bool = True):
+        sample_file, model_file = [prefix + i for i in (".csv", ".pth")]
+        if not self.exact and sample:
             self.sampler.frame_sample.to_csv(sample_file)
-        torch.save({"model": self.model.state_dict()}, model_file)
+
+        if nqs:
+            torch.save({"model": self.model,
+                        "optimizer": self.opt,
+                        "lr_scheduler": self.lr_scheduler,
+                        "HF_init": self.HF_init,
+                        "sr": self.sr,
+                        "sampler_param": self.sampler_param}, model_file)
+
+    def plot_figure(self, e_ref: float = None, prefix: str = "VMC"):
         fig = plt.figure()
         ax = fig.add_subplot(self.n_para+1, 1, 1)
         e = np.array(self.e_lst)
@@ -249,9 +297,8 @@ class VMCOptimizer():
             plt.legend(loc="best")
 
         plt.subplots_adjust(wspace=0, hspace=0.5)
-        plt.savefig(grad_figure, dpi=1000, bbox_inches='tight')
+        plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches='tight')
         plt.close()
-
 
 class SR(Optimizer):
     """Stochastic Reconfiguration in quantum many-body problem

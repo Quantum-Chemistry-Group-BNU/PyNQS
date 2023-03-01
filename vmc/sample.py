@@ -67,7 +67,6 @@ class MCMCSampler():
         spin_time = torch.zeros(n_sweep)
         for i in range(n_sweep):
             t1 = time.time_ns()
-            # TODO: Time-consuming
             psi, self.next_state = spin_flip_rand(self.next_state, self.sorb, self.nele, self.seed)
             spin_time[i] = (time.time_ns() - t1)/1.0E06
             prob_next = self.nqs(psi)**2
