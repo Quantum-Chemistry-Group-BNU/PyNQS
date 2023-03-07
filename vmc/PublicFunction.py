@@ -66,7 +66,11 @@ def setup_seed(x: int):
     torch.cuda.manual_seed_all(x)
 
 def read_integral(filename: str, nele: int, 
-                  device=None ) -> Tuple[Tensor, Tensor, Tensor, float, int]:
+                  device=None,
+                  external_onstate: str = None,
+                  save_onstate: bool = False,
+                  prefix: str = None
+                  ) -> Tuple[Tensor, Tensor, Tensor, float, int]:
     """
     read the int2e, int1e, ecore for integral file 
     return 
@@ -87,19 +91,31 @@ def read_integral(filename: str, nele: int,
 
     int2e, int1e, ecore = integral.load(integral.two_body(), integral.one_body(), 0.0, filename)
     sorb = int2e.sorb
-    alpha_ele = nele//2 
-    beta_ele = nele//2
-    space = fock.get_fci_space(int(sorb//2), alpha_ele, beta_ele)
-    dim = len(space)
 
     # h1e/h2e 
     h1e = torch.tensor(int1e.data, dtype=torch.float64).to(device)
     h2e = torch.tensor(int2e.data, dtype=torch.float64).to(device)
 
-    # bra/ket
-    lst = []
-    for i in range(dim):
-        lst.append(string_to_lst(sorb, space[i].to_string()))
-    onstate1 = torch.tensor(lst, dtype=torch.uint8).to(device)
-    
-    return (h1e, h2e, onstate1, ecore, sorb)
+    if external_onstate is not None:
+        s = f"{external_onstate}.pth"
+        print(f"Read the onstate from '{s}'")
+        x = torch.load(s)
+        onstate = x["onstate"]
+    else:
+        # bra/ket
+        alpha_ele = nele//2 
+        beta_ele = nele//2
+        space = fock.get_fci_space(int(sorb//2), alpha_ele, beta_ele)
+        dim = len(space)
+        lst = []
+        for i in range(dim):
+            lst.append(string_to_lst(sorb, space[i].to_string()))
+        onstate = torch.tensor(lst, dtype=torch.uint8).to(device)
+
+        if save_onstate:
+            if prefix is None:
+                prefix = "onstate"
+            print(f"Save the onstate to '{prefix}'.pth")
+            torch.save({"onstate": onstate}, f"{prefix}.pth")
+
+    return (h1e, h2e, onstate, ecore, sorb)

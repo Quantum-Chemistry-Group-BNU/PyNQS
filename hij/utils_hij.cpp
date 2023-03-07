@@ -1,7 +1,9 @@
 #include "utils_hij.h"
-#include "ATen/core/TensorBody.h"
+
 #include <cstdint>
 #include <tuple>
+
+#include "ATen/core/TensorBody.h"
 
 inline int popcnt_cpu(const unsigned long x) { return __builtin_popcountl(x); }
 inline int get_parity_cpu(const unsigned long x) {
@@ -44,7 +46,8 @@ void get_olst_cpu(unsigned long *bra, int *olst, int _len) {
   }
 }
 
-void get_olst_cpu(unsigned long *bra, int *olst, int *olst_a, int *olst_b, int _len) {
+void get_olst_cpu(unsigned long *bra, int *olst, int *olst_a, int *olst_b,
+                  int _len) {
   unsigned long tmp;
   int ida = 0;
   int idb = 0;
@@ -54,14 +57,14 @@ void get_olst_cpu(unsigned long *bra, int *olst, int *olst_a, int *olst_b, int _
     while (tmp != 0) {
       int j = __builtin_ctzl(tmp);
       int s = i * 64 + j;
-      olst[idx] = s ;
+      olst[idx] = s;
       idx++;
-      if( s & 1){
-          olst_b[idb] = s;
-          idb++;
-      }else{
-          olst_a[ida] = s;
-          ida++;
+      if (s & 1) {
+        olst_b[idb] = s;
+        idb++;
+      } else {
+        olst_a[ida] = s;
+        ida++;
       }
       tmp &= ~(1ULL << j);
     }
@@ -83,7 +86,8 @@ void get_vlst_cpu(unsigned long *bra, int *vlst, int n, int _len) {
   }
 }
 
-void get_vlst_cpu(unsigned long *bra, int *vlst, int *vlst_a, int *vlst_b, int n, int _len) {
+void get_vlst_cpu(unsigned long *bra, int *vlst, int *vlst_a, int *vlst_b,
+                  int n, int _len) {
   int ida = 0;
   int idb = 0;
   int ic = 0;
@@ -96,10 +100,10 @@ void get_vlst_cpu(unsigned long *bra, int *vlst, int *vlst_a, int *vlst_b, int n
       int s = i * 64 + j;
       vlst[ic] = s;
       ic++;
-      if (s & 1){
-        vlst_b[idb] =s ;
+      if (s & 1) {
+        vlst_b[idb] = s;
         idb++;
-      }else{
+      } else {
         vlst_a[ida] = s;
         ida++;
       }
@@ -222,7 +226,7 @@ void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
     }
   }
   // std::cout << "Singles: " << idx_s << std::endl;
-  int idx_double = 0;
+  int idx_doubles = 0;
   // Doubles
   for (int i = 0; i < no; i++) {
     for (int j = i + 1; j < no; j++) {
@@ -268,7 +272,7 @@ void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
             BIT_FLIP(comb[idl], vlst[l] % 64);
             idx++;
             flag = false;
-            idx_double++;
+            idx_doubles++;
             // std::cout << "comb[idj]: " << std::bitset<8> (comb[idj]) <<
             // std::endl;
           }
@@ -278,6 +282,122 @@ void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
   }
   // std::cout << "Double: " << idx_double << std::endl;
   // std::cout << "Singles: " << idx_singles << std::endl;
+}
+
+void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
+                 int noa, int nob, int nva, int nvb) {
+  int olst[MAX_NO] = {0};
+  int vlst[MAX_NV] = {0};
+  int olst_a[MAX_NOA] = {0};
+  int olst_b[MAX_NOB] = {0};
+  int vlst_a[MAX_NOA] = {0};
+  int vlst_b[MAX_NOB] = {0};
+  get_olst_cpu(bra, olst, olst_a, olst_b, len);
+  get_vlst_cpu(bra, vlst, vlst_a, vlst_b, n, len);
+
+  for (int i = 0; i < len; i++) {
+    comb[i] = bra[i];
+  }
+  int idx = 1;
+  int idx_singles = 0;
+  // a->a: noa * nva
+  for (int i = 0; i < noa; i++) {
+    for (int j = 0; j < nva; j++) {
+      int idi = len * idx + olst_a[i] / 64;
+      int idj = len * idx + vlst_a[j] / 64;
+      comb[idi] = bra[olst_a[i] / 64];
+      comb[idj] = bra[vlst_a[j] / 64];
+      BIT_FLIP(comb[idi], olst_a[i] % 64);
+      BIT_FLIP(comb[idj], vlst_a[j] % 64);
+      idx++;
+      idx_singles += 1;
+    }
+  }
+  // b->b: nob * nvb
+  for (int i = 0; i < nob; i++) {
+    for (int j = 0; j < nvb; j++) {
+      int idi = len * idx + olst_b[i] / 64;
+      int idj = len * idx + vlst_b[j] / 64;
+      comb[idi] = bra[olst_b[i] / 64];
+      comb[idj] = bra[vlst_b[j] / 64];
+      BIT_FLIP(comb[idi], olst_b[i] % 64);
+      BIT_FLIP(comb[idj], vlst_b[j] % 64);
+      idx++;
+      idx_singles++;
+    }
+  }
+  // std::cout << "Singles: " << idx_singles << std::endl;
+  int idx_doubles = 0;
+  // aa->aa, noa * (noa - 1) * nva * (nva - 1) / 4
+  for (int i = 0; i < noa; i++) {
+    for (int j = i + 1; j < noa; j++) {
+      for (int k = 0; k < nva; k++) {
+        for (int l = k + 1; l < nva; l++) {
+          int idi = len * idx + olst_a[i] / 64;
+          int idj = len * idx + olst_a[j] / 64;
+          int idk = len * idx + vlst_a[k] / 64;
+          int idl = len * idx + vlst_a[l] / 64;
+          comb[idi] = bra[olst_a[i] / 64];
+          comb[idj] = bra[olst_a[j] / 64];
+          comb[idk] = bra[vlst_a[k] / 64];
+          comb[idl] = bra[vlst_a[l] / 64];
+          BIT_FLIP(comb[idi], olst_a[i] % 64);
+          BIT_FLIP(comb[idj], olst_a[j] % 64);
+          BIT_FLIP(comb[idk], vlst_a[k] % 64);
+          BIT_FLIP(comb[idl], vlst_a[l] % 64);
+          idx++;
+          idx_doubles++;
+        }
+      }
+    }
+  }
+  // bb->bb: nob * (nob - 1) * nvb * (nvb - 1) / 4
+  for (int i = 0; i < nob; i++) {
+    for (int j = i + 1; j < nob; j++) {
+      for (int k = 0; k < nvb; k++) {
+        for (int l = k + 1; l < nvb; l++) {
+          int idi = len * idx + olst_b[i] / 64;
+          int idj = len * idx + olst_b[j] / 64;
+          int idk = len * idx + vlst_b[k] / 64;
+          int idl = len * idx + vlst_b[l] / 64;
+          comb[idi] = bra[olst_b[i] / 64];
+          comb[idj] = bra[olst_b[j] / 64];
+          comb[idk] = bra[vlst_b[k] / 64];
+          comb[idl] = bra[vlst_b[l] / 64];
+          BIT_FLIP(comb[idi], olst_b[i] % 64);
+          BIT_FLIP(comb[idj], olst_b[j] % 64);
+          BIT_FLIP(comb[idk], vlst_b[k] % 64);
+          BIT_FLIP(comb[idl], vlst_b[l] % 64);
+          idx++;
+          idx_doubles++;
+        }
+      }
+    }
+  }
+  // std::cout << "aa-aa/bb-bb : " << idx_doubles << std::endl;
+  // ab->ab (noa * nva * nob * nvb)
+  for (int i = 0; i < noa; i++) {
+    for (int j = 0; j < nob; j++) {
+      for (int k = 0; k < nva; k++) {
+        for (int l = 0; l < nvb; l++) {
+          int idi = len * idx + olst_a[i] / 64;
+          int idj = len * idx + olst_b[j] / 64;
+          int idk = len * idx + vlst_a[k] / 64;
+          int idl = len * idx + vlst_b[l] / 64;
+          comb[idi] = bra[olst_a[i] / 64];
+          comb[idj] = bra[olst_b[j] / 64];
+          comb[idk] = bra[vlst_a[k] / 64];
+          comb[idl] = bra[vlst_b[l] / 64];
+          BIT_FLIP(comb[idi], olst_a[i] % 64);
+          BIT_FLIP(comb[idj], olst_b[j] % 64);
+          BIT_FLIP(comb[idk], vlst_a[k] % 64);
+          BIT_FLIP(comb[idl], vlst_b[l] % 64);
+          idx++;
+          idx_doubles++;
+        }
+      }
+    }
+  }
 }
 
 double get_Hii_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
@@ -460,6 +580,8 @@ torch::Tensor get_comb_tensor_cpu(torch::Tensor &bra_tensor, const int sorb,
   const int nv = sorb - nele;
   const int bra_len = (sorb - 1) / 64 + 1;
   int ncomb = std::get<2>(get_nsingles_doubles(no, nv, ms_equal));
+  const int nob = nele / 2, noa = no - nob;
+  const int nvb = nv / 2, nva = nv - nvb;
   // TODO: how to achieve CPU to CUDA using torch::KCPU in *.cpp or *.cu file?
   const int batch = bra_tensor.size(0);
   const int dim = bra_tensor.dim();
@@ -480,11 +602,20 @@ torch::Tensor get_comb_tensor_cpu(torch::Tensor &bra_tensor, const int sorb,
   if (flag_3d) {
     for (int i = 0; i < batch; i++) {
       // Notice the index in 3D tensor
-      get_comb_2d(&bra_ptr[i], &comb_ptr[i * ncomb * bra_len], sorb, bra_len,
-                  no, nv, ms_equal);
+      if (not ms_equal) {
+        get_comb_2d(&bra_ptr[i], &comb_ptr[i * ncomb * bra_len], sorb, bra_len,
+                    no, nv, false);
+      } else {
+        get_comb_2d(&bra_ptr[i], &comb_ptr[i * ncomb * bra_len], sorb, bra_len,
+                    noa, nob, nva, nvb);
+      }
     }
   } else {
-    get_comb_2d(bra_ptr, comb_ptr, sorb, bra_len, no, nv, ms_equal);
+    if (not ms_equal) {
+      get_comb_2d(bra_ptr, comb_ptr, sorb, bra_len, no, nv, false);
+    } else {
+      get_comb_2d(bra_ptr, comb_ptr, sorb, bra_len, noa, nob, nva, nvb);
+    }
   }
   return comb;
 }
@@ -537,8 +668,8 @@ torch::Tensor uint8_to_bit_cpu(torch::Tensor &bra_tensor, const int sorb) {
   return comb_bit;
 }
 
-std::tuple<torch::Tensor, torch::Tensor> get_olst_vlst_cpu(torch::Tensor &bra_tensor, const int sorb,
-                       const int nele) {
+std::tuple<torch::Tensor, torch::Tensor> get_olst_vlst_cpu(
+    torch::Tensor &bra_tensor, const int sorb, const int nele) {
   const int no = nele;
   const int nv = sorb - nele;
   // const int tensor_len =(sorb-1)/8 + 1;
@@ -651,7 +782,7 @@ std::tuple<torch::Tensor, torch::Tensor> spin_flip_rand(
       int Naa = noa * (noa - 1) * nva * (nva - 1) / 4;
       int Nbb = nob * (nob - 1) * nvb * (nvb - 1) / 4;
       int Nab = noa * nva * nob * nob;
-      int i =0, j = 0, k = 0, l = 0;
+      int i = 0, j = 0, k = 0, l = 0;
       bool flag = false;
       static std::uniform_int_distribution<int> ud(0, Naa + Nbb + Nab - 1);
       int m = ud(rng);

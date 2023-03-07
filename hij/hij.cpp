@@ -50,11 +50,14 @@ auto get_olst_vlst(torch::Tensor &bra_tensor, const int sorb, const int nele) {
 torch::Tensor get_comb_tensor(torch::Tensor &bra_tensor, const int sorb,
                               const int nele, bool ms_equal) {
   CHECK_CONTIGUOUS(bra_tensor);
-  auto device = bra_tensor.device();
   if (bra_tensor.is_cuda()) {
+    /**
+    auto device = bra_tensor.device();
     torch::Tensor bra_cpu = bra_tensor.to(torch::kCPU);
     torch::Tensor x = get_comb_tensor_cpu(bra_cpu, sorb, nele, ms_equal);
     return x.to(device);
+    **/
+    return get_comb_tensor_cuda(bra_tensor,sorb, nele, ms_equal);
   } else {
     return get_comb_tensor_cpu(bra_tensor, sorb, nele, ms_equal);
   }
@@ -63,6 +66,7 @@ torch::Tensor get_comb_tensor(torch::Tensor &bra_tensor, const int sorb,
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij_torch,
         "Calculate the matrix <x|H|x'> using CPU or GPU");
+  /**
   m.def("get_hij_torch_lambda",
         [](torch::Tensor &bra_tensor, torch::Tensor &ket_tensor,
            torch::Tensor &h1e_tensor, torch::Tensor &h2e_tensor,
@@ -74,12 +78,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           auto delta = get_duration_nano(t1 - t0);
           return make_tuple(value, delta);
         });
+  **/
   m.def("get_comb_tensor", &get_comb_tensor,
-        "Return all singles and doubles excitation for given x(3D/2D) in the "
-        "cpu");
+        "Return all singles and doubles excitation for given x(3D/2D) using CPU");
   m.def("uint8_to_bit", &uint8_to_bit,
-        "convert from unit8 to bit[-1, 1] for given x(3D)");
+        "convert from unit8 to bit[-1, 1] for given x(3D) using CPU or GPU");
   m.def("get_olst_vlst", &get_olst_vlst,
         "get occupied and virtual orbitals in the cpu ");
-  m.def("spin_flip_rand", &spin_flip_rand, "Flip the spin randomly in MCMC");
+  m.def("spin_flip_rand", &spin_flip_rand, "Flip the spin randomly in MCMC using CPU");
 }

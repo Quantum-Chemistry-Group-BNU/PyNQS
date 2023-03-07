@@ -13,7 +13,7 @@ def integral_pyscf(atom: str,
         basis = basis
     )
     mol.build()
-    sorb = mol.nao
+    sorb = mol.nao * 2
     nele = mol.nelectron
     mf = scf.RHF(mol)
     mf.init_guess = 'atom'
@@ -27,10 +27,17 @@ def integral_pyscf(atom: str,
     iface.nfrozen = 0
     info = iface.get_integral(mf.mo_coeff)
     iface.dump(info, fname=integral_file)
-    cisolver = fci.FCI(mf) 
-    e_fci, coeff = cisolver.kernel()
+
+    if sorb <= 24:
+        cisolver = fci.FCI(mf) 
+        e_fci, coeff = cisolver.kernel()
+    else:
+        from pyscf import cc 
+        mycc = cc.CCSD(mf)
+        _ = mycc.kernel()
+        return (sorb, nele, mycc.e_tot)
 
     if not ci:
-        return (sorb * 2, nele, e_fci)
+        return (sorb , nele, e_fci)
     else:
-        return (sorb * 2, nele, e_fci, coeff)
+        return (sorb , nele, e_fci, coeff)
