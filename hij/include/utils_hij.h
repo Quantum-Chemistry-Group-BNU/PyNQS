@@ -1,5 +1,4 @@
 #include <torch/extension.h>
-
 #include <bitset>
 #include <chrono>
 #include <cmath>
@@ -14,18 +13,6 @@
 #include "ATen/core/TensorBody.h"
 #include "default.h"
 
-#define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
-#define CHECK_CONTIGUOUS(x) \
-  TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
-#define CHECK_INPUT(x) \
-  CHECK_CUDA(x);       \
-  CHECK_CONTIGUOUS(x)
-
-// see:https://stackoverflow.com/questions/47981/how-do-i-set-clear-and-toggle-a-single-bit/263738#263738
-#define BIT_FLIP(a, b) ((a) ^= (1ULL << (b)))
-#define BIT_SET(a, b) ((a) |= (1ULL << (b)))
-#define BIT_CLEAR(a, b) ((a) &= ~(1ULL << (b)))
-
 std::chrono::high_resolution_clock::time_point get_time();
 
 template <typename T>
@@ -38,6 +25,9 @@ torch::Tensor get_Hij_cuda(torch::Tensor &bra_tensor, torch::Tensor &ket_tensor,
                            const int sorb, const int nele);
 
 torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb);
+
+torch::Tensor get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
+                                const int nele, bool ms_equal);
 
 int popcnt_cpu(const unsigned long x);
 int get_parity_cpu(const unsigned long x);
@@ -74,6 +64,9 @@ void get_alpha_beta(int *lst, int no, int &noa, int &nob, int *olst_a,
 // TODO: This maybe error, spin multiplicity is not equal for very comb
 void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
                  int no, int nv, bool ms);
+
+void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
+                 int noa, int nob, int nva, int nvb);
 
 double get_Hii_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
                    double *h2e, int sorb, const int nele, int bra_len);

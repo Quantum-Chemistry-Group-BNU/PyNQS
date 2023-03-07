@@ -9,3 +9,14 @@
 #define THREAD 16
 #define VERBOSE false
 #define DEBUG true
+
+#define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_CONTIGUOUS(x) \
+  TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
+#define CHECK_INPUT(x) \
+  CHECK_CUDA(x);       \
+  CHECK_CONTIGUOUS(x)
+// see:https://stackoverflow.com/questions/47981/how-do-i-set-clear-and-toggle-a-single-bit/263738#263738
+#define BIT_FLIP(a, b) ((a) ^= (1ULL << (b)))
+#define BIT_SET(a, b) ((a) |= (1ULL << (b)))
+#define BIT_CLEAR(a, b) ((a) &= ~(1ULL << (b)))
