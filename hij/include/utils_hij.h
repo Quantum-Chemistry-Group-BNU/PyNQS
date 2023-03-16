@@ -20,6 +20,8 @@ double get_duration_nano(T t) {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(t).count();
 }
 
+typedef std::tuple<torch::Tensor, torch::Tensor> tuple_tensor_2d;
+
 torch::Tensor get_Hij_cuda(torch::Tensor &bra_tensor, torch::Tensor &ket_tensor,
                            torch::Tensor &h1e_tensor, torch::Tensor &h2e_tensor,
                            const int sorb, const int nele);
@@ -28,6 +30,10 @@ torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb);
 
 torch::Tensor get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
                                 const int nele, bool ms_equal);
+
+tuple_tensor_2d get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
+                                const int nele, const int noA, const int noB,
+                                bool flag_bit);
 
 int popcnt_cpu(const unsigned long x);
 int get_parity_cpu(const unsigned long x);
@@ -68,6 +74,16 @@ void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
 void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
                  int noa, int nob, int nva, int nvb);
 
+void get_comb_2d(unsigned long *bra, int merged, int r0, int n, int len, int noa, int nob);
+
+void get_comb_2d(unsigned long *bra, double *lst,int merged, int r0, int n, int len, int noa, int nob);
+
+int get_Num_SinglesDoubles(int sorb, int noA, int noB);
+
+void unpack_canon(int ij, int *s);
+
+void unpack_Singles_Doubles(int sorb, int noA, int noB, int idx, int *idx_lst);
+
 double get_Hii_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
                    double *h2e, int sorb, const int nele, int bra_len);
 
@@ -93,14 +109,22 @@ torch::Tensor get_Hij_mat_cpu(torch::Tensor &bra_tensor,
 torch::Tensor get_comb_tensor_cpu(torch::Tensor &bra_tensor, const int sorb,
                                   const int nele, bool ms_equal);
 
+tuple_tensor_2d get_comb_tensor_cpu_1(
+    torch::Tensor &bra_tensor, const int sorb, const int nele, const int noA,
+    const int noB, bool flag_bit);
+
 // RBM
 torch::Tensor uint8_to_bit_cpu(torch::Tensor &bra_tensor, const int sorb);
 
-std::tuple<torch::Tensor, torch::Tensor> get_olst_vlst_cpu(
+tuple_tensor_2d get_olst_vlst_cpu(
     torch::Tensor &bra_tensor, const int sorb, const int nele);
 
 std::tuple<int, int> unpack_ij(int ij);
 
 // MCMC sampling in RBM
-std::tuple<torch::Tensor, torch::Tensor> spin_flip_rand(
+tuple_tensor_2d spin_flip_rand(
     torch::Tensor &bra_tensor, const int sorb, const int nele, const int seed);
+
+tuple_tensor_2d spin_flip_rand_1(
+    torch::Tensor &bra_tensor, const int sorb, const int nele, const int noA,
+    const int noB, const int seed);

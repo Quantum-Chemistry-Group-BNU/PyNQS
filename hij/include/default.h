@@ -6,9 +6,9 @@
 #define MAX_NV 80 // max virtual orbital
 #define MAX_NVA 40
 #define MAX_NVB 40 
-#define THREAD 16
+#define THREAD 32
 #define VERBOSE false
-#define DEBUG true
+#define DEBUG false
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) \

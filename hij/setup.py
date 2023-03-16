@@ -1,15 +1,21 @@
 import glob
 import os
+import platform
 import os.path as osp
+
+sys_name = platform.node()
+print(f"sys_name: {sys_name}")
+if sys_name == "myarch":
+    os.environ["CC"] = "gcc-11"
+    os.environ["CXX"] = "g++-11"
+    os.environ["CUDA_HOME"] = '/home/zbwu/soft/anaconda3'
+    os.environ["MAX_JOBS"] = '2' # ninja 
+
 from setuptools import setup
 from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 
-# os.environ["CC"] = "gcc-11"
-# os.environ["CXX"] = "g++-11"
-
 ROOT_DIR = osp.dirname(osp.abspath(__file__))
 include_dirs = [osp.join(ROOT_DIR, "include")]
-
 sources = glob.glob('*.cpp')+glob.glob('*.cu')
 
 s = "hij_tensor"

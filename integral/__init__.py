@@ -28,7 +28,7 @@ def integral_pyscf(atom: str,
     info = iface.get_integral(mf.mo_coeff)
     iface.dump(info, fname=integral_file)
 
-    if sorb <= 24:
+    if sorb <= 20:
         cisolver = fci.FCI(mf) 
         e_fci, coeff = cisolver.kernel()
     else:

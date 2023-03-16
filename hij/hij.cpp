@@ -27,13 +27,12 @@ torch::Tensor get_Hij_torch(torch::Tensor &bra_tensor,
 torch::Tensor uint8_to_bit(torch::Tensor &bra_tensor, const int sorb) {
   CHECK_CONTIGUOUS(bra_tensor);
   if (bra_tensor.is_cuda()) {
-    // TODO: cuda 2D/1D has not finished
     return uint8_to_bit_cuda(bra_tensor, sorb);
   } else {
     return uint8_to_bit_cpu(bra_tensor, sorb);
   }
 }
-auto get_olst_vlst(torch::Tensor &bra_tensor, const int sorb, const int nele) {
+tuple_tensor_2d get_olst_vlst(torch::Tensor &bra_tensor, const int sorb, const int nele) {
   CHECK_CONTIGUOUS(bra_tensor);
   auto device = bra_tensor.device();
   if (bra_tensor.is_cuda()) {
@@ -63,6 +62,24 @@ torch::Tensor get_comb_tensor(torch::Tensor &bra_tensor, const int sorb,
   }
 }
 
+tuple_tensor_2d get_comb_tensor_1(torch::Tensor &bra_tensor, const int sorb,
+                              const int nele, const int noA, const int noB,
+                              bool flag_bit) {
+  CHECK_CONTIGUOUS(bra_tensor);
+  if (bra_tensor.is_cuda()) {
+    /**
+    auto device = bra_tensor.device();
+    torch::Tensor bra_cpu = bra_tensor.to(torch::kCPU);
+    torch::Tensor x = get_comb_tensor_cpu(bra_cpu, sorb, nele, ms_equal);
+    return x.to(device);
+    **/
+    return get_comb_tensor_cuda(bra_tensor, sorb, nele, noA, noB, flag_bit);
+  } else {
+    return get_comb_tensor_cpu_1(bra_tensor, sorb, nele, noA, noB, flag_bit);
+  }
+}
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij_torch,
         "Calculate the matrix <x|H|x'> using CPU or GPU");
@@ -79,11 +96,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           return make_tuple(value, delta);
         });
   **/
-  m.def("get_comb_tensor", &get_comb_tensor,
+  // m.def("get_comb_tensor", &get_comb_tensor,
+  //        "Return all singles and doubles excitation for given x(3D/2D) using CPU");
+  m.def("get_comb_tensor", &get_comb_tensor_1,
         "Return all singles and doubles excitation for given x(3D/2D) using CPU");
   m.def("uint8_to_bit", &uint8_to_bit,
         "convert from unit8 to bit[-1, 1] for given x(3D) using CPU or GPU");
   m.def("get_olst_vlst", &get_olst_vlst,
         "get occupied and virtual orbitals in the cpu ");
   m.def("spin_flip_rand", &spin_flip_rand, "Flip the spin randomly in MCMC using CPU");
+  // m.def("spin_flip_rand_1", &spin_flip_rand_1, "Flip the spin randomly in MCMC using CPU");
 }
