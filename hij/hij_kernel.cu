@@ -1,9 +1,12 @@
 #include "default.h"
+#include <cstdint>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include<device_launch_parameters.h>
 #include <iostream>
 #include <stdio.h>
 #include <torch/extension.h>
+#include <tuple>
 
 __device__ inline int popcnt(unsigned long x) { return __popcll(x); }
 __device__ inline int get_parity(unsigned long x) { return __popcll(x) & 1; }
@@ -64,6 +67,7 @@ __device__ void diff_type(unsigned long *bra, unsigned long *ket, int *p,
 __device__ void get_olst(unsigned long *bra, int *olst, int _len) {
   unsigned long tmp;
   int idx = 0;
+  // printf("tmp %d\n", bra[0]);
   for (int i = 0; i < _len; i++) {
     tmp = bra[i];
     while (tmp != 0) {
@@ -142,6 +146,12 @@ __device__ void get_vlst(unsigned long *bra, int *vlst, int *vlst_a,
   }
 }
 
+__device__ void get_olst_vlst(unsigned long *bra, int *merged, int sorb, int nele, int bra_len){
+  get_olst(bra, merged, bra_len);
+  get_vlst(bra, (merged+nele), sorb, bra_len);
+}
+
+
 __device__ void diff_orb(unsigned long *bra, unsigned long *ket, int _len,
                          int *cre, int *ann) {
   int idx_cre = 0;
@@ -191,7 +201,7 @@ __device__ double h2e_get(double *h2e, size_t i, size_t j, size_t k, size_t l) {
   double val;
   if (ij >= kl) {
     size_t ijkl = ij * (ij + 1) / 2 + kl;
-    val = sgn * h2e[ijkl]; // TODO: value is float64 or tensor ??????
+    val = sgn * h2e[ijkl];
   } else {
     size_t ijkl = kl * (kl + 1) / 2 + ij;
     val = sgn * h2e[ijkl]; // sgn * conjugate(h2e[ijkl])
@@ -246,29 +256,6 @@ __device__ double get_HijD(unsigned long *bra, unsigned long *ket, double *h1e,
   Hij *= static_cast<double>(sgn);
   return Hij;
 }
-
-/***
-__device__ void tensor_to_array(uint8_t *bra_tensor, unsigned long *new_bra, int
-len1, int len2)
-{
-    int idx_bra = 0;
-    for(int i=0; i <len2-1; i++){
-        unsigned long tmp = 0;
-        for(int j=0; j<8; j++){
-            unsigned long value = bra_tensor[8*i+j];
-            tmp += value << (8*j);
-        }
-        new_bra[idx_bra] = tmp;
-        idx_bra++;
-    }
-    unsigned long tmp =0;
-    for(int i=0; i<len1%8; i++){
-        unsigned long value = bra_tensor[(len2-1)*8+i];
-        tmp += value << (8*i);
-    }
-    new_bra[len2-1] =tmp;
-}
-***/
 
 __device__ double get_Hij(unsigned long *bra, unsigned long *ket, double *h1e,
                           double *h2e, size_t sorb, size_t nele,
@@ -418,6 +405,126 @@ __device__ void get_comb(unsigned long *bra, unsigned long *comb, int n,
     }
   }
 }
+__device__ void unpack_canon_cuda(int ij, int *s){
+  int i = std::sqrt((ij+ 1) * 2) + 0.5;
+  int j = ij - i*(i-1)/2;
+  s[0] = i;
+  s[1] = j;
+}
+__device__ void unpack_Singles_Doubles_cuda(int sorb, int noA, int noB, int idx, int *idx_lst){
+ int k = sorb / 2;
+  int nvA = k - noA, nvB = k - noB;
+  int nSa = noA * nvA, nSb = noB * nvB;
+  int noAA = noA * (noA - 1) / 2;
+  int noBB = noB * (noB - 1) / 2;
+  int nvAA = nvA * (nvA - 1) / 2;
+  int nvBB = nvB * (nvB - 1) / 2;
+  int nDaa = noAA * nvAA;
+  int nDbb = noBB * nvBB;
+  int nDab = noA * noB * nvA * nvB;
+  int dims[5] = {nSa, nSb, nDaa, nDbb, nDab};
+  int d0 = dims[0];
+  int d1 = dims[1] + d0;
+  int d2 = dims[2] + d1;
+  int d3 = dims[3] + d2;
+  int i3 = idx >= d3;
+  int i2 = idx >= d2;
+  int i1 = idx >= d1;
+  int i0 = idx >= d0;
+  int icase = i0 + i1 + i2 + i3;
+  int i, a, j, b;
+  i = a = j = b = -1;
+  switch (icase) {
+    case 0: {
+      // aa
+      int jdx = idx;
+      i = 2 * (jdx % noA);
+      a = 2 * (jdx / noA + noA);// alpha-even; beta-odd
+      j = b = 0;
+      break;
+    }
+    case 1: {
+      // bb
+      int jdx = idx - d0;
+      i = 2 * (jdx % noB) + 1;
+      a = 2 * (jdx / noB + noB) + 1;
+      j = b = 0;
+      break;
+    }
+    case 2: {
+      // aaaa
+      int jdx = idx - d1;
+      int ijA = idx % noAA;
+      int abA = jdx / noAA;
+      int s1[2] = {0};
+      int s2[2] = {0};
+      unpack_canon_cuda(ijA, s1);
+      unpack_canon_cuda(abA, s2);
+      i = s1[0] * 2;
+      j = s1[1] * 2;
+      a = (s2[0] + noA) * 2;
+      b = (s2[1] + noA) * 2;
+      break;
+    }
+    case 3: {
+      // bbbb
+      int jdx = idx - d2;
+      int ijB = idx % noBB;
+      int abB = jdx / noBB;
+      int s1[2] = {0};
+      int s2[2] = {0};
+      unpack_canon_cuda(ijB, s1);
+      unpack_canon_cuda(abB, s2);
+      i = s1[0] * 2 + 1; // i > j
+      j = s1[1] * 2 + 1;
+      a = (s2[0] + noB) * 2 + 1; // a > b
+      b = (s2[1] + noB) * 2 + 1;
+      break;
+    }
+    case 4: {
+      // abab
+      int jdx = idx - d3;
+      int iaA = jdx % (noA * nvA);
+      int jbB = jdx / (noA * nvA);
+      i = (iaA % noA) * 2;
+      a = (iaA / noA + noA) * 2;
+      j = (jbB % noB) * 2 + 1;
+      b = (jbB / noB + noB) * 2 + 1;
+      break;
+    }
+  }
+  #if 0
+  std::cout << "idx: " << idx << " ";
+  std::cout << "icase: " << icase << " ";
+  std::cout << " i a j b:" << i << " " << a << " " << j << " " << b
+            << std::endl;
+  #endif 
+  idx_lst[0] = i;
+  idx_lst[1] = a;
+  idx_lst[2] = j;
+  idx_lst[3] = b;
+}
+
+__device__ void get_comb_2d_cuda(unsigned long *comb, double *lst, int *merged, int r0, int n, int len,
+                 int noa, int nob) {
+  int idx_lst[4] = {0};
+  unpack_Singles_Doubles_cuda(n, noa, nob, r0, idx_lst);
+  for (int i = 0; i < 4; i++) {
+    int idx = merged[idx_lst[i]];
+    BIT_FLIP(comb[idx / 64], idx % 64);
+    lst[idx] *= -1;
+  }
+}
+
+__device__ void get_comb_2d_cuda(unsigned long *comb, int *merged, int r0, int n, int len, int noa,
+                 int nob) {
+  int idx_lst[4] = {0};
+  unpack_Singles_Doubles_cuda(n, noa, nob, r0, idx_lst);
+  for (int i = 0; i < 4; i++) {
+    int idx = merged[idx_lst[i]];
+    BIT_FLIP(comb[idx / 64], idx % 64);
+  }
+}
 
 __global__ void get_zvec_kernel_3D(double *comb_ptr, unsigned long *bra,
                                    const size_t sorb, const size_t bra_len,
@@ -433,7 +540,7 @@ __global__ void get_zvec_kernel_3D(double *comb_ptr, unsigned long *bra,
 __global__ void get_zvec_kernel_2D(double *comb_ptr, unsigned long *bra,
                                    const size_t sorb, const size_t bra_len,
                                    int n) {
-  int idn = blockIdx.x;
+  // int idn = blockIdx.x;
   int idm = blockIdx.x * blockDim.x + threadIdx.x;
   if (idm >= n)
     return;
@@ -473,14 +580,84 @@ __global__ void get_comb_kernel_2D(unsigned long *bra_ptr,
                                    unsigned long *comb_ptr, int sorb, int len,
                                    int noa, int nob, int nva, int nvb,
                                    int nbatch, int ncomb) {
-  int idn = blockIdx.x;
+  // int idn = blockIdx.x;
   int idm = blockIdx.x * blockDim.x + threadIdx.x;
   if (idm >= nbatch)
     return;
   // comb_ptr [nbatch, ncomb, sorb]
-  // printf("idn/idm : %d/%d  %d\n", idn, idm, nbatch);
+  // printf("idn/idm : %d/ %d %d  %d\n", idn, idm, blockDim.x, nbatch);
   get_comb(&bra_ptr[idm], &comb_ptr[idm * ncomb * len], sorb, len, noa, nob, nva,
            nvb);
+}
+
+__global__ void get_comb_kernel_2D(unsigned long *comb_ptr,
+                                   double *comb_bit_ptr, int *merged_ptr, int sorb, int bra_len,
+                                   int noA, int noB, int nbtach, int ncomb) {
+  int idn = blockIdx.x * blockDim.x + threadIdx.x;
+  int idm = blockIdx.y * blockDim.y + threadIdx.y;
+  if (idn >= nbtach || idm >= ncomb || idm == 0)
+    return;
+  // printf("idn/idm : %d/ %d %d  %d\n", idn, idm, blockDim.x, ncomb);
+  get_comb_2d_cuda(&comb_ptr[idn * ncomb * bra_len + idm * bra_len],
+              &comb_bit_ptr[idn * ncomb * sorb + idm * sorb],  &merged_ptr[idn * sorb], idm - 1, sorb,
+              bra_len, noA, noB);
+}
+
+__global__ void get_comb_kernel_2D(unsigned long *comb_ptr, int *merged_ptr,
+                                   int sorb, int bra_len, int noA, int noB,
+                                   int nbtach, int ncomb) {
+  int idn = blockIdx.x * blockDim.x + threadIdx.x;
+  int idm = blockIdx.y * blockDim.y + threadIdx.y;
+  if (idn >= nbtach || idm >= ncomb || idm == 0)
+    return;
+  get_comb_2d_cuda(&comb_ptr[idn * ncomb * bra_len + idm * bra_len],
+                   &merged_ptr[idn * sorb], idm - 1, sorb, bra_len, noA, noB);
+}
+
+__global__ void get_comb_kernel_1D(unsigned long *comb_ptr,
+                                   double *comb_bit_ptr, int *merged_ptr,
+                                   int sorb, int bra_len, int noA, int noB,
+                                   int ncomb) {
+  // int idn = blockIdx.x;
+  int idm = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idm >= ncomb || idm == 0)
+    return;
+  get_comb_2d_cuda(&comb_ptr[idm * bra_len], &comb_bit_ptr[idm * sorb],
+                   merged_ptr, idm - 1, sorb, bra_len, noA, noB);
+}
+
+__global__ void get_comb_kernel_1D(unsigned long *comb_ptr, int *merged_ptr, int sorb,
+                                   int bra_len, int noA, int noB, int ncomb) {
+  // int idn = blockIdx.x;
+  int idm = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idm >= ncomb || idm == 0)
+    return;
+  get_comb_2d_cuda(&comb_ptr[idm * bra_len], merged_ptr, idm - 1, sorb, bra_len, noA, noB);
+}
+
+__global__ void get_merged_ovlst_kernel(unsigned long *bra_ptr, int *merged_ptr,
+                                        int sorb, int nele, int bra_len,
+                                        int n) {
+  int idn = blockIdx.x;
+  int idm = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idm >= n)
+    return;
+  // printf("idn/idm : %d/ %d %d  %d\n", idn, idm, blockDim.x, n);
+  // TODO: why using the code below is error
+  // get_vlst(&bra_ptr[idm * bra_len], &merged_ptr[idm * sorb + nele], sorb,
+  //          bra_len);
+  // get_olst(&bra_ptr[idm * bra_len], &merged_ptr[idm * sorb], sorb);
+  get_olst_vlst(&bra_ptr[idm * bra_len], &merged_ptr[idm * sorb], sorb, nele, bra_len);
+}
+
+int get_Num_SinglesDoubles_cuda(int sorb, int noA, int noB){
+  int k = sorb / 2;
+  int nvA = k - noA, nvB = k - noB;
+  int nSa = noA * nvA, nSb = noB * nvB;
+  int nDaa = noA * (noA-1) * nvA * (nvA -1)/4;
+  int nDbb = noB * (noB-1) * nvB * (nvB -1)/4;
+  int nDab = noA * noB * nvA * nvB;
+  return nSa + nSb + nDaa + nDbb + nDab;
 }
 
 torch::Tensor get_Hij_cuda(torch::Tensor &bra_tensor, torch::Tensor &ket_tensor,
@@ -722,4 +899,109 @@ torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb) {
   }
 
   return comb_bit;
+}
+
+auto get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
+                                   const int nele, const int noA, const int noB,
+                                   bool flag_bit) {
+  const int bra_len = (sorb - 1) / 64 + 1;
+  const int ncomb = get_Num_SinglesDoubles_cuda(sorb, noA, noB) + 1;
+  const int batch = bra_tensor.size(0);
+  const int dim = bra_tensor.dim();
+  bool flag_3d = false;
+  torch::Tensor comb, comb_bit, merged_ovlst;
+
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kInt32)
+                     .layout(bra_tensor.layout())
+                     .device(bra_tensor.device())
+                     .requires_grad(false);
+
+  if ((dim == 1) or (batch == 1 && dim == 2)) {
+    // comb: [ncomb , 8 * bra_len]
+    comb = bra_tensor.reshape({1, -1}).repeat({ncomb, 1});
+    merged_ovlst = torch::zeros({1, sorb}, options);
+    if (flag_bit) {
+      auto x = bra_tensor.reshape({1, -1}); // lvalue
+      comb_bit = uint8_to_bit_cuda(x, sorb).repeat({ncomb, 1});
+    }
+  } else if (batch > 1 && dim == 2) {
+    flag_3d = true;
+    // comb: [nSample, ncomb, 8 * bra_len]
+    comb = bra_tensor.reshape({batch, 1, -1}).repeat({1, ncomb, 1});
+    merged_ovlst = torch::zeros({batch, sorb}, options);
+    if (flag_bit) {
+      // comb_bit [nSample, ncomb, sorb]
+      comb_bit = uint8_to_bit_cuda(bra_tensor, sorb)
+                     .reshape({batch, 1, -1})
+                     .repeat({1, ncomb, 1});
+    }
+  } else {
+    throw "bra dim may be error";
+  }
+
+  // std::cout << "merged_ptr"<< std::endl;
+  // for(int i = 0; i < batch; i++){
+  //   std::cout << "batch: " << i <<std::endl;
+  //   for (int j =0; j < sorb ; j++){
+  //     std::cout << merged_ovlst[i][j].item() << " ";
+  //   }
+  //   std::cout << std::endl;
+  // }
+
+  unsigned long *comb_ptr =
+      reinterpret_cast<unsigned long *>(comb.data_ptr<uint8_t>());
+  unsigned long *bra_ptr = reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+  int *merged_ptr = merged_ovlst.data_ptr<int32_t>();
+
+  if (!flag_bit) {
+    auto device = bra_tensor.device();
+    comb_bit = torch::ones(
+        {1}, torch::TensorOptions().dtype(torch::kDouble).device(device));
+  }
+  double *comb_bit_ptr = comb_bit.data_ptr<double>();
+
+  if (flag_3d){
+    dim3 threads(1024);
+    dim3 blocks((batch + threads.x - 1) / threads.x);
+    get_merged_ovlst_kernel<<<blocks, threads>>>(bra_ptr, merged_ptr, sorb, nele, bra_len, batch);
+  }else{
+    get_merged_ovlst_kernel<<<1, 1>>>(bra_ptr, merged_ptr, sorb, nele, bra_len, 1);
+  }
+  cudaDeviceSynchronize();
+
+  // std::cout << "merged_ptr"<< std::endl;
+  // for(int i = 0; i < batch; i++){
+  //   std::cout << "batch: " << i <<std::endl;
+  //   for (int j =0; j < sorb ; j++){
+  //     std::cout << merged_ovlst[i][j].item() << " ";
+  //   }
+  //   std::cout << std::endl;
+  // }
+
+  if (flag_3d) {
+    dim3 threads(THREAD, THREAD);
+    dim3 blocks((batch + threads.x - 1) / threads.x,
+                (ncomb + threads.y - 1) / threads.y);
+    if (flag_bit) {
+      // std::cout << threads.x << " " << threads.y << std::endl;
+      get_comb_kernel_2D<<<blocks, threads>>>(comb_ptr, comb_bit_ptr, merged_ptr, sorb, bra_len,
+                                              noA, noB, batch, ncomb);
+    } else {
+      get_comb_kernel_2D<<<blocks, threads>>>(comb_ptr, merged_ptr, sorb, bra_len, noA, noB,
+                                              batch, ncomb);
+    }
+  } else {
+    dim3 threads(1024);
+    dim3 blocks((ncomb + threads.x - 1) / threads.x);
+    if (flag_bit) {
+      get_comb_kernel_1D<<<blocks, threads>>>(comb_ptr, comb_bit_ptr, merged_ptr, sorb,
+                                              bra_len, noA, noB, ncomb);
+    } else {
+      get_comb_kernel_1D<<<blocks, threads>>>(comb_ptr, merged_ptr, sorb, bra_len, noA, noB,
+                                              ncomb);
+    }
+  }
+  cudaDeviceSynchronize();
+  return  std::make_tuple(comb, comb_bit);
 }

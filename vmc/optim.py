@@ -73,6 +73,7 @@ class VMCOptimizer():
         self.sampler_param = sampler_param
         self.exact = self.sampler_param["debug_exact"]
         self.n_sample = self.dim if self.exact else self.sampler_param["n_sample"]
+        self.n_sample_unique: Tensor = None
         self.record_sample = self.sampler_param["record_sample"]
         self.sampler = MCMCSampler(self.model, self.h1e, self.h2e,
                                  self.sorb, self.nele, self.ecore,
@@ -88,7 +89,6 @@ class VMCOptimizer():
         print(f"Optimizer:\n{self.opt}")
         print(f"Sampler\n{self.sampler}")
 
-    # TODO: unpack from params
     def read_integral_info(self):
         result = read_integral(self.integral_file, self.nele, self.device)
         self.h1e, self.h2e, self.onstate, self.ecore, self.sorb = result
@@ -112,13 +112,15 @@ class VMCOptimizer():
             else:
                 initial_state = self.onstate[0].clone().detach()
 
-            # print(f"initial_state : {initial_state}")
+            print(f"initial_state : {initial_state}")
             # lp = LineProfiler()
             # lp_wrapper = lp(self.sampler.run)
             # lp_wrapper(initial_state)
             # lp.print_stats()
             # exit()
-            state, eloc, e_total, = self.sampler.run(initial_state)
+            state, state_idx, eloc, e_total, = self.sampler.run(initial_state)
+            
+            self.n_sample = len(state)
             self.e_lst.append(e_total)
 
             if self.only_sample:
@@ -131,7 +133,7 @@ class VMCOptimizer():
             delta = (time.time_ns() - t0)/1.00E06
             self.time_sample.append(delta)
 
-            grad_update_lst = self._update_grad_model(sample_state, eloc, p)
+            grad_update_lst = self._update_grad_model(sample_state, eloc, p, state_idx)
             
             # modify parameters grad (energy grad) manually
             for i, param in enumerate(self.model.parameters()):
@@ -142,13 +144,11 @@ class VMCOptimizer():
             if self.lr_scheduler is not None:
                 self.lr_scheduler.step()
 
-            delta = (time.time_ns() - t0)/1.00E06
-            print(f"{p} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3f} ms")
+            delta = (time.time_ns() - t0)/1.00E09
+            print(f"{p} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3f} s")
             self.time_iter.append(delta)
 
             del grad_update_lst, sample_state, eloc, state
-
-
 
     def _numerical_differentiation(self, state, eps: float = 1.0E-07) ->List[Tensor]:
         """
@@ -200,6 +200,7 @@ class VMCOptimizer():
         dln_grad_lst: List[Tensor] = []
         for i in range(self.n_sample):
             psi = self.model(state[i].requires_grad_())
+            # psi_1 = self.model(state[i].requires_grad_()).log()
             psi.backward()
             lst = []
             psi_lst[i] = psi.detach().clone()
@@ -223,7 +224,7 @@ class VMCOptimizer():
         return (grad_comb_lst, psi_lst)
 
 
-    def _update_grad_model(self, state, eloc, p: int) -> List[Tensor]:
+    def _update_grad_model(self, state, eloc, p: int, state_idx) -> List[Tensor]:
 
         if self.num_diff:
             F_p_lst = self._numerical_differentiation(state)
@@ -231,9 +232,14 @@ class VMCOptimizer():
             if self.analytic_derivate:
                 grad_lnPsi, psi = self._analytic_derivate_lnPsi(state)
             else:
+                # lp = LineProfiler()
+                # lp_wrapper = lp(self.sampler.run)
+                # lp_wrapper(initial_state)
+                # lp.print_stats()
                 grad_lnPsi, psi = self._auto_diff_lnPsi(state)
 
-            F_p_lst = energy_grad(eloc.reshape(-1), grad_lnPsi, self.n_sample, psi=psi, exact=self.exact)
+            F_p_lst = energy_grad(eloc.reshape(-1), grad_lnPsi, self.n_sample,
+                                  state_idx=state_idx, psi=psi, exact=self.exact)
 
             if self.verbose:
                 print("Energy grad\nAnalytic:")
@@ -242,7 +248,7 @@ class VMCOptimizer():
 
         # save the energy grad
         for i, F_p in enumerate(F_p_lst):
-            self.grad_e_lst[i].append(F_p.reshape(-1).detach().numpy())
+            self.grad_e_lst[i].append(F_p.reshape(-1).detach().to("cpu").numpy())
 
         if self.sr:
             sr_grad_lst = sr_grad(list(self.model.parameters()), grad_lnPsi, F_p_lst, p+1, self.n_sample, opt_gd=False, comb=True)
@@ -316,8 +322,9 @@ class SR(Optimizer):
         F_i{k} = <E_{loc}O_i^*> - <E_{loc}><O_i^*> \
     """
     def __init__(self, params, lr=required, N_state: int=required, 
-                opt_gd: bool= False, comb: bool = False,
-                weight_decay: float =0) -> None:
+                opt_gd: bool= False, comb: bool = True,
+                weight_decay: float =0,
+                diag_shift: float =0.02) -> None:
         if lr is not required and lr < 0.0:
             raise ValueError(f"Invalid learning rate : {lr}")
         if N_state <= 0:
@@ -325,7 +332,7 @@ class SR(Optimizer):
         if not 0.0 <= weight_decay:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
         defaults = dict(lr=lr, N_state=N_state, opt_gd=opt_gd,
-                        comb=comb, weight_decay=weight_decay)
+                        comb=comb, weight_decay=weight_decay, diag_shift=diag_shift)
         self.Fp_lst: List[Tensor] = []
         super(SR, self).__init__(params, defaults)
     
@@ -345,7 +352,8 @@ class SR(Optimizer):
                 lr=group['lr'],
                 N_state=group['N_state'],
                 comb=group['comb'],
-                weight_decay=group["weight_decay"])
+                weight_decay=group["weight_decay"],
+                diag_shift=group["diag_shift"])
 
 
 def _sr_update(params: List[Tensor],
@@ -356,9 +364,10 @@ def _sr_update(params: List[Tensor],
         lr: float,
         N_state: int,
         comb: bool,
-        weight_decay: float):
+        weight_decay: float,
+        diag_shift: float):
 
-    sr_grad_lst = sr_grad(params, dlnPsi_lst, F_p_lst, p, N_state, opt_gd, comb, weight_decay)
+    sr_grad_lst = sr_grad(params, dlnPsi_lst, F_p_lst, p, N_state, opt_gd, comb, weight_decay, diag_shift)
 
     for i, param in enumerate(params):
         dp = sr_grad_lst[i]
@@ -386,7 +395,7 @@ def sr_grad(params: List[Tensor],
             comb_dlnPsi_lst.append(dlnPsi.reshape(N_state, -1))
         comb_F_p = torch.cat(comb_F_p_lst)# [N_para_all]
         comb_dlnPsi = torch.cat(comb_dlnPsi_lst, 1) # [N_state, N_para_all]
-        dp = _calculate_sr(comb_dlnPsi, comb_F_p, N_state, p, opt_gd=opt_gd)
+        dp = _calculate_sr(comb_dlnPsi, comb_F_p, N_state, p, opt_gd=opt_gd, diag_shift=diag_shift)
         
         begin_idx = end_idx = 0
         for i, param in enumerate(params):
@@ -425,7 +434,6 @@ def _calculate_sr(grad_total: Tensor, F_p: Tensor,
     S_kk2 = torch.eye(S_kk.shape[0], dtype=S_kk.dtype, device=S_kk.device) * diag_shift
     #  _lambda_regular(p) * torch.diag(S_kk)
     S_reg = S_kk + S_kk2
-    # TODO: why F_p is one dim??? 
     update = torch.matmul(torch.linalg.inv(S_reg), F_p).reshape(-1)
     return update
 

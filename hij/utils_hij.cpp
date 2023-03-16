@@ -1,9 +1,11 @@
 #include "utils_hij.h"
+#include "ATen/ops/einsum.h"
 
 #include <cstdint>
+#include <iterator>
 #include <tuple>
+#include <algorithm>
 
-#include "ATen/core/TensorBody.h"
 
 inline int popcnt_cpu(const unsigned long x) { return __builtin_popcountl(x); }
 inline int get_parity_cpu(const unsigned long x) {
@@ -400,6 +402,144 @@ void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
   }
 }
 
+void get_comb_2d(unsigned long *comb, int *merged, int r0, int n, int len, int noa,
+                 int nob) {
+  int idx_lst[4] = {0};
+  std::cout << "i j k l: ";
+  unpack_Singles_Doubles(n, noa, nob, r0, idx_lst);
+  for (int i = 0; i < 4; i++) {
+    int idx = merged[idx_lst[i]] ;
+    BIT_FLIP(comb[idx / 64], idx % 64);
+    std::cout << idx << " ";
+  }
+  std::cout << std::endl;
+}
+
+void get_comb_2d(unsigned long *comb, double *lst, int *merged, int r0, int n, int len,
+                 int noa, int nob) {
+  int idx_lst[4] = {0};
+  unpack_Singles_Doubles(n, noa, nob, r0, idx_lst);
+  // std::cout << "i j k l: ";
+  for (int i = 0; i < 4; i++) {
+    int idx = merged[idx_lst[i]];
+    // std::cout << idx << " ";
+    BIT_FLIP(comb[idx / 64], idx % 64);
+    lst[idx] *= -1;
+  }
+  // std::cout << std::endl;
+}
+
+int get_Num_SinglesDoubles(int sorb, int noA, int noB){
+  int k = sorb / 2;
+  int nvA = k - noA, nvB = k - noB;
+  int nSa = noA * nvA, nSb = noB * nvB;
+  int nDaa = noA * (noA-1) * nvA * (nvA -1)/4;
+  int nDbb = noB * (noB-1) * nvB * (nvB -1)/4;
+  int nDab = noA * noB * nvA * nvB;
+  return nSa + nSb + nDaa + nDbb + nDab;
+}
+
+void unpack_canon(int ij, int *s){
+  int i = std::sqrt((ij+ 1) * 2) + 0.5;
+  int j = ij - i*(i-1)/2;
+  s[0] = i;
+  s[1] = j;
+}
+
+void unpack_Singles_Doubles(int sorb, int noA, int noB, int idx, int *idx_lst) {
+  int k = sorb / 2;
+  int nvA = k - noA, nvB = k - noB;
+  int nSa = noA * nvA, nSb = noB * nvB;
+  int noAA = noA * (noA - 1) / 2;
+  int noBB = noB * (noB - 1) / 2;
+  int nvAA = nvA * (nvA - 1) / 2;
+  int nvBB = nvB * (nvB - 1) / 2;
+  int nDaa = noAA * nvAA;
+  int nDbb = noBB * nvBB;
+  int nDab = noA * noB * nvA * nvB;
+  int dims[5] = {nSa, nSb, nDaa, nDbb, nDab};
+  int d0 = dims[0];
+  int d1 = dims[1] + d0;
+  int d2 = dims[2] + d1;
+  int d3 = dims[3] + d2;
+  int i3 = idx >= d3;
+  int i2 = idx >= d2;
+  int i1 = idx >= d1;
+  int i0 = idx >= d0;
+  int icase = i0 + i1 + i2 + i3;
+  int i, a, j, b;
+  i = a = j = b = -1;
+  switch (icase) {
+    case 0: {
+      // aa
+      int jdx = idx;
+      i = 2 * (jdx % noA);
+      a = 2 * (jdx / noA + noA);// alpha-even; beta-odd
+      j = b = 0;
+      break;
+    }
+    case 1: {
+      // bb
+      int jdx = idx - d0;
+      i = 2 * (jdx % noB) + 1;
+      a = 2 * (jdx / noB + noB) + 1;
+      j = b = 0;
+      break;
+    }
+    case 2: {
+      // aaaa
+      int jdx = idx - d1;
+      int ijA = idx % noAA;
+      int abA = jdx / noAA;
+      int s1[2] = {0};
+      int s2[2] = {0};
+      unpack_canon(ijA, s1);
+      unpack_canon(abA, s2);
+      i = s1[0] * 2;
+      j = s1[1] * 2;
+      a = (s2[0] + noA) * 2;
+      b = (s2[1] + noA) * 2;
+      break;
+    }
+    case 3: {
+      // bbbb
+      int jdx = idx - d2;
+      int ijB = idx % noBB;
+      int abB = jdx / noBB;
+      int s1[2] = {0};
+      int s2[2] = {0};
+      unpack_canon(ijB, s1);
+      unpack_canon(abB, s2);
+      i = s1[0] * 2 + 1; // i > j
+      j = s1[1] * 2 + 1;
+      a = (s2[0] + noB) * 2 + 1; // a > b
+      b = (s2[1] + noB) * 2 + 1;
+      break;
+    }
+    case 4: {
+      // abab
+      int jdx = idx - d3;
+      int iaA = jdx % (noA * nvA);
+      int jbB = jdx / (noA * nvA);
+      i = (iaA % noA) * 2;
+      a = (iaA / noA + noA) * 2;
+      j = (jbB % noB) * 2 + 1;
+      b = (jbB / noB + noB) * 2 + 1;
+      break;
+    }
+  }
+  #if 0
+  std::cout << "idx: " << idx << " ";
+  std::cout << "icase: " << icase << " ";
+  std::cout << " i a j b:" << i << " " << a << " " << j << " " << b
+            << std::endl;
+  #endif 
+  idx_lst[0] = i;
+  idx_lst[1] = a;
+  idx_lst[2] = j;
+  idx_lst[3] = b;
+}
+
 double get_Hii_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
                    double *h2e, int sorb, const int nele, int bra_len) {
   double Hii = 0.00;
@@ -449,6 +589,39 @@ double get_HijD_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
   double Hij = h2e_get_cpu(h2e, p[0], p[1], q[0], q[1]);
   Hij *= static_cast<double>(sgn);
   return Hij;
+}
+
+torch::Tensor get_merged_olst_vlst(torch::Tensor bra, const int nele, const int sorb){
+  const int dim = bra.dim();
+  const int bra_len = (sorb - 1)/64 + 1;
+  int n = 0;
+  if (dim == 1){
+    n = 1;
+  }else{
+    n = bra.size(0);
+  }
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kInt32)
+                     .layout(bra.layout())
+                     .device(bra.device())
+                     .requires_grad(false);
+  torch::Tensor merged = torch::ones({n, sorb}, options);
+  int *merged_ptr = merged.data_ptr<int32_t>();
+  for(int i =0; i< n; i++){
+    int olst[nele];
+    int vlst[sorb-nele];
+    unsigned long *bra_ptr = reinterpret_cast<unsigned long *>(bra[i].data_ptr<uint8_t>());
+    get_olst_cpu(bra_ptr, olst, bra_len);
+    get_vlst_cpu(bra_ptr, vlst, sorb, bra_len);
+    for(int k = 0; k < sorb; k++){
+      if (k < nele){
+        merged_ptr[i * sorb + k]= olst[k];
+      }else{
+        merged_ptr[i * sorb + k] = vlst[k-nele];
+      }
+    }
+  }
+  return merged;
 }
 
 auto get_nsingles_doubles(const int no, const int nv, bool ms_equal) {
@@ -620,6 +793,77 @@ torch::Tensor get_comb_tensor_cpu(torch::Tensor &bra_tensor, const int sorb,
   return comb;
 }
 
+tuple_tensor_2d get_comb_tensor_cpu_1(torch::Tensor &bra_tensor, const int sorb,
+                                      const int nele, const int noA,
+                                      const int noB, bool flag_bit) {
+  const int bra_len = (sorb - 1) / 64 + 1;
+  const int ncomb = get_Num_SinglesDoubles(sorb, noA, noB) + 1;
+  const int batch = bra_tensor.size(0);
+  const int dim = bra_tensor.dim();
+  bool flag_3d = false;
+  torch::Tensor comb, comb_bit;
+
+  if ((dim == 1) or (batch == 1 && dim == 2)) {
+    // comb: [ncomb , 8 * bra_len]
+    comb = bra_tensor.reshape({1, -1}).repeat({ncomb, 1});
+    if (flag_bit) {
+      auto x = bra_tensor.reshape({1, -1}); //lvalue
+      comb_bit = uint8_to_bit_cpu(x, sorb).repeat({ncomb, 1});
+    }
+  } else if (batch > 1 && dim == 2) {
+    flag_3d = true;
+    // comb: [nSample, ncomb, 8 * bra_len]
+    comb = bra_tensor.reshape({batch, 1, -1}).repeat({1, ncomb, 1});
+    if (flag_bit) {
+      //comb_bit [nSample, ncomb, sorb]
+      comb_bit = uint8_to_bit_cpu(bra_tensor, sorb)
+                     .reshape({batch, 1, -1})
+                     .repeat({1, ncomb, 1});
+    }
+  } else {
+    throw "bra dim may be error";
+  }
+
+  unsigned long *comb_ptr =
+      reinterpret_cast<unsigned long *>(comb.data_ptr<uint8_t>());
+  if (! flag_bit){
+    comb_bit = torch::ones({1}, torch::TensorOptions().dtype(torch::kDouble));
+  }
+  double *comb_bit_ptr = comb_bit.data_ptr<double>();
+
+  torch::Tensor merged = get_merged_olst_vlst(bra_tensor, nele, sorb);
+  int *merged_ptr = merged.data_ptr<int32_t>();
+
+  if (flag_3d) {
+    for (int i = 0; i < batch; i++) {
+      for (int j = 1; j < ncomb; j++) {
+        if (flag_bit) {
+          get_comb_2d(&comb_ptr[i * ncomb * bra_len + j * bra_len],
+                      &comb_bit_ptr[i * ncomb * sorb + j * sorb], &merged_ptr[i * sorb],j-1, sorb,
+                      bra_len, noA, noB);
+        } else {
+          get_comb_2d(&comb_ptr[i * ncomb * bra_len + j * bra_len], &merged_ptr[i*sorb],j-1, sorb,
+                      bra_len, noA, noB);
+        }
+        // comb[i*ncomb * bra_len + j * bra_len], idx = j-1
+        // comb_bit[i*ncomb * sorb + j * sorb]
+      }
+    }
+  } else {
+    for (int i = 1; i < ncomb; i++) {
+      if (flag_bit) {
+        get_comb_2d(&comb_ptr[i * bra_len], &comb_bit_ptr[i * sorb], merged_ptr,i - 1,
+                    sorb, bra_len, noA, noB);
+      } else {
+        get_comb_2d(&comb_ptr[i * bra_len],merged_ptr, i - 1, sorb, bra_len, noA, noB);
+      }
+      // comb[i * bre_len], idx = i-1;
+      // comb_bit[i * sorb]
+    }
+  }
+  return std::make_tuple(comb, comb_bit);
+}
+
 // RBM
 torch::Tensor uint8_to_bit_cpu(torch::Tensor &bra_tensor, const int sorb) {
   const int bra_len = (sorb - 1) / 64 + 1;
@@ -706,7 +950,7 @@ std::tuple<int, int> unpack_ij(int ij) {
 }
 
 // MCMC sampling in RBM
-std::tuple<torch::Tensor, torch::Tensor> spin_flip_rand(
+tuple_tensor_2d spin_flip_rand(
     torch::Tensor &bra_tensor, const int sorb, const int nele, const int seed) {
   const int no = nele;
   const int nv = sorb - nele;
@@ -824,6 +1068,34 @@ std::tuple<torch::Tensor, torch::Tensor> spin_flip_rand(
       BIT_FLIP(bra_ptr[k / 64], k % 64);
       BIT_FLIP(bra_ptr[l / 64], l % 64);
     }
+  }
+  return std::make_tuple(uint8_to_bit_cpu(bra_tensor, sorb), bra_tensor);
+}
+
+
+tuple_tensor_2d spin_flip_rand_1(
+    torch::Tensor &bra_tensor, const int sorb, const int nele, const int noA,
+    const int noB, const int seed){
+  const int bra_len = (sorb - 1) / 64 + 1;
+  int olst[MAX_NO] = {0};
+  int vlst[MAX_NV] = {0};
+  int merged[MAX_NO + MAX_NV] = {0};
+  unsigned long *bra_ptr =
+    reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+
+  get_olst_cpu(bra_ptr, olst, bra_len);
+  get_vlst_cpu(bra_ptr, vlst, sorb, bra_len);
+  const int ncomb = get_Num_SinglesDoubles(sorb, noA, noB);
+  std::copy(std::begin(olst), std::begin(olst)+nele, std::begin(merged));
+  std::copy(std::begin(vlst), std::begin(vlst)+sorb-nele, std::begin(merged)+nele);
+  static std::mt19937 rng(seed);
+  static std::uniform_int_distribution<int> u0(0, ncomb - 1);
+  int r0 = u0(rng);
+  int idx_lst[4] = {0};
+  unpack_Singles_Doubles(sorb, noA, noB, r0, idx_lst);
+  for (int i = 0; i < 4; i++){
+    int idx = merged[idx_lst[i]]; //merged[olst, vlst]
+    BIT_FLIP(bra_ptr[idx/64], idx % 64);
   }
   return std::make_tuple(uint8_to_bit_cpu(bra_tensor, sorb), bra_tensor);
 }

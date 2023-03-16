@@ -80,7 +80,8 @@ class RBMWavefunction(nn.Module):
         return f"{self.rbm_type}-RBMWavefunction: num_visible={self.num_visible}, num_hidden={self.num_hidden}"
 
     def effective_theta(self, x: Tensor) -> Tensor:
-        return torch.einsum("ij, ...j -> ...i", self.weights, x) + self.hidden_bias
+        return torch.mm(x, self.weights.T) + self.hidden_bias
+        # return torch.einsum("ij, ...j -> ...i", self.weights, x) + self.hidden_bias
 
     @staticmethod
     def _to_complex(x: Tensor):
