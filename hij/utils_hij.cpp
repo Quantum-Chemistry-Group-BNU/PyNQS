@@ -7,6 +7,8 @@
 #include <algorithm>
 
 
+#include "ATen/core/TensorBody.h"
+
 inline int popcnt_cpu(const unsigned long x) { return __builtin_popcountl(x); }
 inline int get_parity_cpu(const unsigned long x) {
   return __builtin_parityl(x);
