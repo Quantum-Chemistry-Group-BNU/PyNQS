@@ -96,14 +96,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           return make_tuple(value, delta);
         });
   **/
-  // m.def("get_comb_tensor", &get_comb_tensor,
-  //        "Return all singles and doubles excitation for given x(3D/2D) using CPU");
+  m.def("get_comb_tensor_0", &get_comb_tensor,
+          "Return all singles and doubles excitation for given x(3D/2D) using CPU");
   m.def("get_comb_tensor", &get_comb_tensor_1,
         "Return all singles and doubles excitation for given x(3D/2D) using CPU");
   m.def("uint8_to_bit", &uint8_to_bit,
         "convert from unit8 to bit[-1, 1] for given x(3D) using CPU or GPU");
   m.def("get_olst_vlst", &get_olst_vlst,
         "get occupied and virtual orbitals in the cpu ");
-  m.def("spin_flip_rand", &spin_flip_rand, "Flip the spin randomly in MCMC using CPU");
-  // m.def("spin_flip_rand_1", &spin_flip_rand_1, "Flip the spin randomly in MCMC using CPU");
+  // m.def("spin_flip_rand", &spin_flip_rand, "Flip the spin randomly in MCMC using CPU");
+  m.def("spin_flip_rand", &spin_flip_rand_1, "Flip the spin randomly in MCMC using CPU");
 }

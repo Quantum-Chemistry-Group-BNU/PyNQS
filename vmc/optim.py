@@ -45,6 +45,9 @@ class VMCOptimizer():
                 HF_init: int = None,
                 external_model: any = None,
                 only_sample: bool = False) -> None:
+        # TODO: model in the difference device
+        print(device)
+        self.device = device
         if external_model is not None:
             self.read_model(external_model)
         else:
@@ -53,7 +56,6 @@ class VMCOptimizer():
             self.lr_scheduler = lr_scheduler
             self.HF_init = HF_init
             self.sr = sr
-        self.device = device
         if integral_file is not None and nele is not None:
             self.integral_file = integral_file
             self.nele = nele
@@ -78,6 +80,10 @@ class VMCOptimizer():
         self.sampler = MCMCSampler(self.model, self.h1e, self.h2e,
                                  self.sorb, self.nele, self.ecore,
                                  full_space=self.onstate, **self.sampler_param)
+        self.noa = self.sampler.noa
+        self.nob = self.sampler.nob
+        self.nv = self.sampler.nv
+        self.no = self.sampler.no
         self.only_sample = only_sample
         self.n_para = len(list(self.model.parameters()))
         self.grad_e_lst: List[Tensor] = [[] for _ in range(self.n_para)]
@@ -87,15 +93,15 @@ class VMCOptimizer():
         self.time_iter: List[float] = []
         print(f"NQS model:\n{self.model}")
         print(f"Optimizer:\n{self.opt}")
-        print(f"Sampler\n{self.sampler}")
+        print(f"Sampler:\n{self.sampler}")
 
     def read_integral_info(self):
         result = read_integral(self.integral_file, self.nele, self.device)
         self.h1e, self.h2e, self.onstate, self.ecore, self.sorb = result
 
     def read_model(self, external_model):
-        print(f"Read nqs model from '.pth' file {external_model}")
-        state = torch.load(external_model)
+        print(f"Read nqs model/optimizer from '.pth' file {external_model}")
+        state = torch.load(external_model, map_location=self.device)
         self.model = state["model"]
         self.opt = state["optimizer"]
         self.lr_scheduler = state["lr_scheduler"]
@@ -106,13 +112,12 @@ class VMCOptimizer():
     def run(self):
         for p in range(self.max_iter):
             t0 = time.time_ns()
-            # 太随机了
             if self.HF_init is None or p < self.HF_init:
                 initial_state = self.onstate[random.randrange(self.dim)].clone().detach()
             else:
                 initial_state = self.onstate[0].clone().detach()
 
-            print(f"initial_state : {initial_state}")
+            # print(f"initial_state : {initial_state}")
             # lp = LineProfiler()
             # lp_wrapper = lp(self.sampler.run)
             # lp_wrapper(initial_state)
@@ -151,6 +156,7 @@ class VMCOptimizer():
             del grad_update_lst, sample_state, eloc, state
 
     def _numerical_differentiation(self, state, eps: float = 1.0E-07) ->List[Tensor]:
+        # TODO: state is uint8 not double
         """
         Calculate energy grad using numerical_differentiation
         """
@@ -183,7 +189,8 @@ class VMCOptimizer():
     
     def _total_energy(self, state) -> float:
             e = total_energy(state, self.n_sample, self.h1e, self.h2e,
-                        self.model, self.ecore, self.sorb, self.nele, exact=self.exact)[0]
+                        self.model, self.ecore, self.sorb, self.nele, self.noa, self.nob,
+                        exact=self.exact)[0]
             return e
 
     def _analytic_derivate_lnPsi(self, state) -> Tuple[Tensor, Tensor]:

@@ -46,9 +46,15 @@ void diff_type_cpu(unsigned long *bra, unsigned long *ket, int *p, int _len);
 
 void get_olst_cpu(unsigned long *bra, int *olst, int _len);
 
+// olst: abab
+void get_olst_cpu_ab(unsigned long *bra, int *olst, int _len);
+
 void get_olst_cpu(unsigned long *bra, int *olst, int *olst_a, int *olst_b, int _len);
 
 void get_vlst_cpu(unsigned long *bra, int *vlst, int n, int _len);
+
+// vlst: abab
+void get_vlst_cpu_ab(unsigned long *bra, int *vlst, int n, int _len);
 
 void get_vlst_cpu(unsigned long *bra, int vlst, int *vlst_a, int *vlst_b, int n, int _len);
 
@@ -119,7 +125,6 @@ torch::Tensor uint8_to_bit_cpu(torch::Tensor &bra_tensor, const int sorb);
 tuple_tensor_2d get_olst_vlst_cpu(
     torch::Tensor &bra_tensor, const int sorb, const int nele);
 
-std::tuple<int, int> unpack_ij(int ij);
 
 // MCMC sampling in RBM
 tuple_tensor_2d spin_flip_rand(

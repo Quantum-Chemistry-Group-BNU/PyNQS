@@ -67,13 +67,13 @@ def setup_seed(x: int):
 
 def string_to_lst(sorb: int, string: str):
     arr = np.array(list(map(int, string)))[::-1]
-    lst = [0] * ((sorb-1)//64 +1)*8
+    state = [0] * ((sorb-1)//64 +1)*8
     for i in range((sorb-1)//8+1):
         begin = i * 8
         end = (i+1) * 8 if (i+1)*8 < sorb else sorb
         idx = arr[begin:end]
-        lst[i] = np.sum(2**np.arange(len(idx)) * idx)
-        return lst
+        state[i] = np.sum(2**np.arange(len(idx)) * idx)
+    return state
 
 def read_integral(filename: str, nele: int,
                   given_sorb: int = None,
@@ -118,7 +118,6 @@ def read_integral(filename: str, nele: int,
             for i in range(dim):
                 lst.append(string_to_lst(sorb, space[i].to_string()))
             onstate = torch.tensor(lst, dtype=torch.uint8).to(device)
-
         if save_onstate:
             if prefix is None:
                 prefix = "onstate"
@@ -149,7 +148,7 @@ def get_nbatch(sorb: int, n_sample_unique: int, n_comb_sd: int,
     return int(nbatch)
 
 def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None):
-    assert(x%2==0 and x <= sorb)
+    assert(x%2==0 and x <= sorb and x >=(noa + nob))
 
     noA_lst = list(itertools.combinations([i for i in range(0, x, 2)], noa))
     noB_lst = list(itertools.combinations([i for i in range(1, x, 2)], nob))
@@ -160,11 +159,10 @@ def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None):
             state = np.zeros(sorb, dtype=int)
             state[list(k)] = 1
             state[list(l)] = 1
-            # print(state)
             s = "".join(list(map(str, state[::-1])))
-            print(s)
             lst.append(string_to_lst(sorb, s))
+            # print(s, string_to_lst(sorb, s))
     return torch.tensor(lst, dtype=torch.uint8).to(device)
 
 if __name__ == "__main__":
-    print(given_onstate(22, 40, 10, 10)) # H20
+    print(given_onstate(12, 12, 3, 3)) # H20

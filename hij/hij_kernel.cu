@@ -79,6 +79,30 @@ __device__ void get_olst(unsigned long *bra, int *olst, int _len) {
   }
 }
 
+__device__ void get_olst_ab(unsigned long *bra, int *olst, int _len) {
+  // abab
+  unsigned long tmp;
+  int idx = 0;
+  int ida = 0; 
+  int idb = 0;
+  for (int i = 0; i < _len; i++) {
+    tmp = bra[i];
+    while (tmp != 0) {
+      int j = __ctzl(tmp);
+      int s = i * 64 + j;
+      if ( s & 1){
+        idb++;
+        idx = 2 * idb - 1;
+      }else{
+        ida++;
+        idx = 2 * (ida -1);
+      }
+      olst[idx] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
 __device__ void get_olst(unsigned long *bra, int *olst, int *olst_a,
                          int *olst_b, int _len) {
 
@@ -120,6 +144,29 @@ __device__ void get_vlst(unsigned long *bra, int *vlst, int n, int _len) {
   }
 }
 
+__device__ void get_vlst_ab(unsigned long *bra, int *vlst, int n, int _len) {
+  int ic = 0;
+  int idb = 0;
+  int ida = 0;
+  unsigned long tmp;
+  for (int i = 0; i < _len; i++) {
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones(n % 64));
+    while (tmp != 0) {
+      int j = __ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1){
+        idb++;
+        ic = 2 * idb - 1;
+      }else{
+        ida++;
+        ic = 2 * (ida - 1);
+      }
+      vlst[ic] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
 __device__ void get_vlst(unsigned long *bra, int *vlst, int *vlst_a,
                          int *vlst_b, int n, int _len) {
   int ida = 0;
@@ -147,8 +194,13 @@ __device__ void get_vlst(unsigned long *bra, int *vlst, int *vlst_a,
 }
 
 __device__ void get_olst_vlst(unsigned long *bra, int *merged, int sorb, int nele, int bra_len){
-  get_olst(bra, merged, bra_len);
-  get_vlst(bra, (merged+nele), sorb, bra_len);
+  get_olst_ab(bra, merged, bra_len);
+  get_vlst_ab(bra, (merged+nele), sorb, bra_len);
+  // printf("olst-vlst");
+  // for (int i =0; i < sorb; i++){
+  //   printf(" %d ", merged[i]);
+  // }
+  // printf("\n");
 }
 
 
@@ -201,7 +253,7 @@ __device__ double h2e_get(double *h2e, size_t i, size_t j, size_t k, size_t l) {
   double val;
   if (ij >= kl) {
     size_t ijkl = ij * (ij + 1) / 2 + kl;
-    val = sgn * h2e[ijkl]; // TODO: value is float64 or tensor ??????
+    val = sgn * h2e[ijkl]; 
   } else {
     size_t ijkl = kl * (kl + 1) / 2 + ij;
     val = sgn * h2e[ijkl]; // sgn * conjugate(h2e[ijkl])
@@ -781,7 +833,6 @@ torch::Tensor get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
     ndoubles = noa * (noa - 1) * nva * (nva - 1) / 4 +
                nob * (nob - 1) * nvb * (nvb - 1) / 4 + noa * nva * nob * nvb;
   } else {
-    // TODO: ms is not equal, how to achieve??
     nsingles = no * nv;
     ndoubles = no * (no - 1) * nv * (nv - 1) / 4;
   }

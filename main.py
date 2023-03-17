@@ -2,6 +2,7 @@
 import os
 import tempfile
 import torch
+import time 
 from line_profiler import LineProfiler
 from torch import optim
 
@@ -18,9 +19,8 @@ torch.set_printoptions(precision=6)
 if __name__ == "__main__":
     device = "cuda"
     # device = "cpu"
-    # work_path = "/home/zbwu/university/research/notes/cpp-python/torch_Full_CI/"
-    # os.chdir(work_path)
-    seed = 202
+    # seed = int(time.time_ns()%2**32)
+    seed = 2023
     setup_seed(seed)
     atom: str = ""
     bond = 1.50
@@ -28,12 +28,12 @@ if __name__ == "__main__":
         atom += f"H, 0.00, 0.00, {i * bond:.3f} ;"
     # atom = "Li 0.00 0.00 0.00; H 0.0 0.0 1.54"
     filename = tempfile.mkstemp()[1]
-    sorb, nele, e_fci = integral_pyscf(atom, integral_file=filename)
+    sorb, nele, e_ref = integral_pyscf(atom, integral_file=filename)
 
     h1e, h2e, onstate, ecore, sorb = read_integral(filename, nele,
                                                    # save_onstate=True,
                                                    # external_onstate="profiler/H12-1.50",
-                                                   given_sorb= (nele + 2),
+                                                   # given_sorb= (nele + 2),
                                                    device = device,
                                                    # prefix="test-onstate"
                                                    )
@@ -43,8 +43,8 @@ if __name__ == "__main__":
     nqs = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
                           rbm_type='cos', verbose=True).to(device)
 
-    sampler_param = {"n_sample": 100, "verbose": True,
-                     "debug_exact": False, "therm_step": 1000,
+    sampler_param = {"n_sample": 100, "verbose": False,
+                     "debug_exact": True, "therm_step": 1000,
                      "seed": seed, "record_sample": False, 
                      "max_memory": 4, "alpha": 0.15}
     
@@ -55,7 +55,8 @@ if __name__ == "__main__":
 
     opt_vmc = VMCOptimizer(nqs=nqs,
                            opt_type=opt_type,
-                           # external_model="molecule/H4/1.50/H4-cos-exact.pth",
+                           external_model="experimental/1.50/H4-cos-exact.pth",
+                           device=device,
                            lr_scheduler=lr_sch,
                            sampler_param=sampler_param,
                            # only_sample= True,
@@ -66,7 +67,7 @@ if __name__ == "__main__":
                            HF_init=0,
                            analytic_derivate=True,
                            num_diff=False,
-                           verbose=False,
+                           verbose=True,
                            sr=False)
     # lp = LineProfiler()
     # lp_wrapper = lp(opt_vmc.run)
@@ -74,6 +75,7 @@ if __name__ == "__main__":
     # lp.print_stats()
     # exit()
     opt_vmc.run()
+    print(e_ref)
     # exit()
     # output = "H4-cos-exact"
     # opt_vmc.save(prefix=output, nqs=False)

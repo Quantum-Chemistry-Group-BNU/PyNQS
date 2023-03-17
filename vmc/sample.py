@@ -123,11 +123,11 @@ class MCMCSampler():
             if i >= self.therm_step:
                 self.state_sample[i-self.therm_step] = self.current_state.clone()
 
-        # remove duplicate state
         if self.is_cuda:
             self.state_sample = self.state_sample.to(self.device)
             self.nqs = self.nqs.to(self.device)
 
+        # remove duplicate state
         sample_unique, sample_idx = torch.unique(self.state_sample, dim=0, return_counts=True)
         
         # calculate the max nbatch for given Max Memory
@@ -176,7 +176,7 @@ class MCMCSampler():
             f"    the number of sample: {self.n_sample}\n" + 
             f"    therm step: {self.therm_step}\n" +
             f"    exact sampling: {self.debug_exact}\n"
-            f"    the full space shape: {self.full_space.shape}\n" + 
+            f"    the given full space shape: {self.full_space.shape}\n" + 
             f"    Record the sample: {self.record_sample}\n" + 
             f"    Singles + Doubles: {self.n_SinglesDoubles}\n" + ")"
         )

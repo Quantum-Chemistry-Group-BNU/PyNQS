@@ -35,19 +35,18 @@ def local_energy(x: Tensor, h1e: Tensor, h2e: Tensor,
     dim: int = x.dim()
     batch: int = x.shape[0]
     t0 = time.time_ns()
+
     # x1: [batch, comb, sorb]
     comb_x, x1 = pt.get_comb_tensor(x, sorb, nele, noa, nob, True)
+
     # calculate matrix <x|H|x'>
     t1 = time.time_ns()
     comb_hij = pt.get_hij_torch(x, comb_x, h1e, h2e, sorb, nele) # shape (1, n)/(batch, n)
     
     t2 = time.time_ns()
-    
     with torch.no_grad():
-        comb = x1.shape[1]
-        psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, comb)
-        print(psi_x1.shape)
-    # print(f"psi_x1: \n {psi_x1[..., 0]}")
+        psi_x1 = ansatz(x1)
+
     if x1.is_cuda:
         torch.cuda.synchronize()
     t3 = time.time_ns()
@@ -56,16 +55,40 @@ def local_energy(x: Tensor, h1e: Tensor, h2e: Tensor,
         eloc = torch.sum(comb_hij * psi_x1 / psi_x1[..., 0]) # scalar
     elif dim == 2 and batch > 1:
         eloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * comb_hij, -1) # (batch)
+
+    # for i in range(dim):
+    #     a = np.allclose(
+    #         x[i].detach().to("cpu").numpy(),
+    #         comb_x[i][0].detach().to("cpu").numpy(),
+    #     )
+    #     assert(a)
+
+
+    # device = x.device
+    # comb_x_0 = pt.get_comb_tensor_0(x.to("cpu"), sorb, nele, True).to(device)
+    # comb_hij_0 = pt.get_hij_torch(x, comb_x_0, h1e, h2e, sorb, nele) 
+    # x_bit = pt.uint8_to_bit(comb_x_0, sorb)
+    # psi_x1_0 = ansatz(x_bit)
+    # eloc_0 = torch.sum(torch.div(psi_x1_0.T, psi_x1_0[..., 0]).T * comb_hij_0, -1) # (batch)
+
+    # for i in range(dim):
+    #     a = np.allclose(
+    #         x[i].detach().to("cpu").numpy(),
+    #         comb_x_0[i][0].detach().to("cpu").numpy(),
+    #     )
+    #     assert(a)
+
+
+    # a = np.allclose(
+    #     eloc.detach().to("cpu").numpy(),
+    #     eloc_0.detach().to("cpu").numpy())
+    
+    # assert(a)
+
     if verbose:
         print(
             f"comb_x/uint8_to_bit time: {(t1-t0)/1.0E06:.3f} ms, <i|H|j> time: {(t2-t1)/1.0E06:.3f} ms," +
             f"nqs time: {(t3-t2)/1.0E06:.3f} ms")
-    # torch.save({
-    #     "h1e": h1e,
-    #     "h2e": h2e, 
-    #      "x": x,
-    #      "comb_x": x
-    # }, "2.path")
     del x1, comb_hij, comb_x
     return eloc, psi_x1[..., 0]
 
@@ -88,11 +111,11 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
     t0 = time.time_ns()
     ons_dataset = Data.TensorDataset(x, idx_lst)
     loader = Data.DataLoader(dataset=ons_dataset, batch_size=nbatch, 
-                              shuffle=True, drop_last=False)
+                              shuffle=False, drop_last=False)
     
     # for step, (ons, idx) in enumerate(loader):
     # TODO: memory consuming
-    print(x.shape, nbatch)
+    # print(x.shape, nbatch)
     for ons, idx in loader:
     # for ons, idx in zip(x.split(nbatch), idx_lst.split(nbatch)):
         # lp = LineProfiler()
@@ -101,19 +124,6 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
         # lp.print_stats()
         #  exit()
         eloc_lst[idx], psi_lst[idx] = local_energy(ons, h1e, h2e, ansatz, sorb, nele, noa, nob, verbose=verbose)
-    
-    # eloc_1, psi_1 = local_energy(x, h1e, h2e, ansatz, sorb, nele, verbose=True)
-
-    # print(np.allclose(
-    #     eloc_lst.detach().to("cpu").numpy(),
-    #     eloc_1.detach().to("cpu").numpy()
-    # ))
-   
-    # print(np.allclose(
-    #     psi_lst.detach().to("cpu").numpy(),
-    #     psi_1.detach().to("cpu").numpy()
-    # ))
-    
     delta = time.time_ns() - t0
 
     if exact:
@@ -127,14 +137,15 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
         if state_idx is not None:
             state_prob = state_idx/state_idx.sum()
             e_total = torch.einsum("i, i ->", eloc_lst, state_prob) + ecore
-            # e1 = torch.einsum("i, i ->", eloc_1, state_prob) + ecore
-            # print(f"{e1:.8f}, {e_total:.8f}")
         else:
             e_total = eloc_lst.mean() + ecore
-    
+
     if verbose:
         print(f"total energy cost time: {delta/1.0E06:.3f} ms")
-    
+
+    # print(e_total.item())
+    # print(f"eloc:")
+    # print(eloc_lst)
     del psi_lst, idx_lst
     return e_total.item(), eloc_lst
 
