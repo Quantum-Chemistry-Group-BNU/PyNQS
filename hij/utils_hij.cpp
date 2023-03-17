@@ -1099,17 +1099,13 @@ tuple_tensor_2d spin_flip_rand_1(
     torch::Tensor &bra_tensor, const int sorb, const int nele, const int noA,
     const int noB, const int seed){
   const int bra_len = (sorb - 1) / 64 + 1;
-  int olst[MAX_NO] = {0};
-  int vlst[MAX_NV] = {0};
   int merged[MAX_NO + MAX_NV] = {0};
   unsigned long *bra_ptr =
     reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
 
-  get_olst_cpu(bra_ptr, olst, bra_len);
-  get_vlst_cpu(bra_ptr, vlst, sorb, bra_len);
+  get_olst_cpu_ab(bra_ptr, merged, bra_len);
+  get_vlst_cpu_ab(bra_ptr, merged +nele, sorb, bra_len);
   const int ncomb = get_Num_SinglesDoubles(sorb, noA, noB);
-  std::copy(std::begin(olst), std::begin(olst)+nele, std::begin(merged));
-  std::copy(std::begin(vlst), std::begin(vlst)+sorb-nele, std::begin(merged)+nele);
   static std::mt19937 rng(seed);
   static std::uniform_int_distribution<int> u0(0, ncomb - 1);
   int r0 = u0(rng);

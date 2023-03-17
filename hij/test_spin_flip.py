@@ -18,41 +18,47 @@ def state_str(state, sorb) -> List :
 # x = torch.tensor([[0b0011, 0, 0, 0, 0, 0, 0, 0], [0b1001, 0b00, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8, device="cpu").repeat(20000, 1)
 # x = torch.tensor([0b1111, 0b1111, 0, 0, 0, 0, 0, 0], dtype=torch.uint8, device="cpu")
 
-# sorb = 16
-# nele = 8
-# noa = nele//2
-# nob = nele -noa
-# seed = 833
+x = torch.tensor([0b1111, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8)
+sorb = 8
+nele = 4
+noa = nele//2
+nob = nele -noa
+seed = 937875411
 
-# print(f"Test 'Spin_flip function' in MCMC sampling")
-# a = []
-# delta = time.time_ns()
+print(f"Test 'Spin_flip function' in MCMC sampling")
+a = []
+delta = time.time_ns()
 
-# for i in range(100000):
-#    x0 = hij.spin_flip_rand(x.clone(), sorb, nele, seed)[1].reshape(1, -1)
-#    a.append(x0.clone())
+x1 = x.clone()
+for i in range(100000):
+   x1 = hij.spin_flip_rand_0(x1, sorb, nele, seed)[1].reshape(1, -1)
+   a.append(x1.clone())
 
-# print(f"delta (old) = {(time.time_ns()-delta)/1.0E06} ms")
+print(f"delta (old) = {(time.time_ns()-delta)/1.0E06} ms")
 
-# unique_sample_0, idx = torch.unique(torch.cat(a), dim=0, return_counts=True)
-# # print(unique_sample_0)
-# # print(idx)
+unique_sample_0, idx = torch.unique(torch.cat(a), dim=0, return_counts=True)
+print(unique_sample_0)
+print(idx)
 
-# a = [ ]
-# delta = time.time_ns()
-# for i in range(100000):
-#    x0 = hij.spin_flip_rand_1(x.clone(), sorb, nele, noa, nob, seed)[1].reshape(1, -1)
-#    a.append(x0.clone())
+a = [ ]
+delta = time.time_ns()
+x1 =x.clone()
+for i in range(100000):
+   x1 = hij.spin_flip_rand(x1, sorb, nele, noa, nob, seed)[1].reshape(1, -1)
+   a.append(x1.clone())
 
-# print(f"delta (new) = {(time.time_ns()-delta)/1.0E06} ms")
+print(f"delta (new) = {(time.time_ns()-delta)/1.0E06} ms")
 
-# unique_sample_1, idx_1 = torch.unique(torch.cat(a), dim=0, return_counts=True)
+unique_sample_1, idx_1 = torch.unique(torch.cat(a), dim=0, return_counts=True)
+print(unique_sample_1)
+print(idx_1)
 
-# a = (np.allclose(
-#     unique_sample_0,
-#     unique_sample_1
-# ))
-# assert(a)
+
+a = (np.allclose(
+    unique_sample_0,
+    unique_sample_1
+))
+assert(a)
 
 x = torch.tensor([[216, 000, 0, 0, 0, 0, 0, 0], [120, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
 # x = torch.tensor([[216, 000, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)

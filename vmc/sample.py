@@ -99,13 +99,14 @@ class MCMCSampler():
             self.nqs = self.nqs.to("cpu")
     
         print('Starting MCMC Sampling')
+        # print(self.sorb, self.nele, self.noa, self.nob, self.seed)
         t0 = time.time_ns()
-        prob_current = self.nqs(uint8_to_bit(self.current_state, self.sorb).reshape(1, -1))**2
+        prob_current = self.nqs(uint8_to_bit(self.current_state, self.sorb))**2
         spin_time = torch.zeros(n_sweep)
         for i in range(n_sweep):
             t1 = time.time_ns()
-            # psi, self.next_state = spin_flip_rand(self.next_state, self.sorb, self.nele, self.noa, self.nob, self.seed)
-            psi, self.next_state = spin_flip_rand(self.next_state, self.sorb, self.nele, self.seed)
+            psi, self.next_state = spin_flip_rand(self.next_state, self.sorb, self.nele, self.noa, self.nob, self.seed)
+            # psi, self.next_state = spin_flip_rand(self.next_state, self.sorb, self.nele, self.seed)
             spin_time[i] = (time.time_ns() - t1)/1.0E06
             prob_next = self.nqs(psi.reshape(1, -1))**2
             prob_accept = min(1.00, (prob_next/prob_current).item())

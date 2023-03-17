@@ -104,6 +104,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "convert from unit8 to bit[-1, 1] for given x(3D) using CPU or GPU");
   m.def("get_olst_vlst", &get_olst_vlst,
         "get occupied and virtual orbitals in the cpu ");
-  // m.def("spin_flip_rand", &spin_flip_rand, "Flip the spin randomly in MCMC using CPU");
+  m.def("spin_flip_rand_0", &spin_flip_rand, "Flip the spin randomly in MCMC using CPU");
   m.def("spin_flip_rand", &spin_flip_rand_1, "Flip the spin randomly in MCMC using CPU");
 }

@@ -63,7 +63,6 @@ def local_energy(x: Tensor, h1e: Tensor, h2e: Tensor,
     #     )
     #     assert(a)
 
-
     # device = x.device
     # comb_x_0 = pt.get_comb_tensor_0(x.to("cpu"), sorb, nele, True).to(device)
     # comb_hij_0 = pt.get_hij_torch(x, comb_x_0, h1e, h2e, sorb, nele) 

@@ -117,7 +117,7 @@ class VMCOptimizer():
             else:
                 initial_state = self.onstate[0].clone().detach()
 
-            # print(f"initial_state : {initial_state}")
+            print(f"initial_state : {initial_state}")
             # lp = LineProfiler()
             # lp_wrapper = lp(self.sampler.run)
             # lp_wrapper(initial_state)

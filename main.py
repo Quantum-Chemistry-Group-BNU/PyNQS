@@ -19,8 +19,8 @@ torch.set_printoptions(precision=6)
 if __name__ == "__main__":
     device = "cuda"
     # device = "cpu"
-    # seed = int(time.time_ns()%2**32)
-    seed = 2023
+    seed = int(time.time_ns()%2**31)
+    # seed = 2023
     setup_seed(seed)
     atom: str = ""
     bond = 1.50
@@ -40,11 +40,11 @@ if __name__ == "__main__":
     electron_info = {"h1e": h1e, "h2e": h2e, "onstate": onstate,
                     "ecore": ecore, "sorb": sorb, "nele": nele}
 
-    nqs = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
+    nqs = RBMWavefunction(sorb, alpha=4, init_weight=0.001,
                           rbm_type='cos', verbose=True).to(device)
 
-    sampler_param = {"n_sample": 100, "verbose": False,
-                     "debug_exact": True, "therm_step": 1000,
+    sampler_param = {"n_sample": 2000, "verbose": True,
+                     "debug_exact": False, "therm_step": 10000,
                      "seed": seed, "record_sample": False, 
                      "max_memory": 4, "alpha": 0.15}
     
@@ -55,7 +55,7 @@ if __name__ == "__main__":
 
     opt_vmc = VMCOptimizer(nqs=nqs,
                            opt_type=opt_type,
-                           external_model="experimental/1.50/H4-cos-exact.pth",
+                           # external_model="experimental/1.50/H4-cos-exact.pth",
                            device=device,
                            lr_scheduler=lr_sch,
                            sampler_param=sampler_param,
@@ -63,11 +63,11 @@ if __name__ == "__main__":
                            # integral_file=filename,
                            electron_info=electron_info,
                            nele=nele,
-                           max_iter=1,
+                           max_iter=1000,
                            HF_init=0,
                            analytic_derivate=True,
                            num_diff=False,
-                           verbose=True,
+                           verbose=False,
                            sr=False)
     # lp = LineProfiler()
     # lp_wrapper = lp(opt_vmc.run)
