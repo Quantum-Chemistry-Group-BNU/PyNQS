@@ -452,13 +452,13 @@ void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
 void get_comb_2d(unsigned long *comb, int *merged, int r0, int n, int len, int noa,
                  int nob) {
   int idx_lst[4] = {0};
-  std::cout << "i j k l: ";
+  // std::cout << "i j k l: ";
   unpack_Singles_Doubles(n, noa, nob, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]] ;
     BIT_FLIP(comb[idx / 64], idx % 64);
   }
-  std::cout << std::endl;
+  //std::cout << std::endl;
 }
 
 void get_comb_2d(unsigned long *comb, double *lst, int *merged, int r0, int n, int len,
@@ -987,8 +987,9 @@ tuple_tensor_2d spin_flip_rand(
   int vlst_b[MAX_NOB] = {0};
   const int nob = nele / 2, noa = no - nob;
   const int nvb = nv / 2, nva = nv - nvb;
+  auto bra =  bra_tensor.clone();
   unsigned long *bra_ptr =
-      reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+      reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
 
   get_olst_cpu(bra_ptr, olst, olst_a, olst_b, bra_len);
   get_vlst_cpu(bra_ptr, vlst, vlst_a, vlst_b, sorb, bra_len);
@@ -1091,7 +1092,7 @@ tuple_tensor_2d spin_flip_rand(
       BIT_FLIP(bra_ptr[l / 64], l % 64);
     }
   }
-  return std::make_tuple(uint8_to_bit_cpu(bra_tensor, sorb), bra_tensor);
+  return std::make_tuple(uint8_to_bit_cpu(bra, sorb), bra);
 }
 
 
@@ -1100,8 +1101,9 @@ tuple_tensor_2d spin_flip_rand_1(
     const int noB, const int seed){
   const int bra_len = (sorb - 1) / 64 + 1;
   int merged[MAX_NO + MAX_NV] = {0};
+  auto bra = bra_tensor.clone();
   unsigned long *bra_ptr =
-    reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+    reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
 
   get_olst_cpu_ab(bra_ptr, merged, bra_len);
   get_vlst_cpu_ab(bra_ptr, merged +nele, sorb, bra_len);
@@ -1115,5 +1117,5 @@ tuple_tensor_2d spin_flip_rand_1(
     int idx = merged[idx_lst[i]]; //merged[olst, vlst]
     BIT_FLIP(bra_ptr[idx/64], idx % 64);
   }
-  return std::make_tuple(uint8_to_bit_cpu(bra_tensor, sorb), bra_tensor);
+  return std::make_tuple(uint8_to_bit_cpu(bra, sorb), bra);
 }

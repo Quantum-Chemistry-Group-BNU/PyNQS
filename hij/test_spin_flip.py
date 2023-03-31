@@ -18,9 +18,9 @@ def state_str(state, sorb) -> List :
 # x = torch.tensor([[0b0011, 0, 0, 0, 0, 0, 0, 0], [0b1001, 0b00, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8, device="cpu").repeat(20000, 1)
 # x = torch.tensor([0b1111, 0b1111, 0, 0, 0, 0, 0, 0], dtype=torch.uint8, device="cpu")
 
-x = torch.tensor([0b1111, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8)
-sorb = 8
-nele = 4
+x = torch.tensor([0b11111111, 0b11, 0, 0, 0, 0, 0, 0], dtype=torch.uint8)
+sorb = 20
+nele = 10
 noa = nele//2
 nob = nele -noa
 seed = 937875411
@@ -30,7 +30,7 @@ a = []
 delta = time.time_ns()
 
 x1 = x.clone()
-for i in range(100000):
+for i in range(1000000):
    x1 = hij.spin_flip_rand_0(x1, sorb, nele, seed)[1].reshape(1, -1)
    a.append(x1.clone())
 
@@ -43,7 +43,7 @@ print(idx)
 a = [ ]
 delta = time.time_ns()
 x1 =x.clone()
-for i in range(100000):
+for i in range(1000000):
    x1 = hij.spin_flip_rand(x1, sorb, nele, noa, nob, seed)[1].reshape(1, -1)
    a.append(x1.clone())
 
@@ -59,6 +59,7 @@ a = (np.allclose(
     unique_sample_1
 ))
 assert(a)
+exit()
 
 x = torch.tensor([[216, 000, 0, 0, 0, 0, 0, 0], [120, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
 # x = torch.tensor([[216, 000, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)

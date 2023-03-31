@@ -905,10 +905,10 @@ torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb) {
     comb_bit = torch::zeros({n, m, sorb}, options);
     // dim3 threads(THREAD, THREAD);
     // dim3 blocks((n+threads.x-1)/threads.x, (m+threads.y-1)/threads.y);
-  } else if (bra_dim == 2) {
+  } else if (bra_dim == 2 || bra_dim == 1) {
     flag_3d = false;
     // [ncomb, sorb]
-    n = bra_tensor.size(0);
+    n = bra_tensor.reshape({-1, sorb}).size(0);
     comb_bit = torch::zeros({n, sorb}, options);
     // dim3 threads = (512);
     // dim3 blocks((n+threads.x-1)/threads.x);

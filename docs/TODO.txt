@@ -1,0 +1,14 @@
+
+#--------2023-03-29-----------
+1. pre-training from UCISD coeff and notice sign correction (Y)
+    a: convergence speed before and after pre-training 
+    b: Energy change (exact sampling or CISD-onstate)
+2. Check the pre-training result:
+    a: Add New Class "CIWavefunction" to fit CISD or FCI wavefunction in order to 
+       accelerate VMC optimization
+    b: Add Member Functions of the Class RMBWavefunction to calculate energy: 
+       e = <psi|H|psi>/<psi|psi>  <psi|H|psi> = \sum_{ij}c_i<i|H|j>c_j
+3. Sampling question.
+    a: Compare exact-VMC and sample in same parameters H6-1.50, H4-1.00
+    b: Compare different alpha [2, 6, 8]
+    c: wrap mcmc function "spin_rand_flip" using C++ and mpi4py

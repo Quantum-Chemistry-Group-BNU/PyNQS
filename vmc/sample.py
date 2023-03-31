@@ -70,18 +70,18 @@ class MCMCSampler():
         self.alpha = alpha
     
     # @profile(precision=4, stream=open('MCMC_memory_profiler.log','w+'))
-    def run(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, float]:
+    def run(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, Tensor, float, dict]:
         check_para(initial_state)
         if self.debug_exact:
             dim = len(self.full_space)
             nbatch = get_nbatch(self.sorb, dim, self.n_SinglesDoubles, self.max_memory, self.alpha)
-            e_total, eloc = total_energy(self.full_space, nbatch, self.h1e, self.h2e, 
+            e_total, eloc, stats_dict = total_energy(self.full_space, nbatch, self.h1e, self.h2e, 
                                         self.nqs, self.ecore, self.sorb, 
                                         self.nele, self.noa, self.nob,
                                         verbose = self.verbose,
                                         exact = self.debug_exact)
             sample_idx = torch.ones(dim, dtype=torch.float64, device=self.device)/dim
-            return self.full_space.detach(), sample_idx, eloc, e_total
+            return self.full_space.detach(), sample_idx, eloc, e_total, stats_dict
         else:
             self.state_sample: Tensor = torch.zeros_like(initial_state).repeat(self.n_sample, 1)
             self.current_state: Tensor = initial_state
@@ -105,10 +105,10 @@ class MCMCSampler():
         spin_time = torch.zeros(n_sweep)
         for i in range(n_sweep):
             t1 = time.time_ns()
-            psi, self.next_state = spin_flip_rand(self.next_state, self.sorb, self.nele, self.noa, self.nob, self.seed)
+            psi, self.next_state = spin_flip_rand(self.current_state, self.sorb, self.nele, self.noa, self.nob, self.seed)
             # psi, self.next_state = spin_flip_rand(self.next_state, self.sorb, self.nele, self.seed)
             spin_time[i] = (time.time_ns() - t1)/1.0E06
-            prob_next = self.nqs(psi.reshape(1, -1))**2
+            prob_next = self.nqs(psi)**2
             prob_accept = min(1.00, (prob_next/prob_current).item())
             p = random.random()
             # if self.verbose and i >= self.therm_step:
@@ -133,20 +133,22 @@ class MCMCSampler():
         
         # calculate the max nbatch for given Max Memory
         nbatch = get_nbatch(self.sorb, len(sample_unique), self.n_SinglesDoubles, self.max_memory, self.alpha)
-        e_total, eloc = total_energy(sample_unique, nbatch, self.h1e, self.h2e, self.nqs,
+        e_total, eloc, stats_dict = total_energy(sample_unique, nbatch, self.h1e, self.h2e, self.nqs,
                                      self.ecore, self.sorb, self.nele, self.noa, self.nob,
                                      state_idx=sample_idx,
                                      verbose=self.verbose,
                                      exact=self.debug_exact)
 
+        # print local energy statistics information
+        self._statistics(stats_dict)
+
         if self.verbose:
             print(f"sampling: {len(sample_idx)}/{sample_idx.sum().item()}")
             print(f"spin flip average time: {spin_time.mean():.3f} ms, total time {spin_time.sum():.3f} ms")
-            # print(f"sample state:\n{(uint8_to_bit(self.state_sample.detach(), self.sorb)+1)//2}")
-            # print(f"sample state:\n{self.state_sample}")
             print(f"total energy: {e_total:.10f}")
 
         if self.record_sample:
+            # TODO: if given sorb(not full space), this is error.
             idx = sample_idx.to("cpu").numpy()
             sample_str = self.state_str(sample_unique)
             full_dict = dict.fromkeys(self.str_full, 0)
@@ -161,7 +163,7 @@ class MCMCSampler():
         print(f'Completed Monte Carlo Sampling {delta/1.0E09:.3f} s, acceptance ratio = {self.n_accept/self.n_sample:.3f}')
 
         # return self.state_sample.detach(), eloc1, e_total1,
-        return sample_unique.detach(), sample_idx, eloc, e_total
+        return sample_unique.detach(), sample_idx, eloc, e_total, stats_dict
 
     # right -> left (0011-> HF state H2)
     def state_str(self, state) -> List :
@@ -179,5 +181,10 @@ class MCMCSampler():
             f"    exact sampling: {self.debug_exact}\n"
             f"    the given full space shape: {self.full_space.shape}\n" + 
             f"    Record the sample: {self.record_sample}\n" + 
-            f"    Singles + Doubles: {self.n_SinglesDoubles}\n" + ")"
+            f"    Singles + Doubles: {self.n_SinglesDoubles}\n" +
+            f"    Random seed: {self.seed}\n" + ")"
         )
+    
+    def _statistics(self, data: dict):
+        s = f"E_total = {data['mean']:.10f} ± {data['SE']:.3E} [σ² = {data['var']:.3E}]"
+        print(s)

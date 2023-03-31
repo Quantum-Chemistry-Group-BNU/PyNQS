@@ -1,4 +1,5 @@
 import random
+import sys 
 import torch
 import itertools
 import numpy as np
@@ -95,7 +96,7 @@ def read_integral(filename: str, nele: int,
     sorb = int2e.sorb
     
     # TODO:BUG int1e.data is equal, +-????
-    print(np.array(int1e.data))
+    # print(np.array(int1e.data))
     # h1e/h2e
     h1e = torch.tensor(int1e.data, dtype=torch.float64).to(device)
     h2e = torch.tensor(int2e.data, dtype=torch.float64).to(device)
@@ -139,13 +140,17 @@ def get_Num_SinglesDoubles(sorb: int ,noA: int ,noB: int) ->int:
 
 def get_nbatch(sorb: int, n_sample_unique: int, n_comb_sd: int,
                Max_memory = 32, alpha = 0.25):
-    m = n_sample_unique * n_comb_sd * sorb * 8 / (2**30) # double, GiB
-    # print(f"{m / Max_memory * 100:.3f} %")
+    def comb_memory():
+        x1 = n_comb_sd * sorb * 8 /(1<<30) * 2 # uint8_to_bit, double, GiB
+        x2 = n_comb_sd * ((sorb-1)//64 + 1) * 8 / (1<<30) # SD, uint8, GiB
+        return x1 + x2
+    m = comb_memory() * n_sample_unique
     if m / Max_memory >= alpha:
-        nbatch = Max_memory/(n_comb_sd * sorb * 8 /(2**30)) * alpha
+        batch = int(Max_memory/(comb_memory()) * alpha)
     else:
-        nbatch = n_sample_unique
-    return int(nbatch)
+        batch = n_sample_unique
+    # print(f"{m / Max_memory * 100:.3f} %, alpha = {alpha * 100:.3f} , batch: {batch}")
+    return batch
 
 def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None):
     assert(x%2==0 and x <= sorb and x >=(noa + nob))
@@ -161,8 +166,19 @@ def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None):
             state[list(l)] = 1
             s = "".join(list(map(str, state[::-1])))
             lst.append(string_to_lst(sorb, s))
-            # print(s, string_to_lst(sorb, s))
     return torch.tensor(lst, dtype=torch.uint8).to(device)
+
+class Logger():
+    def __init__(self, filename: str, stream=sys.stdout):
+        self.terminal = stream
+        self.log = open(filename, "w")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        pass
 
 if __name__ == "__main__":
     print(given_onstate(12, 12, 3, 3)) # H20

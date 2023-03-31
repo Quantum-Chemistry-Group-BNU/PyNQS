@@ -1,5 +1,6 @@
 import time
 import random
+import platform
 import torch
 import numpy as np
 
@@ -29,11 +30,18 @@ class VMCOptimizer():
     onstate: Tensor = None
     ecore: float = None
     sorb: int = None
+    sys_name = platform.node()
+    TORCH_VERSION: str = torch.__version__
+    # torch.compile is lower in GTX 1650, but faster in A100
+    using_compile: bool = True if sys_name != "myarch" and TORCH_VERSION>= '2.0.0' else False
 
-    def __init__(self, nqs: nn.Module, opt_type: Optimizer,
+    def __init__(self, nqs: nn.Module, 
                 sampler_param: dict,
-                nele: int = None,
+                opt_type: Optimizer = torch.optim.Adam,
+                opt_params: dict = {"lr": 0.005, "weight_decay": 0.001},
                 lr_scheduler = None,
+                lr_sch_params: dict = None,
+                nele: int = None,
                 integral_file: str = None,
                 electron_info: dict = None,
                 max_iter: int = 2000,
@@ -44,18 +52,10 @@ class VMCOptimizer():
                 sr: bool = False,
                 HF_init: int = None,
                 external_model: any = None,
-                only_sample: bool = False) -> None:
-        # TODO: model in the difference device
-        print(device)
+                only_sample: bool = False,
+                pre_train_info: dict = None) -> None:
+        self.pre_train_info = pre_train_info
         self.device = device
-        if external_model is not None:
-            self.read_model(external_model)
-        else:
-            self.model = nqs 
-            self.opt = opt_type
-            self.lr_scheduler = lr_scheduler
-            self.HF_init = HF_init
-            self.sr = sr
         if integral_file is not None and nele is not None:
             self.integral_file = integral_file
             self.nele = nele
@@ -66,7 +66,19 @@ class VMCOptimizer():
             info = ("h1e", "h2e", "onstate", "ecore", "sorb", "nele")
             result = tuple(electron_info[i] for i in info)
             self.h1e, self.h2e, self.onstate, self.ecore, self.sorb, self.nele = result
-        
+        # whether read nqs/h1e-h2e from external file
+        if external_model is not None:
+            self.read_model(external_model)
+        else:
+            self.model_raw = nqs
+            self.model = torch.compile(self.model_raw) if self.using_compile else self.model_raw
+        self.opt: Optimizer = opt_type(self.model.parameters(), **opt_params)
+        if lr_sch_params is not None and lr_sch_params is None:
+            self.lr_scheduler = lr_scheduler(self.opt, **lr_sch_params)
+        else:
+            self.lr_scheduler = None
+        self.HF_init = HF_init
+        self.sr = sr
         self.max_iter = max_iter
         self.num_diff = num_diff
         self.analytic_derivate = analytic_derivate
@@ -89,6 +101,7 @@ class VMCOptimizer():
         self.grad_e_lst: List[Tensor] = [[] for _ in range(self.n_para)]
         self.grad_param_lst: List[Tensor] = [[] for _ in range(self.n_para)]
         self.e_lst: List[float] = []
+        self.stats_lst: List[dict] = []
         self.time_sample: List[float] = []
         self.time_iter: List[float] = []
         print(f"NQS model:\n{self.model}")
@@ -100,13 +113,13 @@ class VMCOptimizer():
         self.h1e, self.h2e, self.onstate, self.ecore, self.sorb = result
 
     def read_model(self, external_model):
-        print(f"Read nqs model/optimizer from '.pth' file {external_model}")
+        print(f"Read nqs model/h1e-h2e from '.pth' file {external_model}")
         state = torch.load(external_model, map_location=self.device)
-        self.model = state["model"]
-        self.opt = state["optimizer"]
-        self.lr_scheduler = state["lr_scheduler"]
-        self.HF_init = state["HF_init"]
-        self.sr = state["sr"]
+        self.model_raw = state["model"]
+        self.model = torch.compile(self.model_raw) if self.using_compile else self.model_raw
+        # notice h1e,he2 may be different.
+        self.h1e = state["h1e"]
+        self.h2e = state["h2e"]
 
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self):
@@ -117,16 +130,17 @@ class VMCOptimizer():
             else:
                 initial_state = self.onstate[0].clone().detach()
 
-            print(f"initial_state : {initial_state}")
+            # print(f"initial_state : {initial_state}")
             # lp = LineProfiler()
             # lp_wrapper = lp(self.sampler.run)
             # lp_wrapper(initial_state)
             # lp.print_stats()
             # exit()
-            state, state_idx, eloc, e_total, = self.sampler.run(initial_state)
-            
+            state, state_idx, eloc, e_total, stats = self.sampler.run(initial_state)
+
             self.n_sample = len(state)
             self.e_lst.append(e_total)
+            self.stats_lst.append(stats)
 
             if self.only_sample:
                 delta = (time.time_ns() - t0)/1.00E06
@@ -144,16 +158,60 @@ class VMCOptimizer():
             for i, param in enumerate(self.model.parameters()):
                 param.grad.data = grad_update_lst[i].detach().clone().reshape(param.shape)
 
-            self.opt.step()
-            self.opt.zero_grad()
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
+            if p < self.max_iter - 1:
+                self.opt.step()
+                self.opt.zero_grad()
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()
 
             delta = (time.time_ns() - t0)/1.00E09
             print(f"{p} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3f} s")
             self.time_iter.append(delta)
 
             del grad_update_lst, sample_state, eloc, state
+
+    def pre_train(self, prefix="Pre-train"):
+        pre_psi: Tensor = self.pre_train_info["pre_psi"].reshape(-1, 1).to(self.device)
+        pre_onstate: Tensor = self.pre_train_info["pre_onstate"].to(self.device)
+        pre_max_iter = self.pre_train_info["pre_max_iter"]
+        nprt = int(pre_max_iter / self.pre_train_info["interval"])
+        ovlp_list: List[int] = []
+        loss_list: List[int] = []
+        T0 = time.time_ns()
+        state = uint8_to_bit(pre_onstate, self.sorb)
+        for epoch in range(pre_max_iter+1):
+            t0 = time.time_ns()
+            psi = self.model(state)
+            # TODO: 
+            psi_norm = (psi/torch.norm(psi)).reshape(-1, 1)
+            ovlp = torch.einsum("ij, ij", psi_norm, pre_psi)
+            loss = 1 - ovlp**2
+            loss.backward()
+            self.opt.step()
+            self.opt.zero_grad()
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
+            ovlp_list.append(ovlp.detach().to("cpu").item())
+            loss_list.append(loss.detach().to("cpu").item())
+        
+            if (epoch%nprt) == 0:
+                delta = (time.time_ns() - t0)/1.E06
+                print(f"The {epoch:<5d} training, loss = {loss.item():.4E}, ovlp = {ovlp.item():.4E}, delta = {delta:.3f} ms")
+        print(f"Pre-train finished, cost time: {(time.time_ns() - T0)/1.E09:.3f}s")
+
+        #plot-figure:
+        fig = plt.figure()
+        ax1 = fig.add_subplot(2, 1, 1)
+        x = np.arange(pre_max_iter+1)
+        ax1.plot(x, np.array(loss_list), color='cadetblue', label="Loss")
+        # ax1.set_yscale("log")
+        ax1.legend(loc="best")
+        ax2 = fig.add_subplot(2, 1, 2)
+        ax2.plot(x, np.abs(ovlp_list), color='tomato', label="Ovlp")
+        ax2.legend(loc="best")
+        fig.subplots_adjust(wspace=0, hspace=0.5)
+        fig.savefig(prefix + "-pre_train.png", format="png", dpi=1000, bbox_inches='tight')
+
 
     def _numerical_differentiation(self, state, eps: float = 1.0E-07) ->List[Tensor]:
         # TODO: state is uint8 not double
@@ -272,12 +330,14 @@ class VMCOptimizer():
             self.sampler.frame_sample.to_csv(sample_file)
 
         if nqs:
-            torch.save({"model": self.model,
+            torch.save({"model": self.model_raw,
                         "optimizer": self.opt,
                         "lr_scheduler": self.lr_scheduler,
                         "HF_init": self.HF_init,
                         "sr": self.sr,
-                        "sampler_param": self.sampler_param}, model_file)
+                        "sampler_param": self.sampler_param,
+                        "h1e": self.h1e,
+                        "h2e": self.h2e}, model_file)
 
     def plot_figure(self, e_ref: float = None, prefix: str = "VMC"):
         fig = plt.figure()
@@ -321,6 +381,38 @@ class VMCOptimizer():
         plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches='tight')
         plt.close()
 
+class GD(Optimizer):
+    """ Naive Gradient Descent"""
+    def __init__(self, params, lr = required, weight_decay: float = 0.00) -> None:
+        if lr is not required and lr < 0.0:
+            raise ValueError(f"Invalid learning rate : {lr}")
+        if not 0.0 <= weight_decay:
+            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+        defaults = dict(lr=lr, weight_decay=weight_decay)
+        super(GD, self).__init__(params, defaults)
+    
+    def step(self, closure=None):
+        for group in self.param_groups:
+            params_with_grad: List[Tensor] = []
+            d_p_list = []
+            for p in group['params']:
+                if p.grad is not None:
+                    params_with_grad.append(p)
+                    d_p_list.append(p.grad)
+            _gd_update(params_with_grad, 
+                       d_p_list,
+                       lr=group['lr'], 
+                       weight_decay=group["weight_decay"])
+
+def _gd_update(params: List[Tensor],
+               grads: List[Tensor],
+               lr: float,
+               weight_decay: float):
+    for i, param in enumerate(params):
+        dp = grads[i]
+        if weight_decay != 0:
+            dp = dp.add(param, alpha=weight_decay)
+        param.data.add_(dp, alpha=-lr)
 class SR(Optimizer):
     """Stochastic Reconfiguration in quantum many-body problem
     
@@ -418,7 +510,7 @@ def sr_grad(params: List[Tensor],
 
     return sr_grad_lst
 
-
+# TODO: error?
 def _calculate_sr(grad_total: Tensor, F_p: Tensor,
                   N_state: int, p: int, opt_gd: bool = False, diag_shift: float = 0.02) -> Tensor:
     """
@@ -443,6 +535,10 @@ def _calculate_sr(grad_total: Tensor, F_p: Tensor,
     S_reg = S_kk + S_kk2
     update = torch.matmul(torch.linalg.inv(S_reg), F_p).reshape(-1)
     return update
+
+def _test_sr(grad_total: Tensor, F_p: Tensor, N_state: int, p: int,  diag_shift: float = 0.002):
+    pass 
+
 
 def _lambda_regular(p, l0=100, b=0.9, l_min=1e-4):
     """

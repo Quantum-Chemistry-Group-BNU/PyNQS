@@ -8,6 +8,7 @@ from libs import hij_tensor as hij
 from utils_test import state_str, read_info
 
 devices = (torch.device("cpu"), torch.device('cuda:0'))
+# devices = (torch.device("cpu"),) 
 
 #-----H6----
 def test_comb():
@@ -15,7 +16,7 @@ def test_comb():
     for device in devices:
         if device == torch.device('cuda:0') and (not torch.cuda.is_available()):
             print("CUDA is not available")
-            break
+            continue
         x0, comb, comb_bit, sorb, nele, noa, nob, dim = read_info("H6-test.pth")
         x0 = x0.to(device)
         comb = comb.to(device)
@@ -28,6 +29,9 @@ def test_comb():
                 unique_1.to("cpu").numpy()
             )
             assert(a)
+            if not a:
+                print(x0[i], "\n", unique_1, "\n", unique_0)
             a = sorted(state_str(comb_bit[i], sorb))
             b = sorted(state_str(state_bit, sorb))
             assert (a == b)
+test_comb()
