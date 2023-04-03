@@ -781,6 +781,30 @@ torch::Tensor get_Hij_mat_cpu(torch::Tensor &bra_tensor,
   return Hmat;
 }
 
+torch::Tensor get_Hij_diag_cpu(torch::Tensor &bra_tensor,
+                               torch::Tensor &h1e_tensor,
+                               torch::Tensor &h2e_tensor, const int sorb,
+                               const int nele) {
+  const int n = bra_tensor.size(0);
+  const int bra_len = (sorb - 1) / 64 + 1;
+  const int tensor_len = (sorb - 1) / 8 + 1;
+
+  torch::Tensor Hmat = torch::zeros({n}, h1e_tensor.options());
+  double *h1e_ptr = h1e_tensor.data_ptr<double>();
+  double *h2e_ptr = h2e_tensor.data_ptr<double>();
+  unsigned long *bra_ptr =
+      reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+  double *Hmat_ptr = Hmat.data_ptr<double>();
+
+  for (int i = 0; i < n; i++) {
+    Hmat_ptr[i] =
+        get_Hij_cpu(&bra_ptr[i * bra_len], &bra_ptr[i * bra_len], h1e_ptr,
+                    h2e_ptr, sorb, nele, tensor_len, bra_len);
+  }
+
+  return Hmat;
+}
+
 torch::Tensor get_comb_tensor_cpu(torch::Tensor &bra_tensor, const int sorb,
                                   const int nele, bool ms_equal) {
   const int no = nele;

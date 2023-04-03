@@ -1,3 +1,4 @@
+#include <torch/script.h> 
 #include <torch/extension.h>
 #include <bitset>
 #include <chrono>
@@ -25,6 +26,11 @@ typedef std::tuple<torch::Tensor, torch::Tensor> tuple_tensor_2d;
 torch::Tensor get_Hij_cuda(torch::Tensor &bra_tensor, torch::Tensor &ket_tensor,
                            torch::Tensor &h1e_tensor, torch::Tensor &h2e_tensor,
                            const int sorb, const int nele);
+
+torch::Tensor get_Hij_diag_cuda(torch::Tensor &bra_tensor,
+                                torch::Tensor &h1e_tensor,
+                                torch::Tensor &h2e_tensor, const int sorb,
+                                const int nele);
 
 torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb);
 
@@ -108,6 +114,11 @@ double get_Hij_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
 
 torch::Tensor get_Hij_mat_cpu(torch::Tensor &bra_tensor,
                               torch::Tensor &ket_tensor,
+                              torch::Tensor &h1e_tensor,
+                              torch::Tensor &h2e_tensor, const int sorb,
+                              const int nele);
+
+torch::Tensor get_Hij_diag_cpu(torch::Tensor &bra_tensor,
                               torch::Tensor &h1e_tensor,
                               torch::Tensor &h2e_tensor, const int sorb,
                               const int nele);

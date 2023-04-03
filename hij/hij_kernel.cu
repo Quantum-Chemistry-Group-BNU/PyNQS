@@ -628,6 +628,15 @@ __global__ void get_Hij_kernel_3D(double *Hmat_ptr, unsigned long *bra,
               h2e, sorb, nele, tensor_len, bra_len);
 }
 
+__global__ void get_Hij_diag_kernel(double *Hmat_ptr, unsigned long* bra, double *h1e, double*h2e, const size_t sorb, const size_t nele, 
+const size_t tensor_len, const size_t bra_len, int n){
+  int idm = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idm >= n)
+    return;
+    Hmat_ptr[idm] = get_Hij(&bra[idm * bra_len], &bra[idm * bra_len],
+                                    h1e, h2e, sorb, nele, tensor_len, bra_len);
+}
+
 __global__ void get_comb_kernel_2D(unsigned long *bra_ptr,
                                    unsigned long *comb_ptr, int sorb, int len,
                                    int noa, int nob, int nva, int nvb,
@@ -818,6 +827,27 @@ torch::Tensor get_Hij_cuda(torch::Tensor &bra_tensor, torch::Tensor &ket_tensor,
   return Hmat;
 }
 
+torch::Tensor get_Hij_diag_cuda(torch::Tensor &bra_tensor,
+                                torch::Tensor &h1e_tensor,
+                                torch::Tensor &h2e_tensor, const int sorb,
+                                const int nele) {
+  const int n = bra_tensor.size(0);
+  const int tensor_len = (sorb - 1) / 8 + 1;
+  const int bra_len = (sorb - 1) / 64 + 1;
+  torch::Tensor Hmat = torch::zeros({n}, h1e_tensor.options());
+  double *h1e_ptr = h1e_tensor.data_ptr<double>();
+  double *h2e_ptr = h2e_tensor.data_ptr<double>();
+  unsigned long *bra_ptr =
+      reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+  double *Hmat_ptr = Hmat.data_ptr<double>();
+  dim3 threads(1024);
+  dim3 blocks((n + threads.x - 1) / threads.x);
+  get_Hij_diag_kernel<<<blocks, threads>>>(Hmat_ptr, bra_ptr, h1e_ptr, h2e_ptr,
+                                           sorb, nele, tensor_len, bra_len, n);
+  cudaDeviceSynchronize();
+  return Hmat;
+}
+
 torch::Tensor get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
                                    const int nele, bool ms_equal) {
   // TODO: how to accelerate get_comb funciton??? 
@@ -908,7 +938,7 @@ torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb) {
   } else if (bra_dim == 2 || bra_dim == 1) {
     flag_3d = false;
     // [ncomb, sorb]
-    n = bra_tensor.reshape({-1, sorb}).size(0);
+    n = bra_tensor.reshape({-1, bra_len}).size(0);
     comb_bit = torch::zeros({n, sorb}, options);
     // dim3 threads = (512);
     // dim3 blocks((n+threads.x-1)/threads.x);
