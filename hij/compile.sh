@@ -64,6 +64,7 @@ do
                 echo -e "\033[36mComplie CPU and GPU code\033[0m"
                     ;;
             *) echo -e "device parameter ${device} error, using 'CPU' or 'GPU'" 
+               exit 1
             esac
         ;;
     h)  
