@@ -1,8 +1,12 @@
 #include "utils_hij.h"
+#include <exception>
 #include <algorithm>
 #include <string>
+#include <tuple>
 
 using namespace std;
+
+
 
 torch::Tensor get_Hij_torch(torch::Tensor &bra_tensor,
                             torch::Tensor &ket_tensor,
@@ -14,14 +18,18 @@ torch::Tensor get_Hij_torch(torch::Tensor &bra_tensor,
   CHECK_CONTIGUOUS(bra_tensor);
   CHECK_CONTIGUOUS(h1e_tensor);
   CHECK_CONTIGUOUS(h2e_tensor);
-
-  if (bra_tensor.is_cuda() && ket_tensor.is_cuda() && h1e_tensor.is_cuda() &&
-      h2e_tensor.is_cuda()) {
-    return get_Hij_cuda(bra_tensor, ket_tensor, h1e_tensor, h2e_tensor, sorb,
-                        nele);
-  } else {
-    return get_Hij_mat_cpu(bra_tensor, ket_tensor, h1e_tensor, h2e_tensor, sorb,
+  // if ((bra_tensor.device() == ket_tensor.device()) == (h1e_tensor.device() == h2e_tensor.device())){
+  //   throw std::logic_error("Devices of bra/ket and h1e/h1e is inconsistent");
+  // }
+  if (bra_tensor.is_cpu() && ket_tensor.is_cpu() && h1e_tensor.is_cpu() &&
+      h2e_tensor.is_cpu()) {
+      return get_Hij_mat_cpu(bra_tensor, ket_tensor, h1e_tensor, h2e_tensor, sorb,
                            nele);
+#ifdef GPU
+  } else {
+    return get_Hij_cuda(bra_tensor, ket_tensor, h1e_tensor, h2e_tensor, sorb,
+                         nele);
+#endif
   }
 }
 
@@ -33,23 +41,31 @@ torch::Tensor get_Hij_diag_torch(torch::Tensor &bra_tensor,
   CHECK_CONTIGUOUS(bra_tensor);
   CHECK_CONTIGUOUS(h1e_tensor);
   CHECK_CONTIGUOUS(h2e_tensor);
-
-  if (bra_tensor.is_cuda() && h1e_tensor.is_cuda() && h2e_tensor.is_cuda()) {
-    return get_Hij_diag_cuda(bra_tensor, h1e_tensor, h2e_tensor, sorb, nele);
-  } else {
+  // if (bra_tensor.device() == h1e_tensor.device()){
+  //   std::cout <<bra_tensor.device() << " " << h1e_tensor.device() <<std::endl;
+  //   throw std::logic_error("Devices of bra and h1e/h1e is inconsistent");
+  // }
+  if (bra_tensor.is_cpu() && h1e_tensor.is_cpu()) {
     return get_Hij_diag_cpu(bra_tensor, h1e_tensor, h2e_tensor, sorb, nele);
+#ifdef GPU
+  } else {
+  return get_Hij_diag_cuda(bra_tensor, h1e_tensor, h2e_tensor, sorb, nele);
+#endif
   }
 }
 
 // RBM
 torch::Tensor uint8_to_bit(torch::Tensor &bra_tensor, const int sorb) {
   CHECK_CONTIGUOUS(bra_tensor);
-  if (bra_tensor.is_cuda()) {
-    return uint8_to_bit_cuda(bra_tensor, sorb);
-  } else {
+  if (bra_tensor.is_cpu()) {
     return uint8_to_bit_cpu(bra_tensor, sorb);
+#ifdef GPU
+  } else {
+    return uint8_to_bit_cuda(bra_tensor, sorb);
+#endif
   }
 }
+
 tuple_tensor_2d get_olst_vlst(torch::Tensor &bra_tensor, const int sorb, const int nele) {
   CHECK_CONTIGUOUS(bra_tensor);
   auto device = bra_tensor.device();
@@ -67,10 +83,12 @@ tuple_tensor_2d get_olst_vlst(torch::Tensor &bra_tensor, const int sorb, const i
 torch::Tensor get_comb_tensor(torch::Tensor &bra_tensor, const int sorb,
                               const int nele, bool ms_equal) {
   CHECK_CONTIGUOUS(bra_tensor);
-  if (bra_tensor.is_cuda()) {
-    return get_comb_tensor_cuda(bra_tensor,sorb, nele, ms_equal);
-  } else {
+  if (bra_tensor.is_cpu()) {
     return get_comb_tensor_cpu(bra_tensor, sorb, nele, ms_equal);
+#ifdef GPU 
+  } else {
+    return get_comb_tensor_cuda(bra_tensor,sorb, nele, ms_equal);
+#endif
   }
 }
 
@@ -78,20 +96,16 @@ tuple_tensor_2d get_comb_tensor_1(torch::Tensor &bra_tensor, const int sorb,
                               const int nele, const int noA, const int noB,
                               bool flag_bit) {
   CHECK_CONTIGUOUS(bra_tensor);
-  if (bra_tensor.is_cuda()) {
-    /**
-    auto device = bra_tensor.device();
-    torch::Tensor bra_cpu = bra_tensor.to(torch::kCPU);
-    torch::Tensor x = get_comb_tensor_cpu(bra_cpu, sorb, nele, ms_equal);
-    return x.to(device);
-    **/
-    return get_comb_tensor_cuda(bra_tensor, sorb, nele, noA, noB, flag_bit);
-  } else {
+  if (bra_tensor.is_cpu()) {
     return get_comb_tensor_cpu_1(bra_tensor, sorb, nele, noA, noB, flag_bit);
+  #ifdef GPU
+  } else {
+    return get_comb_tensor_cuda(bra_tensor, sorb, nele, noA, noB, flag_bit);
+  #endif
   }
 }
 
-torch::Tensor MCMC_sample(const std::string model_file,
+auto MCMC_sample(const std::string model_file,
                             torch::Tensor &current_state,
                             torch::Tensor &state_sample,
                             const int sorb,
@@ -140,7 +154,7 @@ torch::Tensor MCMC_sample(const std::string model_file,
   std::cout << "model time " << psi_time << " " <<
   std::cout << "spin flip " << spin_time << " ms" << std::endl;
   **/
-  return state_sample;
+  // return state_sample;
   }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -160,13 +174,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           return make_tuple(value, delta);
         });
   **/
-  m.def("MCMC_sample", &MCMC_sample, "sss");
+  m.def("MCMC_sample", &MCMC_sample, "MCMC sample using CPU");
   m.def("get_comb_tensor_0", &get_comb_tensor,
-          "Return all singles and doubles excitation for given x(3D/2D) using CPU");
+          "Return all singles and doubles excitation for given onstate(2D or 1D) using CPU or GPU");
   m.def("get_comb_tensor", &get_comb_tensor_1,
-        "Return all singles and doubles excitation for given x(3D/2D) using CPU");
+        "Return all singles and doubles excitation for given onstate(2D or 1D) using CPU or GPU");
   m.def("uint8_to_bit", &uint8_to_bit,
-        "convert from unit8 to bit[-1, 1] for given x(3D) using CPU or GPU");
+        "convert from unit8 to bit(1:not occupied, -1: occupied) for given onstate(1D, 2D, 3D) using CPU or GPU");
   m.def("get_olst_vlst", &get_olst_vlst,
         "get occupied and virtual orbitals in the cpu ");
   m.def("spin_flip_rand_0", &spin_flip_rand, "Flip the spin randomly in MCMC using CPU");

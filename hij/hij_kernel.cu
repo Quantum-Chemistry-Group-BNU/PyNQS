@@ -336,7 +336,7 @@ __device__ void get_zvec(unsigned long *bra, double *lst, const int sorb,
     for (int j = 1; j <= 64; j++) {
       if (idx >= sorb)
         break;
-      lst[idx] = num_parity(bra[i], j);
+      lst[idx] = num_parity(bra[i], j) * -1.0;
       idx++;
     }
   }
@@ -938,7 +938,7 @@ torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb) {
   } else if (bra_dim == 2 || bra_dim == 1) {
     flag_3d = false;
     // [ncomb, sorb]
-    n = bra_tensor.reshape({-1, bra_len}).size(0);
+    n = bra_tensor.reshape({-1, bra_len * 8}).size(0);
     comb_bit = torch::zeros({n, sorb}, options);
     // dim3 threads = (512);
     // dim3 blocks((n+threads.x-1)/threads.x);
