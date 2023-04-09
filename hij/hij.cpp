@@ -119,7 +119,8 @@ auto MCMC_sample(const std::string model_file,
   torch::jit::script::Module nqs = torch::jit::load(model_file);
   // double load_time = get_duration_nano(get_time()- t1)/1000000;
   std::vector<torch::jit::IValue> inputs = {uint8_to_bit(current_state, sorb)};
-  double prob_current = std::pow(nqs.forward(inputs).toTensor().item<double>(), 2);
+  //double prob_current = std::pow(nqs.forward(inputs).toTensor().item<double>(), 2);
+  double prob_current = std::pow(nqs.forward(inputs).toTensor().norm().item<double>(), 2);
   static std::mt19937 rng(seed);
   // double psi_time = 0.0;
   // double spin_time = 0.0;
@@ -131,7 +132,7 @@ auto MCMC_sample(const std::string model_file,
     // spin_time += delta;
     std::vector<torch::jit::IValue> inputs = {psi};
     //auto t1 = get_time();
-    double prob_next = std::pow(nqs.forward(inputs).toTensor().item<double>(), 2);
+    double prob_next = std::pow(nqs.forward(inputs).toTensor().norm().item<double>(), 2);
     // auto delta1 = get_duration_nano(get_time() - t1)/1000000 ;
     // psi_time += delta1;
     double prob_accept = std::min(1.00, prob_next/prob_current);

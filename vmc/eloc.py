@@ -36,18 +36,18 @@ def local_energy(x: Tensor, h1e: Tensor, h2e: Tensor,
     batch: int = x.shape[0]
     t0 = time.time_ns()
 
-    # x1: [batch, comb, sorb]
+    # x1: [batch, comb, sorb], comb_x: [batch, comb, bra_len]
     # with torch.autograd.profiler.profile(enabled=True, use_cuda=False, record_shapes=True, profile_memory=True) as prof:
     comb_x, x1 = pt.get_comb_tensor(x, sorb, nele, noa, nob, True)
 
     # calculate matrix <x|H|x'>
     t1 = time.time_ns()
-    comb_hij = pt.get_hij_torch(x, comb_x, h1e, h2e, sorb, nele) # shape (1, n)/(batch, n)
+    comb_hij = pt.get_hij_torch(x, comb_x, h1e, h2e, sorb, nele) # shape (1, comb)/(batch, comb)
     
     t2 = time.time_ns()
     # with torch.autograd.profiler.profile(enabled=True, use_cuda=False, record_shapes=True, profile_memory=True) as prof:
     with torch.no_grad():
-        psi_x1 = ansatz(x1)
+        psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1) # [batch, comb]
 
     if x1.is_cuda:
         torch.cuda.synchronize()
@@ -63,7 +63,9 @@ def local_energy(x: Tensor, h1e: Tensor, h2e: Tensor,
             f"comb_x/uint8_to_bit time: {(t1-t0)/1.0E06:.3f} ms, <i|H|j> time: {(t2-t1)/1.0E06:.3f} ms," +
             f"nqs time: {(t3-t2)/1.0E06:.3f} ms")
     del x1, comb_hij, comb_x
-    return eloc, psi_x1[..., 0]
+    # print(eloc, psi_x1[..., 0])
+
+    return eloc.to(torch.complex128), psi_x1[..., 0].to(torch.complex128)
 
 # @profile(precision=4, stream=open('total_memory_profiler.log','w+'))
 def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Callable,
@@ -76,8 +78,8 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
 
     dim: int = x.shape[0]
     device = x.device
-    eloc_lst = torch.zeros(dim, dtype=torch.float64).to(device)
-    psi_lst = torch.zeros(dim, dtype=torch.float64).to(device)
+    eloc_lst = torch.zeros(dim, device=device).to(torch.complex128)
+    psi_lst = torch.zeros_like(eloc_lst)
     idx_lst = torch.arange(dim).to(device)
     statistics = {}
 
@@ -88,7 +90,6 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
     #                           shuffle=False, drop_last=False)
 
     # for step, (ons, idx) in enumerate(loader):
-    # TODO: memory consuming
     # for ons, idx in loader: # why is slower than using split?
     for ons, idx in zip(x.split(nbatch), idx_lst.split(nbatch)):
         # lp = LineProfiler()
@@ -103,12 +104,13 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
             print(eloc_lst)
             print(psi_lst)
             raise ValueError(f"local energy is nan in error")
-        e_total = (eloc_lst * (psi_lst.pow(2)/(psi_lst.pow(2).sum()))).sum() + ecore
+        # e_total = (eloc_lst * (psi_lst.pow(2)/(psi_lst.pow(2).sum()))).sum() + ecore
+        e_total = (eloc_lst * (psi_lst * psi_lst.conj()/psi_lst.norm()**2)).sum() + ecore
     else:
         if state_idx is None:
             # [1, 1, 1, ...]
-            state_idx = torch.ones(dim, dtype=torch.float64).to(device)
-        state_prob = state_idx/state_idx.sum()
+            state_idx = torch.ones(dim, dtype=torch.complex128).to(device)
+        state_prob = (state_idx/state_idx.sum()).to(torch.complex128)
         eloc_mean = torch.einsum("i, i ->", eloc_lst, state_prob)
         e_total = eloc_mean + ecore
 
@@ -128,7 +130,8 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
         print(f"total energy cost time: {(t1-t0)/1.0E06:.3f} ms")
 
     del psi_lst, idx_lst
-    return e_total.item(), eloc_lst, statistics
+    print(f"total energy: {e_total.real.item():.8f}")
+    return e_total.real.item(), eloc_lst, statistics
 
 def energy_grad(eloc: Tensor, dlnPsi_lst: List[Tensor], 
                 N_state: int, state_idx: Tensor = None,
@@ -145,27 +148,21 @@ def energy_grad(eloc: Tensor, dlnPsi_lst: List[Tensor],
          List, length: n_para, element: [N_para],one dim
     """
     lst = []
-    psi_norm = psi.pow(2)/(psi.pow(2).sum())
-    for para in dlnPsi_lst:
-        dlnPsi = para.reshape(N_state, -1) # (N_state, N_para), two dim
-        # dlnPsi_all = para_all.reshape(state_idx.sum(), -1)
-        if not exact:
-            if state_idx is None:
-                # if state_idx.sum().item() != N_state:
-                #     raise Exception(f"The number of state {N_state} is not equal of state_idx {state_idx.sum().item()} ")
-                state_prob = torch.ones(N_state, dtype=torch.double, device=eloc.device)/N_state
-            else:
-                state_prob = state_idx/state_idx.sum()
-            F_p = torch.einsum("i, ij, i ->j", eloc, dlnPsi.conj(), state_prob)
-            F_p -= torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("ij, i -> j", dlnPsi.conj(), state_prob)
-            # a = torch.einsum("i, ij ->j", eloc_all, dlnPsi_all.conj())/(state_idx.sum())
-            # a -= eloc_all.mean() * dlnPsi_all.conj().mean(axis=0)
-            # print(np.allclose(a.numpy(), F_p.numpy()))
+    # TODO: psi_norm -> psi_prob, how to handle complex
+    if exact:
+        state_prob = psi * psi.conj() / psi.norm()**2
+    else:
+        if state_idx is None:
+            state_prob = torch.ones(N_state, dtype=torch.double, device=eloc.device)/N_state
         else:
-            F_p = torch.einsum("i, ij, i ->j", eloc, dlnPsi.conj(), psi_norm)
-            F_p -= torch.einsum("i, ij ->j", psi_norm, dlnPsi.conj()) * ((psi_norm * eloc).sum())
+            state_prob = state_idx/state_idx.sum()
+    state_prob = state_prob.to(torch.complex128)
+
+    for para in dlnPsi_lst:
+        dlnPsi = para.reshape(N_state, -1).to(torch.complex128) # (N_state, N_para), two dim
+        F_p = torch.einsum("i, ij, i ->j", eloc, dlnPsi.conj(), state_prob)
+        F_p -= torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("ij, i -> j", dlnPsi.conj(), state_prob)
         lst.append(2 * F_p.real)
-    del psi_norm
     return lst
 
 def mc_exact_errors(full_state: Tensor, 
