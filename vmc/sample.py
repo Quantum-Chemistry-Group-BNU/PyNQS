@@ -83,35 +83,40 @@ class MCMCSampler():
         check_para(initial_state)
         if self.debug_exact:
             dim = len(self.full_space)
-            nbatch = get_nbatch(self.sorb, dim, self.n_SinglesDoubles, self.max_memory, self.alpha)
-            e_total, eloc, stats_dict = total_energy(self.full_space, nbatch, self.h1e, self.h2e, 
-                                        self.nqs, self.ecore, self.sorb, 
-                                        self.nele, self.noa, self.nob,
-                                        verbose = self.verbose,
-                                        exact = self.debug_exact,
-                                        dtype=self.dtype)
-            sample_counts = torch.ones(dim, dtype=torch.float64, device=self.device)/dim
+            e_total, eloc, stats_dict = self.calculate_energy(self.full_space)
+            sample_counts = torch.ones(dim, dtype=torch.float64, device=self.device)
             return self.full_space.detach(), sample_counts, eloc, e_total, stats_dict
-        else:
-            self.state_sample: Tensor = torch.zeros_like(initial_state).repeat(self.n_sample, 1)
-            self.current_state: Tensor = initial_state.clone()
-            self.next_state: Tensor = initial_state.clone()
-            self.n_accept = 0
-            self.psi_sample: Tensor = torch.zeros(self.n_sample, dtype=self.dtype, device=self.device)
 
-        if (n_sweep is None) or (n_sweep <= self.therm_step + self.n_sample):
-            n_sweep = self.therm_step + self.n_sample
-
-        # convert to CPU and 'spin_flip_rand' is not implemented in "GPU"
-        if self.is_cuda:
-            self.state_sample = self.state_sample.to("cpu") 
-            self.current_state = self.current_state.to("cpu")
-            self.next_state = self.next_state.to("cpu")
-            self.nqs = self.nqs.to("cpu")
-            self.psi_sample = self.psi_sample.to("cpu")
-
-        print('Starting MCMC Sampling')
         t0 = time.time_ns()
+        sample_unique, sample_counts, state_prob, psi_unique = self.MCMC(n_sweep)
+        e_total, eloc, stats_dict = self.calculate_energy(sample_unique, state_prob=state_prob)
+
+        # print local energy statistics information
+        self._statistics(stats_dict)
+
+        if self.verbose:
+            print(f"sampling: {len(sample_counts)}/{sample_counts.sum().item()}")
+            # print(f"spin flip average time: {spin_time.mean():.3f} ms, total time {spin_time.sum():.3f} ms")
+            print(f"total energy: {e_total:.10f}")
+
+        if self.record_sample:
+            # TODO: if given sorb(not full space), this is error.
+            counts = sample_counts.to("cpu").numpy()
+            sample_str = state_to_string(sample_unique, self.sorb)
+            full_dict = dict.fromkeys(self.str_full, 0)
+            for s, i in zip(sample_str, counts):
+                full_dict[s] += i
+            new_df = pd.DataFrame({self.time_sample: full_dict.values()})
+            self.frame_sample = pd.concat([self.frame_sample, new_df], axis=1)
+            del full_dict
+        
+        self.time_sample += 1
+        delta = time.time_ns() - t0
+        print(f'Completed Monte Carlo Sampling {delta/1.0E09:.3f} s, acceptance ratio = {self.n_accept/self.n_sample:.3f}')
+        return sample_unique.detach(), sample_counts, eloc, e_total, stats_dict
+
+    def MCMC(self, n_sweep: int) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        print('Starting MCMC Sampling')
         if True:
             example_inputs = uint8_to_bit(self.current_state, self.sorb)
             serialized_model = torch.jit.trace(self.nqs, example_inputs)
@@ -154,53 +159,53 @@ class MCMCSampler():
             self.state_sample = self.state_sample.to(self.device)
             self.nqs = self.nqs.to(self.device)
 
-        # TODO: rename sample_idx -> sample_counts
         # remove duplicate state
         if self.is_cuda:
             # torch.unique could not return unique indices in old tensor
             sample_unique, sample_counts = torch.unique(self.state_sample, dim=0, return_counts=True)
             psi_unique = self.nqs(uint8_to_bit(sample_unique, self.sorb))
         else:
-            # CPU using Numpy 
+            # CPU using Numpy
             sample_unique, psi_idx, sample_counts = np.unique(self.state_sample.numpy(), axis=0, return_counts=True, return_index=True)
             psi_unique = self.psi_sample[torch.from_numpy(psi_idx)]
             sample_unique = torch.from_numpy(sample_unique)
             sample_counts =torch.from_numpy(sample_counts)
 
-        # TODO: how to calculate batch_size;
-        # calculate the max nbatch for given Max Memory
-        nbatch = get_nbatch(self.sorb, len(sample_unique), self.n_SinglesDoubles, self.max_memory, self.alpha)
-        e_total, eloc, stats_dict = total_energy(sample_unique, nbatch, self.h1e, self.h2e, self.nqs,
-                                     self.ecore, self.sorb, self.nele, self.noa, self.nob,
-                                     state_counts=sample_counts,
-                                     verbose=self.verbose,
-                                     exact=self.debug_exact, 
-                                     dtype=self.dtype)
+        state_prob = sample_counts/sample_counts.sum()
+        return sample_unique, sample_counts, state_prob, psi_unique
 
-        # print local energy statistics information
-        self._statistics(stats_dict)
+    def auto_regressive(self):
+        ...
 
-        if self.verbose:
-            print(f"sampling: {len(sample_counts)}/{sample_counts.sum().item()}")
-            # print(f"spin flip average time: {spin_time.mean():.3f} ms, total time {spin_time.sum():.3f} ms")
-            print(f"total energy: {e_total:.10f}")
+    def prepare_sample(self, initial_state: Tensor):
+        self.state_sample: Tensor = torch.zeros_like(initial_state).repeat(self.n_sample, 1)
+        self.current_state: Tensor = initial_state.clone()
+        self.next_state: Tensor = initial_state.clone()
+        self.n_accept = 0
+        self.psi_sample: Tensor = torch.zeros(self.n_sample, dtype=self.dtype, device=self.device)
 
-        if self.record_sample:
-            # TODO: if given sorb(not full space), this is error.
-            counts = sample_counts.to("cpu").numpy()
-            # sample_str = self.state_str(sample_unique)
-            sample_str = state_to_string(sample_unique, self.sorb)
-            full_dict = dict.fromkeys(self.str_full, 0)
-            for s, i in zip(sample_str, counts):
-                full_dict[s] += i
-            new_df = pd.DataFrame({self.time_sample: full_dict.values()})
-            self.frame_sample = pd.concat([self.frame_sample, new_df], axis=1)
-            del full_dict
-        
-        self.time_sample += 1
-        delta = time.time_ns() - t0
-        print(f'Completed Monte Carlo Sampling {delta/1.0E09:.3f} s, acceptance ratio = {self.n_accept/self.n_sample:.3f}')
-        return sample_unique.detach(), sample_counts, eloc, e_total, stats_dict
+        if (n_sweep is None) or (n_sweep <= self.therm_step + self.n_sample):
+            n_sweep = self.therm_step + self.n_sample
+
+        # convert to CPU and 'spin_flip_rand' is not implemented in "GPU"
+        if self.is_cuda:
+            self.state_sample = self.state_sample.to("cpu") 
+            self.current_state = self.current_state.to("cpu")
+            self.next_state = self.next_state.to("cpu")
+            self.nqs = self.nqs.to("cpu")
+            self.psi_sample = self.psi_sample.to("cpu")
+
+    # TODO: how to calculate batch_size;
+    # calculate the max nbatch for given Max Memory
+    def calculate_energy(self, sample: Tensor, state_prob: Tensor = None):
+        nbatch = get_nbatch(self.sorb, len(sample), self.n_SinglesDoubles, self.max_memory, self.alpha)
+        e_total, eloc, stats_dict = total_energy(sample, nbatch, self.h1e, self.h2e, self.nqs,
+                                                 self.ecore, self.sorb, self.nele, self.noa, self.nob,
+                                                 state_prob=state_prob,
+                                                 verbose=self.verbose,
+                                                 exact=self.debug_exact,
+                                                 dtype=self.dtype)
+        return e_total, eloc, stats_dict
 
     def __repr__(self) -> str:
         return (

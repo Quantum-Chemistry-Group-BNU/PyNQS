@@ -4,7 +4,7 @@ import torch
 import itertools
 import numpy as np
 from torch import Tensor
-from typing import List, Type
+from typing import List, Type, Tuple
 from dataclasses import dataclass
 
 from libs.hij_tensor import uint8_to_bit
@@ -91,7 +91,7 @@ def get_nbatch(sorb: int, n_sample_unique: int, n_comb_sd: int,
     # print(f"{m / Max_memory * 100:.3f} %, alpha = {alpha * 100:.3f} , batch: {batch}")
     return batch
 
-def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None):
+def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
     assert(x%2==0 and x <= sorb and x >=(noa + nob))
 
     noA_lst = list(itertools.combinations([i for i in range(0, x, 2)], noa))
@@ -106,6 +106,25 @@ def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None):
             s = "".join(list(map(str, state[::-1])))
             lst.append(string_to_state(sorb, s))
     return torch.tensor(lst, dtype=torch.uint8).to(device)
+
+def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Tensor]:
+    """
+     find the common onv in the two different onstate
+     Return:
+        common onv, index of in state1 and state2
+    """
+    assert (state1.dtype == torch.uint8 and state2.dtype == torch.uint8)
+    assert (state1.dim() == 2 and state2.dim() == 2)
+    union,counts = torch.cat([state1, state2]).unique(dim=0, return_counts=True)
+    common = union[torch.where(counts.gt(1))]
+
+    union1 = torch.cat([state1, common])
+    idx1 = np.unique(union1.to("cpu").detach().numpy(), axis=0, return_inverse=True)[1]
+    idx1 = idx1[state1.shape[0]:].to(state1.device)
+    union2 = torch.cat([state2, common])
+    idx2 = np.unique(union2.to("cpu").detach().numpy(), axis=0, return_inverse=True)[1]
+    idx2 = idx1[state2.shape[0]:].to(state2.device)
+    return common, idx1, idx2
 
 @dataclass(frozen=True)
 class Dtype:

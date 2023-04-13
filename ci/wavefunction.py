@@ -10,7 +10,8 @@ from typing import List, Tuple
 import matplotlib.pyplot as plt
 
 import libs.hij_tensor as pt
-from utils import check_para, ElectronInfo
+from vmc.sample import MCMCSampler
+from utils import check_para, ElectronInfo,find_common_state
 
 
 class CIWavefunction:
@@ -130,7 +131,7 @@ class CITrain:
                 self.lr_scheduler.step()
             self.ovlp_list.append(ovlp.detach().to("cpu").item())
             self.loss_list.append(loss.detach().to("cpu").item())
-            if ( epoch% self.nprt) == 0:
+            if (epoch% self.nprt) == 0:
                 delta = (time.time_ns() - t0)/1.E06
                 print(f"The {epoch:<5d} training, loss = {loss.item():.4E}, ovlp = {ovlp.item():.4E}, delta = {delta:.3f} ms")
 
@@ -153,9 +154,37 @@ class CITrain:
         ax2.legend(loc="best")
         fig.subplots_adjust(wspace=0, hspace=0.5)
         fig.savefig(prefix + "-pre_train.png", format="png", dpi=1000, bbox_inches='tight')
+    
+    def ci_onstate_loss(self, state: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        state is CISD
+        """
+        psi = self.model(state.requires_grad_())
+        model_CI = psi/torch.norm(psi).reshape(-1)
+        ovlp = torch.einsum("i, i", model_CI, self.pre_ci)
+        loss = 1 - ovlp.norm()**2
+        return tuple(loss, ovlp)
+
+    # TODO: how to normalization psi after sampling, date: 23-04-13, No Need
+    def sample_loss(self, sampler: MCMCSampler, initial_state: Tensor = None):
+        """
+        Loss Function = <psi|CI><CI|psi>/(<CI|CI><psi|psi>), psi comes from sampling
+        """
+        with torch.no_grad():
+            sample_unique, sample_counts, state_prob, psi_unique = sampler.MCMC()
+            x, idx_ci, idx_sample = find_common_state(self.onstate, sample_unique)
+            ovlp_state = pt.uint8_to_bit(x)
+
+        psi = self.model(ovlp_state.requires_grad_())
+        t = psi * state_prob[idx_sample]
+        ovlp1 = torch.einsum("i, i, i", state_prob[idx_sample], psi, self.pre_ci[idx_ci])
+        ovlp = torch.div(ovlp1.norm()**2, t.norm()**2)
+        loss = 1 - ovlp
+
+        return tuple(loss, ovlp)
 
     def __repr__(self) -> str:
-        return (
+        return ( 
             f"{type(self).__name__}" + "(\n"
             f"    Pre train model: {self.model}\n" +
             f"    Pre train time: {self.pre_max_iter}\n" +

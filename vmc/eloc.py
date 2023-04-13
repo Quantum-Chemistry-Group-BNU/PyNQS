@@ -73,7 +73,7 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
                 ecore: float,
                 sorb: int, nele: int,
                 noa: int, nob: int,
-                state_counts: Tensor= None,
+                state_prob: Tensor = None,
                 verbose: bool = False,
                 exact: bool = False,
                 dtype = torch.double) -> Tuple[float, Tensor, dict]:
@@ -96,23 +96,22 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
     for ons, idx in zip(x.split(nbatch), idx_lst.split(nbatch)):
         eloc_lst[idx], psi_lst[idx] = local_energy(ons, h1e, h2e, ansatz, sorb, nele, noa, nob, verbose=verbose, dtype=dtype)
 
-    if exact:
-        if torch.any(torch.isnan(eloc_lst)):
-            print(eloc_lst)
-            print(psi_lst)
-            raise ValueError(f"local energy is nan in error")
-        # e_total = (eloc_lst * (psi_lst.pow(2)/(psi_lst.pow(2).sum()))).sum() + ecore
-        e_total = (eloc_lst * (psi_lst * psi_lst.conj()/psi_lst.norm()**2)).sum() + ecore
-    else:
-        if state_counts is None:
-            # [1, 1, 1, ...]
-            state_counts = torch.ones(dim, dtype=dtype).to(device)
-        state_prob = (state_counts/state_counts.sum()).to(dtype)
-        eloc_mean = torch.einsum("i, i ->", eloc_lst, state_prob)
-        e_total = eloc_mean + ecore
+    # check local energy
+    if torch.any(torch.isnan(eloc_lst)):
+        raise ValueError(f"The Local energy exists nan")
 
-        variance = torch.sum((eloc_lst - eloc_mean)**2 * state_counts)
-        n_sample = state_counts.sum()
+    if exact:
+        state_prob = (psi_lst * psi_lst.conj())/psi_lst.norm()**2
+    else:
+        if state_prob is None:
+            state_prob = torch.ones(dim, dtype=dtype, device=device)/dim
+
+    eloc_mean = torch.einsum("i, i ->", eloc_lst, state_prob)
+    e_total = eloc_mean + ecore
+
+    if not exact:
+        variance = torch.sum((eloc_lst - eloc_mean)**2 *state_prob)
+        n_sample = dim
         sd = torch.sqrt(variance/n_sample)
         se = sd/torch.sqrt(n_sample)
         statistics["mean"] = e_total.real.item()
@@ -120,9 +119,7 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
         statistics["SD"] = sd.item()
         statistics["SE"] = se.item()
 
-
     t1 = time.time_ns()
-
     if verbose:
         print(f"total energy cost time: {(t1-t0)/1.0E06:.3f} ms")
 
