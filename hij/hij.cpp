@@ -1,4 +1,5 @@
 #include "utils_hij.h"
+#include <cmath>
 #include <exception>
 #include <algorithm>
 #include <string>
@@ -105,48 +106,53 @@ tuple_tensor_2d get_comb_tensor_1(torch::Tensor &bra_tensor, const int sorb,
   }
 }
 
-auto MCMC_sample(const std::string model_file,
-                            torch::Tensor &current_state,
-                            torch::Tensor &state_sample,
-                            const int sorb,
-                            const int nele, const int noA, const int noB,
-                            const int seed, const int n_sweep, const int therm_step
-                            )
-{
+auto MCMC_sample(const std::string model_file, torch::Tensor &initial_state,
+                 torch::Tensor &state_sample, torch::Tensor &psi_sample,
+                 const int sorb, const int nele, const int noA, const int noB,
+                 const int seed, const int n_sweep, const int therm_step) {
   int n_accept = 0;
-  torch::Tensor next_state = current_state.clone();
+  torch::Tensor next_state = initial_state.clone();
+  torch::Tensor current_state = initial_state.clone();
   // auto t1 = get_time();
   torch::jit::script::Module nqs = torch::jit::load(model_file);
   // double load_time = get_duration_nano(get_time()- t1)/1000000;
   std::vector<torch::jit::IValue> inputs = {uint8_to_bit(current_state, sorb)};
-  //double prob_current = std::pow(nqs.forward(inputs).toTensor().item<double>(), 2);
-  double prob_current = std::pow(nqs.forward(inputs).toTensor().norm().item<double>(), 2);
+  // double prob_current =
+  // std::pow(nqs.forward(inputs).toTensor().item<double>(), 2);
+  torch::Tensor psi_current = nqs.forward(inputs).toTensor();
+  double prob_current = std::pow(psi_current.norm().item<double>(), 2);
+  // double prob_current =
+  // std::pow(nqs.forward(inputs).toTensor().norm().item<double>(), 2);
   static std::mt19937 rng(seed);
   // double psi_time = 0.0;
   // double spin_time = 0.0;
   static std::uniform_real_distribution<double> u0(0, 1);
-  for (int i = 0; i < n_sweep; i++){
-    //auto t0 = get_time();
-    auto [psi, next_state] = spin_flip_rand_1(current_state, sorb, nele, noA, noB, seed);
-    //auto delta = get_duration_nano(get_time() - t0)/1000000 ;
-    // spin_time += delta;
+  for (int i = 0; i < n_sweep; i++) {
+    // auto t0 = get_time();
+    auto [psi, next_state] =
+        spin_flip_rand_1(current_state, sorb, nele, noA, noB, seed);
+    // auto delta = get_duration_nano(get_time() - t0)/1000000 ;
+    //  spin_time += delta;
     std::vector<torch::jit::IValue> inputs = {psi};
-    //auto t1 = get_time();
-    double prob_next = std::pow(nqs.forward(inputs).toTensor().norm().item<double>(), 2);
+    // auto t1 = get_time();
+    torch::Tensor psi_next = nqs.forward(inputs).toTensor();
+    double prob_next = std::pow(psi_next.norm().item<double>(), 2);
     // auto delta1 = get_duration_nano(get_time() - t1)/1000000 ;
     // psi_time += delta1;
-    double prob_accept = std::min(1.00, prob_next/prob_current);
+    double prob_accept = std::min(1.00, prob_next / prob_current);
     double p = u0(rng);
-    // std::cout << p << std::endl;
-    if (p <= prob_accept){
+    // std::cout << p << " " << prob_accept << std::endl;
+    if (p <= prob_accept) {
       current_state = next_state.clone();
       prob_current = prob_next;
-      if ( i >= therm_step){
+      psi_current = psi_next.clone();
+      if (i >= therm_step) {
         n_accept += 1;
       }
     }
-    if (i >= therm_step){
-      state_sample[i - therm_step] = current_state.clone(); 
+    if (i >= therm_step) {
+      state_sample[i - therm_step] = current_state.clone();
+      psi_sample[i - therm_step] = psi_current.clone();
     }
   }
   /**
@@ -155,8 +161,8 @@ auto MCMC_sample(const std::string model_file,
   std::cout << "model time " << psi_time << " " <<
   std::cout << "spin flip " << spin_time << " ms" << std::endl;
   **/
-  // return state_sample;
-  }
+  return n_accept;
+}
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij_torch,

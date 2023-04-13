@@ -18,7 +18,7 @@ from typing import List, Tuple
 from .sample import MCMCSampler
 from .eloc import total_energy, energy_grad
 from ci import CITrain, CIWavefunction, energy_CI
-from utils import ElectronInfo
+from utils import ElectronInfo,Dtype
 from libs.hij_tensor import uint8_to_bit
 
 __all__ = ["SR", "_calculate_sr", "sr_grad"]
@@ -41,19 +41,22 @@ class VMCOptimizer():
                 num_diff: bool = False,
                 verbose: bool = False,
                 analytic_derivate: bool = True,
-                device = None,
+                dtype: Dtype = None,
                 sr: bool = False,
                 HF_init: int = None,
                 external_model: any = None,
                 only_sample: bool = False,
                 pre_CI: CIWavefunction = None, 
-                pre_train_info: dict = None
+                pre_train_info: dict = None,
                 ) -> None:
-        self.device = device
-
+        if dtype is None:
+            dtype = Dtype()
+        self.dtype = dtype.dtype
+        self.device = dtype.device
+        self.external_model = external_model
         # whether read nqs/h1e-h2e from external file
-        if external_model is not None:
-            self.read_model(external_model)
+        if self.external_model is not None:
+            self.read_model(self.external_model)
         else:
             self.model_raw = nqs
             self.model = torch.compile(self.model_raw) if self.using_compile else self.model_raw
@@ -62,6 +65,7 @@ class VMCOptimizer():
             self.lr_scheduler = lr_scheduler(self.opt, **lr_sch_params)
         else:
             self.lr_scheduler = None
+
         self.HF_init = HF_init
         self.sr = sr
         self.max_iter = max_iter
@@ -72,7 +76,7 @@ class VMCOptimizer():
         # Sample
         self.sampler_param = sampler_param
         self.exact = self.sampler_param["debug_exact"]
-        self.sampler = MCMCSampler(self.model, electron_info, **self.sampler_param)
+        self.sampler = MCMCSampler(self.model, electron_info, dtype=self.dtype, **self.sampler_param)
         self.n_sample = 0 
         self.record_sample = self.sampler_param["record_sample"]
         self.only_sample = only_sample
@@ -105,8 +109,9 @@ class VMCOptimizer():
         self.nv = ele_info.nv
         self.nob = ele_info.nob
         self.noa = ele_info.noa
-        self.h1e: Tensor = ele_info.h1e
-        self.h2e: Tensor = ele_info.h2e
+        if self.external_model is None:
+            self.h1e: Tensor = ele_info.h1e
+            self.h2e: Tensor = ele_info.h2e
         self.ecore = ele_info.ecore
         self.onstate = ele_info.onstate
 
@@ -286,15 +291,17 @@ class VMCOptimizer():
                 param.grad = grad_update_lst[i].detach().clone().reshape(param.shape)
 
     def _auto_diff_loss(self, state, eloc, state_idx) -> None:
-        psi = self.model(state.requires_grad_()).to(torch.complex128)
+        psi = self.model(state.requires_grad_()).to(self.dtype)
         with torch.no_grad():
             if self.exact:
                 state_prob = psi * psi.conj() / psi.norm()**2
             else:
-                state_prob = state_idx/state_idx.sum().to(torch.complex128)
+                state_prob = state_idx/state_idx.sum().to(self.dtype)
 
         # F_p = 2R(<O* * eloc> - <O*><eloc>)
         log_psi = psi.log()
+        if torch.any(torch.isnan(log_psi)):
+            raise ValueError(f"There are negative numbers in the log-psi, please using Complex128")
         loss1 = torch.einsum("i, i, i ->", eloc, log_psi.conj(), state_prob)
         loss2 = torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("i, i -> ", log_psi.conj(), state_prob)
         loss = 2 * (loss1 - loss2).real

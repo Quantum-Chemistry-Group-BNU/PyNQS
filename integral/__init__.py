@@ -12,7 +12,7 @@ def integral_pyscf(atom: str,
         atom = atom,
         verbose = 3,
         basis = basis,
-        symmetry = True
+        symmetry = False
     )
     mol.build()
     sorb = mol.nao * 2
@@ -32,25 +32,26 @@ def integral_pyscf(atom: str,
 
     if sorb <= 20:
         cisolver = fci.FCI(mf) 
-        e_fci, coeff = cisolver.kernel()
+        e_ref, coeff = cisolver.kernel()
         mycc = cc.CCSD(mf)
         _ = mycc.kernel()
         print(f"CCSD energy: {mycc.e_tot:.10f}")
-        print(f"Full CI energy: {e_fci:.10f}")
+        print(f"Full CI energy: {e_ref:.10f}")
     else:
         mycc = cc.CCSD(mf)
         _ = mycc.kernel()
-        return (sorb, nele, mycc.e_tot)
+        e_ref = mycc.e_tot
+        # return (sorb, nele, mycc.e_tot)
 
     if cisd_coeff:
         myuci = ci.UCISD(mf)
         cisd_amp = myuci.kernel()[1]
-        return (sorb, nele, e_fci, cisd_amp)
+        return (sorb, nele, e_ref, cisd_amp)
 
     if not ci_coeff:
-        return (sorb , nele, e_fci)
+        return (sorb , nele, e_ref)
     else:
-        return (sorb , nele, e_fci, coeff)
+        return (sorb , nele, e_ref, coeff)
 
 if __name__ == "__main__":
     atom: str = ""

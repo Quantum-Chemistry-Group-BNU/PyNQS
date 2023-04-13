@@ -72,7 +72,8 @@ do
         sh compile.sh -s CPU or -s GPU"
         exit 1
         ;;
-    *) echo -e "parameter error, using sh compile.sh -h" 
+    *) echo -e "parameter error, using sh compile.sh -h"
+    exit 1
     esac
 done
 if [ -z "${device}" ];then

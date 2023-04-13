@@ -1,19 +1,21 @@
 import time
+import os
 import random
 import torch
+import tempfile
 import numpy as np
 import pandas as pd
 from functools import partial
 from typing import Callable, Tuple, List
-from torch import Tensor
+from torch import Tensor, nn
 from pandas import DataFrame
 
 from memory_profiler import profile
 from line_profiler import LineProfiler
 
-from vmc.PublicFunction import check_para, get_Num_SinglesDoubles, get_nbatch
 from vmc.eloc import total_energy
-from libs.hij_tensor import uint8_to_bit, spin_flip_rand
+from libs.hij_tensor import uint8_to_bit, spin_flip_rand, MCMC_sample
+from utils import state_to_string, ElectronInfo, check_para, get_nbatch
 
 print = partial(print, flush=True)
 
@@ -26,42 +28,35 @@ class MCMCSampler():
     n_accept: int
     str_full: List[str]
     frame_sample: DataFrame
-    def __init__(self, nqs: Callable,
-                 h1e: Tensor, h2e: Tensor,
-                 sorb: int, nele: int, ecore: float, n_sample: int = 100, 
+    def __init__(self, nqs: nn.Module, ele_info: ElectronInfo,
+                 n_sample: int = 100, 
                  therm_step: int = 2000, verbose: bool = False, 
-                 debug_exact: bool = False, full_space: Tensor = None,
+                 debug_exact: bool = False,
                  seed: int = 100, record_sample: bool = True,
                  max_memory: float = 4, alpha: float = 0.25,
+                 dtype = torch.double,
                  ) -> None:
-        if debug_exact:
-            assert full_space is not None, "full space must be given"
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
-        self.debug_exact = debug_exact
+
+        self.ele_info = ele_info
+        self.read_electron_info(self.ele_info)
         self.nqs = nqs
-        self.sorb = sorb
-        self.nele = nele
-        self.no = nele
-        self.nv = sorb - nele
-        self.nob = nele//2
-        self.noa = nele - self.nob 
-        self.n_SinglesDoubles = get_Num_SinglesDoubles(self.sorb, self.noa, self.nob)
-        self.ecore = ecore
+        self.debug_exact = debug_exact
         self.seed = seed
-        self.verbose: bool = verbose
-        self.h1e: Tensor = h1e
-        self.h2e: Tensor = h2e
+        self.verbose = verbose
         self.therm_step = therm_step
         self.n_sample = n_sample
-        self.full_space= full_space
-        self.is_cuda = True if h1e.is_cuda else False
-        self.device = h1e.device
+
+        # device and cuda
+        self.is_cuda = True if self.h1e.is_cuda else False
+        self.device = self.h1e.device
+        self.dtype = dtype
 
         # save sampler
         self.record_sample = record_sample
         if self.record_sample:
-            self.str_full = self.state_str(self.full_space)
+            self.str_full = state_to_string(self.full_space, self.sorb)
             self.frame_sample = pd.DataFrame({"full_space": self.str_full})
         self.time_sample = 0
 
@@ -69,6 +64,20 @@ class MCMCSampler():
         self.max_memory = max_memory
         self.alpha = alpha
     
+    def read_electron_info(self, ele_info: ElectronInfo):
+        print(f"Read electronic structure information From {ele_info.__name__}")
+        self.sorb = ele_info.sorb
+        self.nele = ele_info.nele
+        self.no = ele_info.nele
+        self.nv = ele_info.nv
+        self.nob = ele_info.nob
+        self.noa = ele_info.noa
+        self.h1e: Tensor = ele_info.h1e
+        self.h2e: Tensor = ele_info.h2e
+        self.ecore = ele_info.ecore
+        self.n_SinglesDoubles = ele_info.n_SinglesDoubles
+        self.full_space= ele_info.onstate
+
     # @profile(precision=4, stream=open('MCMC_memory_profiler.log','w+'))
     def run(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, Tensor, float, dict]:
         check_para(initial_state)
@@ -79,80 +88,110 @@ class MCMCSampler():
                                         self.nqs, self.ecore, self.sorb, 
                                         self.nele, self.noa, self.nob,
                                         verbose = self.verbose,
-                                        exact = self.debug_exact)
-            sample_idx = torch.ones(dim, dtype=torch.float64, device=self.device)/dim
-            return self.full_space.detach(), sample_idx, eloc, e_total, stats_dict
+                                        exact = self.debug_exact,
+                                        dtype=self.dtype)
+            sample_counts = torch.ones(dim, dtype=torch.float64, device=self.device)/dim
+            return self.full_space.detach(), sample_counts, eloc, e_total, stats_dict
         else:
             self.state_sample: Tensor = torch.zeros_like(initial_state).repeat(self.n_sample, 1)
-            self.current_state: Tensor = initial_state
-            self.next_state: Tensor = initial_state
+            self.current_state: Tensor = initial_state.clone()
+            self.next_state: Tensor = initial_state.clone()
             self.n_accept = 0
+            self.psi_sample: Tensor = torch.zeros(self.n_sample, dtype=self.dtype, device=self.device)
 
         if (n_sweep is None) or (n_sweep <= self.therm_step + self.n_sample):
             n_sweep = self.therm_step + self.n_sample
 
         # convert to CPU and 'spin_flip_rand' is not implemented in "GPU"
         if self.is_cuda:
-            self.state_sample = self.state_sample.to("cpu")
+            self.state_sample = self.state_sample.to("cpu") 
             self.current_state = self.current_state.to("cpu")
             self.next_state = self.next_state.to("cpu")
             self.nqs = self.nqs.to("cpu")
-    
+            self.psi_sample = self.psi_sample.to("cpu")
+
         print('Starting MCMC Sampling')
-        # print(self.sorb, self.nele, self.noa, self.nob, self.seed)
         t0 = time.time_ns()
-        prob_current = self.nqs(uint8_to_bit(self.current_state, self.sorb))**2
-        spin_time = torch.zeros(n_sweep)
-        for i in range(n_sweep):
-            t1 = time.time_ns()
-            psi, self.next_state = spin_flip_rand(self.current_state, self.sorb, self.nele, self.noa, self.nob, self.seed)
-            # psi, self.next_state = spin_flip_rand(self.next_state, self.sorb, self.nele, self.seed)
-            spin_time[i] = (time.time_ns() - t1)/1.0E06
-            prob_next = self.nqs(psi)**2
-            prob_accept = min(1.00, (prob_next/prob_current).item())
-            p = random.random()
-            # if self.verbose and i >= self.therm_step:
-            #     print(f"prob_next: {prob_next.item()}, prob_current: {prob_current.item()}")
-            #     print(f"random p {p:.3f}, prob_accept {prob_accept:.3f}")
-            #     print(f"current state: {self.current_state}")
-            if p <= prob_accept:
-                self.current_state = self.next_state.clone()
-                prob_current = prob_next.clone()
+        if True:
+            example_inputs = uint8_to_bit(self.current_state, self.sorb)
+            serialized_model = torch.jit.trace(self.nqs, example_inputs)
+            model_file = tempfile.mkstemp()[1]
+            serialized_model.save(model_file)
+            # print(f"Serialized model time: {(time.time_ns() - t0)/1.E06:.3f} ms")
+            with torch.no_grad():
+                self.n_accept = MCMC_sample(model_file, self.current_state, self.state_sample, 
+                                            self.psi_sample, self.sorb, self.nele, self.noa, 
+                                            self.nob, self.seed, n_sweep, self.therm_step)
+            os.remove(model_file)
+            # print(f"CPP model time: {(time.time_ns() - t0)/1.E06:.3f} ms")
+        else:
+            with torch.no_grad():
+                psi_current = self.nqs(uint8_to_bit(self.current_state, self.sorb))
+                prob_current = psi_current.norm()**2
+            for i in range(n_sweep):
+                psi, self.next_state = spin_flip_rand(self.current_state, self.sorb, self.nele, self.noa, self.nob, self.seed)
+                with torch.no_grad():
+                    psi_next = self.nqs(psi)
+                    prob_next = psi_next.norm()**2
+                prob_accept = min(1.00, (prob_next/prob_current).item())
+                p = random.random()
+                # if self.verbose and i >= self.therm_step:
+                #     print(f"prob_next: {prob_next.item()}, prob_current: {prob_current.item()}")
+                #     print(f"random p {p:.3f}, prob_accept {prob_accept:.3f}")
+                #     print(f"current state: {self.current_state}")
+                if p <= prob_accept:
+                    self.current_state = self.next_state.clone()
+                    psi_current = psi_next.clone()
+                    prob_current = prob_next.clone()
+                    if i >= self.therm_step:
+                        self.n_accept += 1
+                        
                 if i >= self.therm_step:
-                    self.n_accept += 1
-                    
-            if i >= self.therm_step:
-                self.state_sample[i-self.therm_step] = self.current_state.clone()
+                    self.state_sample[i-self.therm_step] = self.current_state.clone()
+                    self.psi_sample[i - self.therm_step] = psi_current.clone()
 
         if self.is_cuda:
             self.state_sample = self.state_sample.to(self.device)
             self.nqs = self.nqs.to(self.device)
 
+        # TODO: rename sample_idx -> sample_counts
         # remove duplicate state
-        sample_unique, sample_idx = torch.unique(self.state_sample, dim=0, return_counts=True)
-        
+        if self.is_cuda:
+            # torch.unique could not return unique indices in old tensor
+            sample_unique, sample_counts = torch.unique(self.state_sample, dim=0, return_counts=True)
+            psi_unique = self.nqs(uint8_to_bit(sample_unique, self.sorb))
+        else:
+            # CPU using Numpy 
+            sample_unique, psi_idx, sample_counts = np.unique(self.state_sample.numpy(), axis=0, return_counts=True, return_index=True)
+            psi_unique = self.psi_sample[torch.from_numpy(psi_idx)]
+            sample_unique = torch.from_numpy(sample_unique)
+            sample_counts =torch.from_numpy(sample_counts)
+
+        # TODO: how to calculate batch_size;
         # calculate the max nbatch for given Max Memory
         nbatch = get_nbatch(self.sorb, len(sample_unique), self.n_SinglesDoubles, self.max_memory, self.alpha)
         e_total, eloc, stats_dict = total_energy(sample_unique, nbatch, self.h1e, self.h2e, self.nqs,
                                      self.ecore, self.sorb, self.nele, self.noa, self.nob,
-                                     state_idx=sample_idx,
+                                     state_counts=sample_counts,
                                      verbose=self.verbose,
-                                     exact=self.debug_exact)
+                                     exact=self.debug_exact, 
+                                     dtype=self.dtype)
 
         # print local energy statistics information
         self._statistics(stats_dict)
 
         if self.verbose:
-            print(f"sampling: {len(sample_idx)}/{sample_idx.sum().item()}")
-            print(f"spin flip average time: {spin_time.mean():.3f} ms, total time {spin_time.sum():.3f} ms")
+            print(f"sampling: {len(sample_counts)}/{sample_counts.sum().item()}")
+            # print(f"spin flip average time: {spin_time.mean():.3f} ms, total time {spin_time.sum():.3f} ms")
             print(f"total energy: {e_total:.10f}")
 
         if self.record_sample:
             # TODO: if given sorb(not full space), this is error.
-            idx = sample_idx.to("cpu").numpy()
-            sample_str = self.state_str(sample_unique)
+            counts = sample_counts.to("cpu").numpy()
+            # sample_str = self.state_str(sample_unique)
+            sample_str = state_to_string(sample_unique, self.sorb)
             full_dict = dict.fromkeys(self.str_full, 0)
-            for s, i in zip(sample_str, idx):
+            for s, i in zip(sample_str, counts):
                 full_dict[s] += i
             new_df = pd.DataFrame({self.time_sample: full_dict.values()})
             self.frame_sample = pd.concat([self.frame_sample, new_df], axis=1)
@@ -161,18 +200,8 @@ class MCMCSampler():
         self.time_sample += 1
         delta = time.time_ns() - t0
         print(f'Completed Monte Carlo Sampling {delta/1.0E09:.3f} s, acceptance ratio = {self.n_accept/self.n_sample:.3f}')
+        return sample_unique.detach(), sample_counts, eloc, e_total, stats_dict
 
-        # return self.state_sample.detach(), eloc1, e_total1,
-        return sample_unique.detach(), sample_idx, eloc, e_total, stats_dict
-
-    # right -> left (0011-> HF state H2)
-    def state_str(self, state) -> List :
-        tmp = []
-        full_bit = ((uint8_to_bit(state, self.sorb)+1)//2).to(torch.uint8).tolist()
-        for lst in full_bit:
-            tmp.append("".join(list(map(str, lst))[::-1]))
-        return tmp
-    
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}:" + " (\n"
@@ -186,5 +215,24 @@ class MCMCSampler():
         )
     
     def _statistics(self, data: dict):
-        s = f"E_total = {data['mean']:.10f} ± {data['SE']:.3E} [σ² = {data['var']:.3E}]"
+        s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}]"
         print(s)
+
+class VMCEnergy:
+    def __init__(self, nqs: nn.Module) -> None:
+        self._model = nqs
+
+    @property
+    def model(self):
+        return self._model
+
+    @model.setter
+    def model(self, nqs: nn.Module):
+        self._model = nqs
+
+    def energy(self,e: ElectronInfo, sampler_param: dict, 
+               initial_state: Tensor = None) -> float:
+        sampler = MCMCSampler(self.model, e, **sampler_param)
+        if initial_state is None:
+            initial_state = sampler.ele_info.onstate[0]
+        return sampler.run(initial_state)[3]

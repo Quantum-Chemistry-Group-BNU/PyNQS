@@ -59,7 +59,7 @@ a = (np.allclose(
     unique_sample_1
 ))
 assert(a)
-exit()
+# exit()
 
 x = torch.tensor([[216, 000, 0, 0, 0, 0, 0, 0], [120, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
 # x = torch.tensor([[216, 000, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
@@ -68,7 +68,7 @@ nele = 4
 noa = nele//2
 nob = nele -noa
 x = x.repeat(1000, 1)
-x_cuda = x.to("cuda")
+x_cuda = x.to("cpu")
 
 
 print(f"Test new 'Singles and Double functions' in CPU and GPU:")

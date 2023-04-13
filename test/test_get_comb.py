@@ -2,10 +2,10 @@ import pytest
 import torch 
 import numpy as np
 from typing import List 
-from vmc.PublicFunction import given_onstate
+from utils import state_to_string
 from libs import hij_tensor as hij
 
-from utils_test import state_str, read_info
+from utils_test import read_info
 
 devices = (torch.device("cpu"), torch.device('cuda:0'))
 # devices = (torch.device("cpu"),) 
@@ -31,7 +31,7 @@ def test_comb():
             assert(a)
             if not a:
                 print(x0[i], "\n", unique_1, "\n", unique_0)
-            a = sorted(state_str(comb_bit[i], sorb))
-            b = sorted(state_str(state_bit, sorb))
+            a = sorted(state_to_string(comb_bit[i]))
+            b = sorted(state_to_string(state_bit))
             assert (a == b)
 test_comb()

@@ -10,7 +10,7 @@ from memory_profiler import profile
 from line_profiler import LineProfiler
 
 import libs.hij_tensor as pt
-from vmc.PublicFunction import check_para
+from utils import check_para
 
 __all__ = ["local_energy","total_energy", "energy_grad"]
 print = partial(print, flush=True)
@@ -20,7 +20,8 @@ def local_energy(x: Tensor, h1e: Tensor, h2e: Tensor,
                  ansatz: Callable,
                  sorb: int, nele: int,
                  noa: int, nob: int,
-                 verbose: bool = False) ->Tuple[Tensor, Tensor]:
+                 verbose: bool = False,
+                 dtype = torch.double) ->Tuple[Tensor, Tensor]:
     """
     Calculate the local energy for given state.
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'> 
@@ -65,20 +66,21 @@ def local_energy(x: Tensor, h1e: Tensor, h2e: Tensor,
     del x1, comb_hij, comb_x
     # print(eloc, psi_x1[..., 0])
 
-    return eloc.to(torch.complex128), psi_x1[..., 0].to(torch.complex128)
+    return eloc.to(dtype), psi_x1[..., 0].to(dtype)
 
 # @profile(precision=4, stream=open('total_memory_profiler.log','w+'))
 def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Callable,
                 ecore: float,
                 sorb: int, nele: int,
                 noa: int, nob: int,
-                state_idx: Tensor= None,
+                state_counts: Tensor= None,
                 verbose: bool = False,
-                exact: bool = False) -> Tuple[float, Tensor, dict]:
+                exact: bool = False,
+                dtype = torch.double) -> Tuple[float, Tensor, dict]:
 
     dim: int = x.shape[0]
     device = x.device
-    eloc_lst = torch.zeros(dim, device=device).to(torch.complex128)
+    eloc_lst = torch.zeros(dim, device=device).to(dtype)
     psi_lst = torch.zeros_like(eloc_lst)
     idx_lst = torch.arange(dim).to(device)
     statistics = {}
@@ -92,12 +94,7 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
     # for step, (ons, idx) in enumerate(loader):
     # for ons, idx in loader: # why is slower than using split?
     for ons, idx in zip(x.split(nbatch), idx_lst.split(nbatch)):
-        # lp = LineProfiler()
-        # lp_wrapper = lp(local_energy)
-        # lp_wrapper(ons, h1e, h2e, ansatz, sorb, nele, verbose=verbose)
-        # lp.print_stats()
-        #  exit()
-        eloc_lst[idx], psi_lst[idx] = local_energy(ons, h1e, h2e, ansatz, sorb, nele, noa, nob, verbose=verbose)
+        eloc_lst[idx], psi_lst[idx] = local_energy(ons, h1e, h2e, ansatz, sorb, nele, noa, nob, verbose=verbose, dtype=dtype)
 
     if exact:
         if torch.any(torch.isnan(eloc_lst)):
@@ -107,19 +104,19 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
         # e_total = (eloc_lst * (psi_lst.pow(2)/(psi_lst.pow(2).sum()))).sum() + ecore
         e_total = (eloc_lst * (psi_lst * psi_lst.conj()/psi_lst.norm()**2)).sum() + ecore
     else:
-        if state_idx is None:
+        if state_counts is None:
             # [1, 1, 1, ...]
-            state_idx = torch.ones(dim, dtype=torch.complex128).to(device)
-        state_prob = (state_idx/state_idx.sum()).to(torch.complex128)
+            state_counts = torch.ones(dim, dtype=dtype).to(device)
+        state_prob = (state_counts/state_counts.sum()).to(dtype)
         eloc_mean = torch.einsum("i, i ->", eloc_lst, state_prob)
         e_total = eloc_mean + ecore
 
-        variance = torch.sum((eloc_lst - eloc_mean)**2 * state_idx)
-        n_sample = state_idx.sum()
+        variance = torch.sum((eloc_lst - eloc_mean)**2 * state_counts)
+        n_sample = state_counts.sum()
         sd = torch.sqrt(variance/n_sample)
         se = sd/torch.sqrt(n_sample)
-        statistics["mean"] = e_total.item()
-        statistics["var"] = variance.item()
+        statistics["mean"] = e_total.real.item()
+        statistics["var"] = variance.real.item()
         statistics["SD"] = sd.item()
         statistics["SE"] = se.item()
 
@@ -136,7 +133,8 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
 def energy_grad(eloc: Tensor, dlnPsi_lst: List[Tensor], 
                 N_state: int, state_idx: Tensor = None,
                 psi: Tensor = None,
-                exact: bool = False) -> List[Tensor]:
+                exact: bool = False,
+                dtype = torch.double) -> List[Tensor]:
     """
     calculate the energy gradients in sampling and exact:
         sampling:
@@ -148,18 +146,17 @@ def energy_grad(eloc: Tensor, dlnPsi_lst: List[Tensor],
          List, length: n_para, element: [N_para],one dim
     """
     lst = []
-    # TODO: psi_norm -> psi_prob, how to handle complex
     if exact:
         state_prob = psi * psi.conj() / psi.norm()**2
     else:
         if state_idx is None:
-            state_prob = torch.ones(N_state, dtype=torch.double, device=eloc.device)/N_state
+            state_prob = torch.ones(N_state, dtype=dtype, device=eloc.device)/N_state
         else:
             state_prob = state_idx/state_idx.sum()
-    state_prob = state_prob.to(torch.complex128)
+    state_prob = state_prob.to(dtype)
 
     for para in dlnPsi_lst:
-        dlnPsi = para.reshape(N_state, -1).to(torch.complex128) # (N_state, N_para), two dim
+        dlnPsi = para.reshape(N_state, -1).to(dtype) # (N_state, N_para), two dim
         F_p = torch.einsum("i, ij, i ->j", eloc, dlnPsi.conj(), state_prob)
         F_p -= torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("ij, i -> j", dlnPsi.conj(), state_prob)
         lst.append(2 * F_p.real)

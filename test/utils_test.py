@@ -1,14 +1,8 @@
 from typing import List 
 import numpy as np 
 import torch
-
-def state_str(state, sorb) -> List :
-    tmp = []
-    full_bit = ((state+1)//2).to(torch.uint8).tolist()
-    for lst in full_bit:
-        tmp.append("".join(list(map(str, lst))[::-1]))
-    return tmp
-
+from utils import given_onstate
+from libs import hij_tensor as hij
 
 def read_info(filename):
     state = torch.load(filename)
