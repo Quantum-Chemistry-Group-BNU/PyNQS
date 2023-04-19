@@ -9,6 +9,7 @@
 #define THREAD 32
 #define VERBOSE false
 #define DEBUG false
+// #define GPU 1
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) \

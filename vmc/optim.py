@@ -1,5 +1,6 @@
 import time
 import random
+import platform
 import torch
 import numpy as np
 
@@ -16,7 +17,8 @@ from typing import List, Tuple
 
 from .sample import MCMCSampler
 from .eloc import total_energy, energy_grad
-from .PublicFunction import read_integral
+from ci import CITrain, CIWavefunction, energy_CI
+from utils import ElectronInfo,Dtype
 from libs.hij_tensor import uint8_to_bit
 
 __all__ = ["SR", "_calculate_sr", "sr_grad"]
@@ -24,104 +26,124 @@ print = partial(print, flush=True)
 
 class VMCOptimizer():
 
-    h1e: Tensor = None
-    h2e: Tensor = None
-    onstate: Tensor = None
-    ecore: float = None
-    sorb: int = None
-
-    def __init__(self, nqs: nn.Module, opt_type: Optimizer,
+    sys_name = platform.node()
+    TORCH_VERSION: str = torch.__version__
+    # torch.compile is lower in GTX 1650, but faster in A100
+    using_compile: bool = True if sys_name != "myarch" and TORCH_VERSION>= '2.0.0' else False
+    def __init__(self, nqs: nn.Module, 
                 sampler_param: dict,
-                nele: int = None,
+                electron_info: ElectronInfo,
+                opt_type: Optimizer = torch.optim.Adam,
+                opt_params: dict = {"lr": 0.005, "weight_decay": 0.001},
                 lr_scheduler = None,
-                integral_file: str = None,
-                electron_info: dict = None,
+                lr_sch_params: dict = None,
                 max_iter: int = 2000,
                 num_diff: bool = False,
                 verbose: bool = False,
                 analytic_derivate: bool = True,
-                device = None,
+                dtype: Dtype = None,
                 sr: bool = False,
                 HF_init: int = None,
                 external_model: any = None,
-                only_sample: bool = False) -> None:
-        if external_model is not None:
-            self.read_model(external_model)
+                only_sample: bool = False,
+                pre_CI: CIWavefunction = None, 
+                pre_train_info: dict = None,
+                ) -> None:
+        if dtype is None:
+            dtype = Dtype()
+        self.dtype = dtype.dtype
+        self.device = dtype.device
+        self.external_model = external_model
+        # whether read nqs/h1e-h2e from external file
+        if self.external_model is not None:
+            self.read_model(self.external_model)
         else:
-            self.model = nqs 
-            self.opt = opt_type
-            self.lr_scheduler = lr_scheduler
-            self.HF_init = HF_init
-            self.sr = sr
-        self.device = device
-        if integral_file is not None and nele is not None:
-            self.integral_file = integral_file
-            self.nele = nele
-            self.read_integral_info()
+            self.model_raw = nqs
+            self.model = torch.compile(self.model_raw) if self.using_compile else self.model_raw
+        self.opt: Optimizer = opt_type(self.model.parameters(), **opt_params)
+        if lr_sch_params is not None and lr_sch_params is None:
+            self.lr_scheduler = lr_scheduler(self.opt, **lr_sch_params)
         else:
-            s = 'h1e, h2e, onstate, ecore, sorb, nele'
-            print(f"Read the {s} from dict 'electron_info' ")
-            info = ("h1e", "h2e", "onstate", "ecore", "sorb", "nele")
-            result = tuple(electron_info[i] for i in info)
-            self.h1e, self.h2e, self.onstate, self.ecore, self.sorb, self.nele = result
-        
+            self.lr_scheduler = None
+
+        self.HF_init = HF_init
+        self.sr = sr
         self.max_iter = max_iter
         self.num_diff = num_diff
         self.analytic_derivate = analytic_derivate
         self.verbose = verbose
-        self.dim = self.onstate.shape[0]
+
+        # Sample
         self.sampler_param = sampler_param
         self.exact = self.sampler_param["debug_exact"]
-        self.n_sample = self.dim if self.exact else self.sampler_param["n_sample"]
-        self.n_sample_unique: Tensor = None
+        self.sampler = MCMCSampler(self.model, electron_info, dtype=self.dtype, **self.sampler_param)
+        self.n_sample = 0 
         self.record_sample = self.sampler_param["record_sample"]
-        self.sampler = MCMCSampler(self.model, self.h1e, self.h2e,
-                                 self.sorb, self.nele, self.ecore,
-                                 full_space=self.onstate, **self.sampler_param)
         self.only_sample = only_sample
+
+        # electronic structure information
+        self.read_electron_info(self.sampler.ele_info)
+        self.dim = self.onstate.shape[0]
+
+        # record optim 
         self.n_para = len(list(self.model.parameters()))
         self.grad_e_lst: List[Tensor] = [[] for _ in range(self.n_para)]
         self.grad_param_lst: List[Tensor] = [[] for _ in range(self.n_para)]
         self.e_lst: List[float] = []
+        self.stats_lst: List[dict] = []
         self.time_sample: List[float] = []
         self.time_iter: List[float] = []
         print(f"NQS model:\n{self.model}")
         print(f"Optimizer:\n{self.opt}")
-        print(f"Sampler\n{self.sampler}")
+        print(f"Sampler:\n{self.sampler}")
 
-    def read_integral_info(self):
-        result = read_integral(self.integral_file, self.nele, self.device)
-        self.h1e, self.h2e, self.onstate, self.ecore, self.sorb = result
+        # pre-train CI wavefunction
+        self.pre_CI = pre_CI
+        self.pre_train_info = pre_train_info
+
+    def read_electron_info(self, ele_info: ElectronInfo):
+        print(ele_info)
+        self.sorb = ele_info.sorb
+        self.nele = ele_info.nele
+        self.no = ele_info.nele
+        self.nv = ele_info.nv
+        self.nob = ele_info.nob
+        self.noa = ele_info.noa
+        if self.external_model is None:
+            self.h1e: Tensor = ele_info.h1e
+            self.h2e: Tensor = ele_info.h2e
+        self.ecore = ele_info.ecore
+        self.onstate = ele_info.onstate
 
     def read_model(self, external_model):
-        print(f"Read nqs model from '.pth' file {external_model}")
-        state = torch.load(external_model)
-        self.model = state["model"]
-        self.opt = state["optimizer"]
-        self.lr_scheduler = state["lr_scheduler"]
-        self.HF_init = state["HF_init"]
-        self.sr = state["sr"]
+        print(f"Read nqs model/h1e-h2e from '.pth' file {external_model}")
+        state = torch.load(external_model, map_location=self.device)
+        self.model_raw = state["model"]
+        self.model = torch.compile(self.model_raw) if self.using_compile else self.model_raw
+        # notice h1e, he2 may be different even if the coordinate and basis are the same.
+        self.h1e = state["h1e"]
+        self.h2e = state["h2e"]
 
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self):
         for p in range(self.max_iter):
             t0 = time.time_ns()
-            # 太随机了
             if self.HF_init is None or p < self.HF_init:
                 initial_state = self.onstate[random.randrange(self.dim)].clone().detach()
             else:
                 initial_state = self.onstate[0].clone().detach()
 
-            print(f"initial_state : {initial_state}")
+            # print(f"initial_state : {initial_state}")
             # lp = LineProfiler()
             # lp_wrapper = lp(self.sampler.run)
             # lp_wrapper(initial_state)
             # lp.print_stats()
             # exit()
-            state, state_idx, eloc, e_total, = self.sampler.run(initial_state)
-            
+            state, state_idx, eloc, e_total, stats = self.sampler.run(initial_state)
+
             self.n_sample = len(state)
             self.e_lst.append(e_total)
+            self.stats_lst.append(stats)
 
             if self.only_sample:
                 delta = (time.time_ns() - t0)/1.00E06
@@ -129,28 +151,44 @@ class VMCOptimizer():
                 continue
 
             sample_state = uint8_to_bit(state, self.sorb)
-            
+
             delta = (time.time_ns() - t0)/1.00E06
             self.time_sample.append(delta)
 
-            grad_update_lst = self._update_grad_model(sample_state, eloc, p, state_idx)
-            
-            # modify parameters grad (energy grad) manually
-            for i, param in enumerate(self.model.parameters()):
-                param.grad.data = grad_update_lst[i].detach().clone().reshape(param.shape)
+            # calculate energy grad
+            if False:
+                self._update_grad_model(sample_state, eloc, p, state_idx)
+            else:
+                self._auto_diff_loss(sample_state, eloc, state_idx)
 
-            self.opt.step()
-            self.opt.zero_grad()
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
+            # breakpoint()
+            # for param in self.model.parameters():
+            #     print(param.grad)
+
+            # save the energy grad
+            for i, param in enumerate(self.model.parameters()):
+                self.grad_e_lst[i].append(param.grad.reshape(-1).detach().to("cpu").numpy())
+
+            if p < self.max_iter - 1:
+                self.opt.step()
+                self.opt.zero_grad()
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()
 
             delta = (time.time_ns() - t0)/1.00E09
             print(f"{p} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3f} s")
             self.time_iter.append(delta)
 
-            del grad_update_lst, sample_state, eloc, state
+            del sample_state, eloc, state
+
+    def pre_train(self, prefix: str = None):
+        t = CITrain(self.model, self.opt, self.pre_CI, self.pre_train_info, self.sorb, self.lr_scheduler)
+        print(t)
+        t.train(prefix=prefix, electron_info=self.sampler.ele_info)
+
 
     def _numerical_differentiation(self, state, eps: float = 1.0E-07) ->List[Tensor]:
+        # TODO: state is uint8 not double
         """
         Calculate energy grad using numerical_differentiation
         """
@@ -183,7 +221,8 @@ class VMCOptimizer():
     
     def _total_energy(self, state) -> float:
             e = total_energy(state, self.n_sample, self.h1e, self.h2e,
-                        self.model, self.ecore, self.sorb, self.nele, exact=self.exact)[0]
+                        self.model, self.ecore, self.sorb, self.nele, self.noa, self.nob,
+                        exact=self.exact)[0]
             return e
 
     def _analytic_derivate_lnPsi(self, state) -> Tuple[Tensor, Tensor]:
@@ -224,18 +263,14 @@ class VMCOptimizer():
         return (grad_comb_lst, psi_lst)
 
 
-    def _update_grad_model(self, state, eloc, p: int, state_idx) -> List[Tensor]:
-
+    def _update_grad_model(self, state, eloc, p: int, state_idx) ->None:
+        
         if self.num_diff:
             F_p_lst = self._numerical_differentiation(state)
         else:
             if self.analytic_derivate:
                 grad_lnPsi, psi = self._analytic_derivate_lnPsi(state)
             else:
-                # lp = LineProfiler()
-                # lp_wrapper = lp(self.sampler.run)
-                # lp_wrapper(initial_state)
-                # lp.print_stats()
                 grad_lnPsi, psi = self._auto_diff_lnPsi(state)
 
             F_p_lst = energy_grad(eloc.reshape(-1), grad_lnPsi, self.n_sample,
@@ -246,14 +281,30 @@ class VMCOptimizer():
                 for i, F_p in enumerate(F_p_lst):
                     print(F_p)
 
-        # save the energy grad
-        for i, F_p in enumerate(F_p_lst):
-            self.grad_e_lst[i].append(F_p.reshape(-1).detach().to("cpu").numpy())
-
         if self.sr:
-            sr_grad_lst = sr_grad(list(self.model.parameters()), grad_lnPsi, F_p_lst, p+1, self.n_sample, opt_gd=False, comb=True)
+            sr_grad_lst = sr_grad(list(self.model.parameters()), grad_lnPsi,
+                                  F_p_lst, p+1, self.n_sample, opt_gd=False, comb=True)
 
-        return sr_grad_lst if self.sr else F_p_lst
+        grad_update_lst = sr_grad_lst if self.sr else F_p_lst
+        for i, param in enumerate(self.model.parameters()):
+                param.grad = grad_update_lst[i].detach().clone().reshape(param.shape)
+
+    def _auto_diff_loss(self, state, eloc, state_idx) -> None:
+        psi = self.model(state.requires_grad_()).to(self.dtype)
+        with torch.no_grad():
+            if self.exact:
+                state_prob = psi * psi.conj() / psi.norm()**2
+            else:
+                state_prob = state_idx/state_idx.sum().to(self.dtype)
+
+        # F_p = 2R(<O* * eloc> - <O*><eloc>)
+        log_psi = psi.log()
+        if torch.any(torch.isnan(log_psi)):
+            raise ValueError(f"There are negative numbers in the log-psi, please using Complex128")
+        loss1 = torch.einsum("i, i, i ->", eloc, log_psi.conj(), state_prob)
+        loss2 = torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("i, i -> ", log_psi.conj(), state_prob)
+        loss = 2 * (loss1 - loss2).real
+        loss.backward()
 
     def summary(self, e_ref: float = None, prefix: str = "VMC"):
         self.save(prefix)
@@ -265,12 +316,14 @@ class VMCOptimizer():
             self.sampler.frame_sample.to_csv(sample_file)
 
         if nqs:
-            torch.save({"model": self.model,
+            torch.save({"model": self.model_raw,
                         "optimizer": self.opt,
                         "lr_scheduler": self.lr_scheduler,
                         "HF_init": self.HF_init,
                         "sr": self.sr,
-                        "sampler_param": self.sampler_param}, model_file)
+                        "sampler_param": self.sampler_param,
+                        "h1e": self.h1e,
+                        "h2e": self.h2e}, model_file)
 
     def plot_figure(self, e_ref: float = None, prefix: str = "VMC"):
         fig = plt.figure()
@@ -314,6 +367,38 @@ class VMCOptimizer():
         plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches='tight')
         plt.close()
 
+class GD(Optimizer):
+    """ Naive Gradient Descent"""
+    def __init__(self, params, lr = required, weight_decay: float = 0.00) -> None:
+        if lr is not required and lr < 0.0:
+            raise ValueError(f"Invalid learning rate : {lr}")
+        if not 0.0 <= weight_decay:
+            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+        defaults = dict(lr=lr, weight_decay=weight_decay)
+        super(GD, self).__init__(params, defaults)
+    
+    def step(self, closure=None):
+        for group in self.param_groups:
+            params_with_grad: List[Tensor] = []
+            d_p_list = []
+            for p in group['params']:
+                if p.grad is not None:
+                    params_with_grad.append(p)
+                    d_p_list.append(p.grad)
+            _gd_update(params_with_grad, 
+                       d_p_list,
+                       lr=group['lr'], 
+                       weight_decay=group["weight_decay"])
+
+def _gd_update(params: List[Tensor],
+               grads: List[Tensor],
+               lr: float,
+               weight_decay: float):
+    for i, param in enumerate(params):
+        dp = grads[i]
+        if weight_decay != 0:
+            dp = dp.add(param, alpha=weight_decay)
+        param.data.add_(dp, alpha=-lr)
 class SR(Optimizer):
     """Stochastic Reconfiguration in quantum many-body problem
     
@@ -411,7 +496,7 @@ def sr_grad(params: List[Tensor],
 
     return sr_grad_lst
 
-
+# TODO: error?
 def _calculate_sr(grad_total: Tensor, F_p: Tensor,
                   N_state: int, p: int, opt_gd: bool = False, diag_shift: float = 0.02) -> Tensor:
     """
@@ -436,6 +521,10 @@ def _calculate_sr(grad_total: Tensor, F_p: Tensor,
     S_reg = S_kk + S_kk2
     update = torch.matmul(torch.linalg.inv(S_reg), F_p).reshape(-1)
     return update
+
+def _test_sr(grad_total: Tensor, F_p: Tensor, N_state: int, p: int,  diag_shift: float = 0.002):
+    pass 
+
 
 def _lambda_regular(p, l0=100, b=0.9, l_min=1e-4):
     """

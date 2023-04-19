@@ -1,3 +1,4 @@
+#include <torch/script.h> 
 #include <torch/extension.h>
 #include <bitset>
 #include <chrono>
@@ -26,6 +27,11 @@ torch::Tensor get_Hij_cuda(torch::Tensor &bra_tensor, torch::Tensor &ket_tensor,
                            torch::Tensor &h1e_tensor, torch::Tensor &h2e_tensor,
                            const int sorb, const int nele);
 
+torch::Tensor get_Hij_diag_cuda(torch::Tensor &bra_tensor,
+                                torch::Tensor &h1e_tensor,
+                                torch::Tensor &h2e_tensor, const int sorb,
+                                const int nele);
+
 torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb);
 
 torch::Tensor get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
@@ -46,9 +52,15 @@ void diff_type_cpu(unsigned long *bra, unsigned long *ket, int *p, int _len);
 
 void get_olst_cpu(unsigned long *bra, int *olst, int _len);
 
+// olst: abab
+void get_olst_cpu_ab(unsigned long *bra, int *olst, int _len);
+
 void get_olst_cpu(unsigned long *bra, int *olst, int *olst_a, int *olst_b, int _len);
 
 void get_vlst_cpu(unsigned long *bra, int *vlst, int n, int _len);
+
+// vlst: abab
+void get_vlst_cpu_ab(unsigned long *bra, int *vlst, int n, int _len);
 
 void get_vlst_cpu(unsigned long *bra, int vlst, int *vlst_a, int *vlst_b, int n, int _len);
 
@@ -106,6 +118,11 @@ torch::Tensor get_Hij_mat_cpu(torch::Tensor &bra_tensor,
                               torch::Tensor &h2e_tensor, const int sorb,
                               const int nele);
 
+torch::Tensor get_Hij_diag_cpu(torch::Tensor &bra_tensor,
+                              torch::Tensor &h1e_tensor,
+                              torch::Tensor &h2e_tensor, const int sorb,
+                              const int nele);
+
 torch::Tensor get_comb_tensor_cpu(torch::Tensor &bra_tensor, const int sorb,
                                   const int nele, bool ms_equal);
 
@@ -119,7 +136,6 @@ torch::Tensor uint8_to_bit_cpu(torch::Tensor &bra_tensor, const int sorb);
 tuple_tensor_2d get_olst_vlst_cpu(
     torch::Tensor &bra_tensor, const int sorb, const int nele);
 
-std::tuple<int, int> unpack_ij(int ij);
 
 // MCMC sampling in RBM
 tuple_tensor_2d spin_flip_rand(

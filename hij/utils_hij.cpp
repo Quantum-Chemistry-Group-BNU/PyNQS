@@ -1,6 +1,5 @@
 #include "utils_hij.h"
-#include "ATen/ops/einsum.h"
-
+#include <bitset>
 #include <cstdint>
 #include <iterator>
 #include <tuple>
@@ -75,6 +74,30 @@ void get_olst_cpu(unsigned long *bra, int *olst, int *olst_a, int *olst_b,
   }
 }
 
+void get_olst_cpu_ab(unsigned long *bra, int *olst, int _len) {
+  // abab
+  unsigned long tmp;
+  int idx = 0;
+  int ida = 0; 
+  int idb = 0;
+  for (int i = 0; i < _len; i++) {
+    tmp = bra[i];
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      int s = i * 64 + j;
+      if ( s & 1){
+        idb++;
+        idx = 2 * idb - 1;
+      }else{
+        ida++;
+        idx = 2 * (ida -1);
+      }
+      olst[idx] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
 void get_vlst_cpu(unsigned long *bra, int *vlst, int n, int _len) {
   int ic = 0;
   unsigned long tmp;
@@ -116,6 +139,29 @@ void get_vlst_cpu(unsigned long *bra, int *vlst, int *vlst_a, int *vlst_b,
   }
 }
 
+void get_vlst_cpu_ab(unsigned long *bra, int *vlst, int n, int _len) {
+  int ic = 0;
+  int idb = 0;
+  int ida = 0;
+  unsigned long tmp;
+  for (int i = 0; i < _len; i++) {
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(n % 64));
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1){
+        idb++;
+        ic = 2 * idb - 1;
+      }else{
+        ida++;
+        ic = 2 * (ida - 1);
+      }
+      vlst[ic] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
 void diff_orb_cpu(unsigned long *bra, unsigned long *ket, int _len, int *cre,
                   int *ann) {
   int idx_cre = 0;
@@ -144,7 +190,6 @@ int parity_cpu(unsigned long *bra, int n) {
   for (int i = 0; i < n / 64; i++) {
     p ^= get_parity_cpu(bra[i]);
   }
-  // TODO why????
   if (n % 64 != 0) {
     p ^= get_parity_cpu((bra[n / 64] & get_ones_cpu(n % 64)));
   }
@@ -157,7 +202,8 @@ void get_zvec_cpu(unsigned long *bra, double *lst, const int sorb,
   for (int i = 0; i < bra_len; i++) {
     for (int j = 1; j <= 64; j++) {
       if (idx >= sorb) break;
-      lst[idx] = num_parity_cpu(bra[i], j);
+      // TODO: *-1, 04-06
+      lst[idx] = num_parity_cpu(bra[i], j) * -1.0;
       idx++;
     }
   }
@@ -407,28 +453,24 @@ void get_comb_2d(unsigned long *bra, unsigned long *comb, int n, int len,
 void get_comb_2d(unsigned long *comb, int *merged, int r0, int n, int len, int noa,
                  int nob) {
   int idx_lst[4] = {0};
-  std::cout << "i j k l: ";
+  // std::cout << "i j k l: ";
   unpack_Singles_Doubles(n, noa, nob, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]] ;
     BIT_FLIP(comb[idx / 64], idx % 64);
-    std::cout << idx << " ";
   }
-  std::cout << std::endl;
+  //std::cout << std::endl;
 }
 
 void get_comb_2d(unsigned long *comb, double *lst, int *merged, int r0, int n, int len,
                  int noa, int nob) {
   int idx_lst[4] = {0};
   unpack_Singles_Doubles(n, noa, nob, r0, idx_lst);
-  // std::cout << "i j k l: ";
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
-    // std::cout << idx << " ";
     BIT_FLIP(comb[idx / 64], idx % 64);
     lst[idx] *= -1;
   }
-  // std::cout << std::endl;
 }
 
 int get_Num_SinglesDoubles(int sorb, int noA, int noB){
@@ -593,7 +635,7 @@ double get_HijD_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
   return Hij;
 }
 
-torch::Tensor get_merged_olst_vlst(torch::Tensor bra, const int nele, const int sorb){
+torch::Tensor get_merged_olst_vlst(torch::Tensor bra, const int nele, const int sorb, const int noA, const int noB){
   const int dim = bra.dim();
   const int bra_len = (sorb - 1)/64 + 1;
   int n = 0;
@@ -610,18 +652,9 @@ torch::Tensor get_merged_olst_vlst(torch::Tensor bra, const int nele, const int 
   torch::Tensor merged = torch::ones({n, sorb}, options);
   int *merged_ptr = merged.data_ptr<int32_t>();
   for(int i =0; i< n; i++){
-    int olst[nele];
-    int vlst[sorb-nele];
     unsigned long *bra_ptr = reinterpret_cast<unsigned long *>(bra[i].data_ptr<uint8_t>());
-    get_olst_cpu(bra_ptr, olst, bra_len);
-    get_vlst_cpu(bra_ptr, vlst, sorb, bra_len);
-    for(int k = 0; k < sorb; k++){
-      if (k < nele){
-        merged_ptr[i * sorb + k]= olst[k];
-      }else{
-        merged_ptr[i * sorb + k] = vlst[k-nele];
-      }
-    }
+   get_olst_cpu_ab(bra_ptr, &merged_ptr[i * sorb], bra_len);
+   get_vlst_cpu_ab(bra_ptr, &merged_ptr[i * sorb + nele], sorb, bra_len);
   }
   return merged;
 }
@@ -749,6 +782,30 @@ torch::Tensor get_Hij_mat_cpu(torch::Tensor &bra_tensor,
   return Hmat;
 }
 
+torch::Tensor get_Hij_diag_cpu(torch::Tensor &bra_tensor,
+                               torch::Tensor &h1e_tensor,
+                               torch::Tensor &h2e_tensor, const int sorb,
+                               const int nele) {
+  const int n = bra_tensor.size(0);
+  const int bra_len = (sorb - 1) / 64 + 1;
+  const int tensor_len = (sorb - 1) / 8 + 1;
+
+  torch::Tensor Hmat = torch::zeros({n}, h1e_tensor.options());
+  double *h1e_ptr = h1e_tensor.data_ptr<double>();
+  double *h2e_ptr = h2e_tensor.data_ptr<double>();
+  unsigned long *bra_ptr =
+      reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+  double *Hmat_ptr = Hmat.data_ptr<double>();
+
+  for (int i = 0; i < n; i++) {
+    Hmat_ptr[i] =
+        get_Hij_cpu(&bra_ptr[i * bra_len], &bra_ptr[i * bra_len], h1e_ptr,
+                    h2e_ptr, sorb, nele, tensor_len, bra_len);
+  }
+
+  return Hmat;
+}
+
 torch::Tensor get_comb_tensor_cpu(torch::Tensor &bra_tensor, const int sorb,
                                   const int nele, bool ms_equal) {
   const int no = nele;
@@ -833,7 +890,7 @@ tuple_tensor_2d get_comb_tensor_cpu_1(torch::Tensor &bra_tensor, const int sorb,
   }
   double *comb_bit_ptr = comb_bit.data_ptr<double>();
 
-  torch::Tensor merged = get_merged_olst_vlst(bra_tensor, nele, sorb);
+  torch::Tensor merged = get_merged_olst_vlst(bra_tensor, nele, sorb, noA, noB);
   int *merged_ptr = merged.data_ptr<int32_t>();
 
   if (flag_3d) {
@@ -939,18 +996,6 @@ std::tuple<torch::Tensor, torch::Tensor> get_olst_vlst_cpu(
   return std::make_tuple(olst, vlst);
 }
 
-std::tuple<int, int> unpack_ij(int ij) {
-  int i = -1.5 + std::sqrt(9 + 8 * ij) / 2;
-  int j = ij - i * (i + 1) / 2;
-  if (j > i) {
-    i += 1;
-  } else if (j < 0) {
-    i -= 1;
-  }
-  j = ij - i * (i + 1) / 2;
-  return std::make_tuple(i, j);
-}
-
 // MCMC sampling in RBM
 tuple_tensor_2d spin_flip_rand(
     torch::Tensor &bra_tensor, const int sorb, const int nele, const int seed) {
@@ -967,8 +1012,9 @@ tuple_tensor_2d spin_flip_rand(
   int vlst_b[MAX_NOB] = {0};
   const int nob = nele / 2, noa = no - nob;
   const int nvb = nv / 2, nva = nv - nvb;
+  auto bra =  bra_tensor.clone();
   unsigned long *bra_ptr =
-      reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+      reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
 
   get_olst_cpu(bra_ptr, olst, olst_a, olst_b, bra_len);
   get_vlst_cpu(bra_ptr, vlst, vlst_a, vlst_b, sorb, bra_len);
@@ -1071,7 +1117,7 @@ tuple_tensor_2d spin_flip_rand(
       BIT_FLIP(bra_ptr[l / 64], l % 64);
     }
   }
-  return std::make_tuple(uint8_to_bit_cpu(bra_tensor, sorb), bra_tensor);
+  return std::make_tuple(uint8_to_bit_cpu(bra, sorb), bra);
 }
 
 
@@ -1079,17 +1125,14 @@ tuple_tensor_2d spin_flip_rand_1(
     torch::Tensor &bra_tensor, const int sorb, const int nele, const int noA,
     const int noB, const int seed){
   const int bra_len = (sorb - 1) / 64 + 1;
-  int olst[MAX_NO] = {0};
-  int vlst[MAX_NV] = {0};
   int merged[MAX_NO + MAX_NV] = {0};
+  auto bra = bra_tensor.clone();
   unsigned long *bra_ptr =
-    reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+    reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
 
-  get_olst_cpu(bra_ptr, olst, bra_len);
-  get_vlst_cpu(bra_ptr, vlst, sorb, bra_len);
+  get_olst_cpu_ab(bra_ptr, merged, bra_len);
+  get_vlst_cpu_ab(bra_ptr, merged +nele, sorb, bra_len);
   const int ncomb = get_Num_SinglesDoubles(sorb, noA, noB);
-  std::copy(std::begin(olst), std::begin(olst)+nele, std::begin(merged));
-  std::copy(std::begin(vlst), std::begin(vlst)+sorb-nele, std::begin(merged)+nele);
   static std::mt19937 rng(seed);
   static std::uniform_int_distribution<int> u0(0, ncomb - 1);
   int r0 = u0(rng);
@@ -1099,5 +1142,5 @@ tuple_tensor_2d spin_flip_rand_1(
     int idx = merged[idx_lst[i]]; //merged[olst, vlst]
     BIT_FLIP(bra_ptr[idx/64], idx % 64);
   }
-  return std::make_tuple(uint8_to_bit_cpu(bra_tensor, sorb), bra_tensor);
+  return std::make_tuple(uint8_to_bit_cpu(bra, sorb), bra);
 }
