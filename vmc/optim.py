@@ -113,7 +113,7 @@ class VMCOptimizer():
             self.h1e: Tensor = ele_info.h1e
             self.h2e: Tensor = ele_info.h2e
         self.ecore = ele_info.ecore
-        self.onstate = ele_info.onstate
+        self.onstate = ele_info.ci_space
 
 
     def read_model(self, external_model):
@@ -140,7 +140,7 @@ class VMCOptimizer():
             # lp_wrapper(initial_state)
             # lp.print_stats()
             # exit()
-            state, state_idx, eloc, e_total, stats = self.sampler.run(initial_state)
+            state, state_prob, eloc, e_total, stats = self.sampler.run(initial_state)
 
             self.n_sample = len(state)
             self.e_lst.append(e_total)
@@ -157,12 +157,11 @@ class VMCOptimizer():
             self.time_sample.append(delta)
 
             # calculate energy grad
-            if False:
-                self._update_grad_model(sample_state, eloc, p, state_idx)
+            if True:
+                self._update_grad_model(sample_state, eloc, p, state_prob)
             else:
-                self._auto_diff_loss(sample_state, eloc, state_idx)
+                self._auto_diff_loss(sample_state, eloc, state_prob, e_total)
 
-            # breakpoint()
             # for param in self.model.parameters():
             #     print(param.grad)
 
@@ -183,9 +182,9 @@ class VMCOptimizer():
             del sample_state, eloc, state
 
     def pre_train(self, prefix: str = None):
-        t = CITrain(self.model, self.opt, self.pre_CI, self.pre_train_info, self.sorb, self.lr_scheduler)
+        t = CITrain(self.model, self.opt, self.pre_CI, self.pre_train_info, self.sorb, self.dtype, self.lr_scheduler)
         print(t)
-        t.train(prefix=prefix, electron_info=self.sampler.ele_info)
+        t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
 
 
     def _numerical_differentiation(self, state, eps: float = 1.0E-07) ->List[Tensor]:
@@ -264,7 +263,7 @@ class VMCOptimizer():
         return (grad_comb_lst, psi_lst)
 
 
-    def _update_grad_model(self, state, eloc, p: int, state_idx) ->None:
+    def _update_grad_model(self, state, eloc, p: int, state_prob) ->None:
         
         if self.num_diff:
             F_p_lst = self._numerical_differentiation(state)
@@ -275,7 +274,7 @@ class VMCOptimizer():
                 grad_lnPsi, psi = self._auto_diff_lnPsi(state)
 
             F_p_lst = energy_grad(eloc.reshape(-1), grad_lnPsi, self.n_sample,
-                                  state_idx=state_idx, psi=psi, exact=self.exact)
+                                  state_prob=state_prob, psi=psi, exact=self.exact)
 
             if self.verbose:
                 print("Energy grad\nAnalytic:")
@@ -284,26 +283,26 @@ class VMCOptimizer():
 
         if self.sr:
             sr_grad_lst = sr_grad(list(self.model.parameters()), grad_lnPsi,
-                                  F_p_lst, p+1, self.n_sample, opt_gd=False, comb=True)
+                                  F_p_lst, p+1, self.n_sample, opt_gd=False, comb=False)
 
         grad_update_lst = sr_grad_lst if self.sr else F_p_lst
         for i, param in enumerate(self.model.parameters()):
                 param.grad = grad_update_lst[i].detach().clone().reshape(param.shape)
 
-    def _auto_diff_loss(self, state, eloc, state_idx) -> None:
+    def _auto_diff_loss(self, state, eloc, state_prob, e_total) -> None:
         psi = self.model(state.requires_grad_()).to(self.dtype)
         with torch.no_grad():
             if self.exact:
                 state_prob = psi * psi.conj() / psi.norm()**2
-            else:
-                state_prob = state_idx/state_idx.sum().to(self.dtype)
+            state_prob = state_prob.to(self.dtype)
 
         # F_p = 2R(<O* * eloc> - <O*><eloc>)
         log_psi = psi.log()
         if torch.any(torch.isnan(log_psi)):
-            raise ValueError(f"There are negative numbers in the log-psi, please using Complex128")
+            raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
         loss1 = torch.einsum("i, i, i ->", eloc, log_psi.conj(), state_prob)
-        loss2 = torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("i, i -> ", log_psi.conj(), state_prob)
+        loss2 = (e_total - self.ecore) * torch.einsum("i, i -> ", log_psi.conj(), state_prob)
+        # loss2 = torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("i, i -> ", log_psi.conj(), state_prob)
         loss = 2 * (loss1 - loss2).real
         loss.backward()
 
@@ -510,13 +509,11 @@ def _calculate_sr(grad_total: Tensor, F_p: Tensor,
 
     if grad_total.shape[0] != N_state:
         raise ValueError(f"The shape of grad_total {grad_total.shape} maybe error")
-
     avg_grad = torch.sum(grad_total, axis=0, keepdim=True)/N_state
     avg_grad_mat = torch.conj(avg_grad.reshape(-1, 1))
     avg_grad_mat = avg_grad_mat * avg_grad.reshape(1, -1)
     moment2 = torch.einsum("ki, kj->ij", grad_total.conj(), grad_total)/N_state
     S_kk = torch.subtract(moment2, avg_grad_mat)
-
     S_kk2 = torch.eye(S_kk.shape[0], dtype=S_kk.dtype, device=S_kk.device) * diag_shift
     #  _lambda_regular(p) * torch.diag(S_kk)
     S_reg = S_kk + S_kk2

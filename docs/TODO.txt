@@ -20,11 +20,16 @@
 4. Support torch.complex128 (Y)
 5. torch.compile does not support RNNWavefunction. Why? 
 
-#----------2023-04-13--------- zbuw1996@gmail.com
+#----------2023-04-13--------- zbwu1996@gmail.com
 1. Debug sampling
-2. Fit UCISD with sampling using MCMC sampling.
-3. the better interface about MCMC sampling or auto-regressive sampling 
-4. A class about complex128 or double64, defaults: double64
+2. Fit UCISD with sampling using MCMC sampling. (Y, affected by optimizer and learning rate, lr ~0.001)
+3. the better interface about MCMC sampling or auto-regressive sampling (Y) 
+4. A class about complex128 or double64, defaults: double64 (Y)
+
+#----------2023-4-20---------- zbwu1996@gmail.com
+1. refactor code referring to https://github.com/twesterhout/nqs-playground
+2. modify the module of calculating local energy and SR
+3. record log events using "Loguru" package
 
 #---------------feature's------------------
 1. Add tutorial using "Read the Docs"

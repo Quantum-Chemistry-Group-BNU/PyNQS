@@ -74,6 +74,7 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
                 sorb: int, nele: int,
                 noa: int, nob: int,
                 state_prob: Tensor = None,
+                state_counts: Tensor = None,
                 verbose: bool = False,
                 exact: bool = False,
                 dtype = torch.double) -> Tuple[float, Tensor, dict]:
@@ -106,12 +107,15 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
         if state_prob is None:
             state_prob = torch.ones(dim, dtype=dtype, device=device)/dim
 
+    state_prob = state_prob.to(dtype)
     eloc_mean = torch.einsum("i, i ->", eloc_lst, state_prob)
     e_total = eloc_mean + ecore
 
     if not exact:
-        variance = torch.sum((eloc_lst - eloc_mean)**2 *state_prob)
-        n_sample = dim
+        if state_counts is None:
+            state_counts = torch.ones(dim, dtype=dtype, device=device)
+        variance = torch.sum((eloc_lst - eloc_mean)**2 *state_counts)
+        n_sample = state_counts.sum()
         sd = torch.sqrt(variance/n_sample)
         se = sd/torch.sqrt(n_sample)
         statistics["mean"] = e_total.real.item()
@@ -128,7 +132,7 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
     return e_total.real.item(), eloc_lst, statistics
 
 def energy_grad(eloc: Tensor, dlnPsi_lst: List[Tensor], 
-                N_state: int, state_idx: Tensor = None,
+                N_state: int, state_prob: Tensor = None,
                 psi: Tensor = None,
                 exact: bool = False,
                 dtype = torch.double) -> List[Tensor]:
@@ -142,14 +146,13 @@ def energy_grad(eloc: Tensor, dlnPsi_lst: List[Tensor],
       return
          List, length: n_para, element: [N_para],one dim
     """
+    dtype = torch.complex128
     lst = []
     if exact:
         state_prob = psi * psi.conj() / psi.norm()**2
     else:
-        if state_idx is None:
+        if state_prob is None:
             state_prob = torch.ones(N_state, dtype=dtype, device=eloc.device)/N_state
-        else:
-            state_prob = state_idx/state_idx.sum()
     state_prob = state_prob.to(dtype)
 
     for para in dlnPsi_lst:

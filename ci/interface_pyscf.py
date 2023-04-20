@@ -6,6 +6,7 @@ from typing import Tuple, List
 from numpy import ndarray
 
 import libs.py_fock as fock
+from libs.hij_tensor import uint8_to_bit
 from ci.wavefunction import CIWavefunction
 from utils import string_to_state, state_to_string, ONV
 
@@ -157,6 +158,19 @@ def unpack_ucisd(cisd_amp: ndarray[np.float64],
     return CIWavefunction(coeff, cisd_state, device=device)
     # return (cisd_state, coeff)
 
+def ucisd_to_fci(cisd_amp: ndarray[np.float64], sorb: int, nele: int, onstate: Tensor, device= None):
+    fci_amp = ci.ucisd.to_fcivec(cisd_amp, sorb//2, nele)
+    dim = fci_amp.shape[0]
+    state_numpy = lambda x: np.array(list(map(int, x[::-1])))
+    for i in range(dim):
+        for j in range(dim):
+            # breakpoint()
+            s = state_to_string(onstate[i*dim+j], sorb)[0]
+            # (1 - uint8_to_bit(onstate[i*dim+j], sorb).to("cpu").numpy())//2 # 1 occ, 0
+            fci_amp[i, j] *= ONV(onv=state_numpy(s)).phase()
+
+    coeff = torch.from_numpy(fci_amp.reshape(-1)).to(device)
+    return CIWavefunction(coeff, onstate, device=device)
 
 if __name__ == "__main__":
     atom: str = ""
@@ -181,4 +195,4 @@ if __name__ == "__main__":
     myuci = ci.UCISD(mf)
     cisd_amp = myuci.kernel()[1]
     result = unpack_ucisd(cisd_amp, sorb, nele)
-    print(result.ci)
+    print(result.coeff)
