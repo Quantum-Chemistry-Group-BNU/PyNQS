@@ -3,6 +3,9 @@ import torch
 from typing import Union
 from torch import nn, Tensor
 
+from ci import energy_CI
+from vmc.eloc import total_energy
+from utils import ElectronInfo
 from abc import ABC, abstractmethod
 
 class AnsatzFunction(ABC):
@@ -77,11 +80,12 @@ class RBMWavefunction(nn.Module):
             print(self.weights)
 
     def extra_repr(self) -> str:
-        return f"{self.rbm_type}-RBMWavefunction: num_visible={self.num_visible}, num_hidden={self.num_hidden}"
+        return f"{self.rbm_type}: num_visible={self.num_visible}, num_hidden={self.num_hidden}"
 
     def effective_theta(self, x: Tensor) -> Tensor:
-        return torch.mm(x, self.weights.T) + self.hidden_bias
-        # return torch.einsum("ij, ...j -> ...i", self.weights, x) + self.hidden_bias
+        # return torch.mm(x, self.weights.T) + self.hidden_bias
+        # print(torch.einsum("ij, ...j -> ...i", self.weights, x) + self.hidden_bias)
+        return torch.einsum("ij, ...j -> ...i", self.weights, x) + self.hidden_bias
 
     @staticmethod
     def _to_complex(x: Tensor):
@@ -124,6 +128,25 @@ class RBMWavefunction(nn.Module):
             return ((db.detach(), dw.detach()), self.psi(x))
         else:
             return ((da.detach(), db.detach(), dw.detach()), self.psi(x))
+
+    @property
+    def electron_info(self):
+        return self._electron_info
+
+    @electron_info.setter
+    def electron_info(self, t: ElectronInfo):
+        assert (isinstance(t, ElectronInfo))
+        self._electron_info = t
+
+    def energy(self):
+        pass
+
+    # TODO: the conflict between class MCMCSampler first parameters(nn.Module) and ansatz
+    def _e_vmc(self):
+        pass 
+
+    def _e_exact_ci(self):
+        pass 
 
     def forward(self, x: Tensor, dlnPsi: bool = False):
         if dlnPsi:

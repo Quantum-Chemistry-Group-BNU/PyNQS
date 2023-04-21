@@ -79,6 +79,30 @@ __device__ void get_olst(unsigned long *bra, int *olst, int _len) {
   }
 }
 
+__device__ void get_olst_ab(unsigned long *bra, int *olst, int _len) {
+  // abab
+  unsigned long tmp;
+  int idx = 0;
+  int ida = 0; 
+  int idb = 0;
+  for (int i = 0; i < _len; i++) {
+    tmp = bra[i];
+    while (tmp != 0) {
+      int j = __ctzl(tmp);
+      int s = i * 64 + j;
+      if ( s & 1){
+        idb++;
+        idx = 2 * idb - 1;
+      }else{
+        ida++;
+        idx = 2 * (ida -1);
+      }
+      olst[idx] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
 __device__ void get_olst(unsigned long *bra, int *olst, int *olst_a,
                          int *olst_b, int _len) {
 
@@ -120,6 +144,29 @@ __device__ void get_vlst(unsigned long *bra, int *vlst, int n, int _len) {
   }
 }
 
+__device__ void get_vlst_ab(unsigned long *bra, int *vlst, int n, int _len) {
+  int ic = 0;
+  int idb = 0;
+  int ida = 0;
+  unsigned long tmp;
+  for (int i = 0; i < _len; i++) {
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones(n % 64));
+    while (tmp != 0) {
+      int j = __ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1){
+        idb++;
+        ic = 2 * idb - 1;
+      }else{
+        ida++;
+        ic = 2 * (ida - 1);
+      }
+      vlst[ic] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
 __device__ void get_vlst(unsigned long *bra, int *vlst, int *vlst_a,
                          int *vlst_b, int n, int _len) {
   int ida = 0;
@@ -147,8 +194,13 @@ __device__ void get_vlst(unsigned long *bra, int *vlst, int *vlst_a,
 }
 
 __device__ void get_olst_vlst(unsigned long *bra, int *merged, int sorb, int nele, int bra_len){
-  get_olst(bra, merged, bra_len);
-  get_vlst(bra, (merged+nele), sorb, bra_len);
+  get_olst_ab(bra, merged, bra_len);
+  get_vlst_ab(bra, (merged+nele), sorb, bra_len);
+  // printf("olst-vlst");
+  // for (int i =0; i < sorb; i++){
+  //   printf(" %d ", merged[i]);
+  // }
+  // printf("\n");
 }
 
 
@@ -201,7 +253,7 @@ __device__ double h2e_get(double *h2e, size_t i, size_t j, size_t k, size_t l) {
   double val;
   if (ij >= kl) {
     size_t ijkl = ij * (ij + 1) / 2 + kl;
-    val = sgn * h2e[ijkl]; // TODO: value is float64 or tensor ??????
+    val = sgn * h2e[ijkl]; 
   } else {
     size_t ijkl = kl * (kl + 1) / 2 + ij;
     val = sgn * h2e[ijkl]; // sgn * conjugate(h2e[ijkl])
@@ -284,7 +336,7 @@ __device__ void get_zvec(unsigned long *bra, double *lst, const int sorb,
     for (int j = 1; j <= 64; j++) {
       if (idx >= sorb)
         break;
-      lst[idx] = num_parity(bra[i], j);
+      lst[idx] = num_parity(bra[i], j) * -1.0;
       idx++;
     }
   }
@@ -576,6 +628,15 @@ __global__ void get_Hij_kernel_3D(double *Hmat_ptr, unsigned long *bra,
               h2e, sorb, nele, tensor_len, bra_len);
 }
 
+__global__ void get_Hij_diag_kernel(double *Hmat_ptr, unsigned long* bra, double *h1e, double*h2e, const size_t sorb, const size_t nele, 
+const size_t tensor_len, const size_t bra_len, int n){
+  int idm = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idm >= n)
+    return;
+    Hmat_ptr[idm] = get_Hij(&bra[idm * bra_len], &bra[idm * bra_len],
+                                    h1e, h2e, sorb, nele, tensor_len, bra_len);
+}
+
 __global__ void get_comb_kernel_2D(unsigned long *bra_ptr,
                                    unsigned long *comb_ptr, int sorb, int len,
                                    int noa, int nob, int nva, int nvb,
@@ -766,6 +827,27 @@ torch::Tensor get_Hij_cuda(torch::Tensor &bra_tensor, torch::Tensor &ket_tensor,
   return Hmat;
 }
 
+torch::Tensor get_Hij_diag_cuda(torch::Tensor &bra_tensor,
+                                torch::Tensor &h1e_tensor,
+                                torch::Tensor &h2e_tensor, const int sorb,
+                                const int nele) {
+  const int n = bra_tensor.size(0);
+  const int tensor_len = (sorb - 1) / 8 + 1;
+  const int bra_len = (sorb - 1) / 64 + 1;
+  torch::Tensor Hmat = torch::zeros({n}, h1e_tensor.options());
+  double *h1e_ptr = h1e_tensor.data_ptr<double>();
+  double *h2e_ptr = h2e_tensor.data_ptr<double>();
+  unsigned long *bra_ptr =
+      reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
+  double *Hmat_ptr = Hmat.data_ptr<double>();
+  dim3 threads(1024);
+  dim3 blocks((n + threads.x - 1) / threads.x);
+  get_Hij_diag_kernel<<<blocks, threads>>>(Hmat_ptr, bra_ptr, h1e_ptr, h2e_ptr,
+                                           sorb, nele, tensor_len, bra_len, n);
+  cudaDeviceSynchronize();
+  return Hmat;
+}
+
 torch::Tensor get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
                                    const int nele, bool ms_equal) {
   // TODO: how to accelerate get_comb funciton??? 
@@ -781,7 +863,6 @@ torch::Tensor get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
     ndoubles = noa * (noa - 1) * nva * (nva - 1) / 4 +
                nob * (nob - 1) * nvb * (nvb - 1) / 4 + noa * nva * nob * nvb;
   } else {
-    // TODO: ms is not equal, how to achieve??
     nsingles = no * nv;
     ndoubles = no * (no - 1) * nv * (nv - 1) / 4;
   }
@@ -854,10 +935,10 @@ torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb) {
     comb_bit = torch::zeros({n, m, sorb}, options);
     // dim3 threads(THREAD, THREAD);
     // dim3 blocks((n+threads.x-1)/threads.x, (m+threads.y-1)/threads.y);
-  } else if (bra_dim == 2) {
+  } else if (bra_dim == 2 || bra_dim == 1) {
     flag_3d = false;
     // [ncomb, sorb]
-    n = bra_tensor.size(0);
+    n = bra_tensor.reshape({-1, bra_len * 8}).size(0);
     comb_bit = torch::zeros({n, sorb}, options);
     // dim3 threads = (512);
     // dim3 blocks((n+threads.x-1)/threads.x);

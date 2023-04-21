@@ -1,16 +1,18 @@
 from integral import ipyscf_real
 from typing import Tuple
-from pyscf import gto, scf, fci
+from pyscf import gto, scf, fci, cc, ci
 
 
 def integral_pyscf(atom: str, 
                   basis = "sto-3g", 
                   integral_file: str = "integral.info", 
-                  ci: bool = False) -> Tuple[int, int, float]:
+                  ci_coeff: bool = False, 
+                  cisd_coeff: bool = False) -> Tuple[int, int, float]:
     mol = gto.Mole(
         atom = atom,
         verbose = 3,
-        basis = basis
+        basis = basis,
+        symmetry = False
     )
     mol.build()
     sorb = mol.nao * 2
@@ -30,14 +32,33 @@ def integral_pyscf(atom: str,
 
     if sorb <= 20:
         cisolver = fci.FCI(mf) 
-        e_fci, coeff = cisolver.kernel()
-    else:
-        from pyscf import cc 
+        e_ref, coeff = cisolver.kernel()
         mycc = cc.CCSD(mf)
         _ = mycc.kernel()
-        return (sorb, nele, mycc.e_tot)
-
-    if not ci:
-        return (sorb , nele, e_fci)
+        print(f"CCSD energy: {mycc.e_tot:.10f}")
+        print(f"Full CI energy: {e_ref:.10f}")
     else:
-        return (sorb , nele, e_fci, coeff)
+        mycc = cc.CCSD(mf)
+        _ = mycc.kernel()
+        e_ref = mycc.e_tot
+        # return (sorb, nele, mycc.e_tot)
+
+    if cisd_coeff:
+        myuci = ci.UCISD(mf)
+        cisd_amp = myuci.kernel()[1]
+        return (sorb, nele, e_ref, cisd_amp)
+
+    if not ci_coeff:
+        return (sorb , nele, e_ref)
+    else:
+        return (sorb , nele, e_ref, coeff)
+
+if __name__ == "__main__":
+    atom: str = ""
+    bond = 1.50
+    for k in range(4):
+        atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
+    import tempfile, os
+    filename = tempfile.mkstemp()[1]
+    integral_pyscf(atom, integral_file=filename)
+    os.remove(filename)

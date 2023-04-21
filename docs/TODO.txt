@@ -1,0 +1,31 @@
+
+#--------2023-03-29----------- zbwu1996@gmail.com
+1. pre-training from UCISD coeff and notice sign correction (Y)
+    a: convergence speed before and after pre-training 
+    b: Energy change (exact sampling or CISD-onstate)
+2. Check the pre-training result:
+    a: Add New Class "CIWavefunction" to fit CISD or FCI wavefunction in order to 
+       accelerate VMC optimization (N)
+    b: Add Member Functions of the Class RMBWavefunction to calculate energy (N):
+       e = <psi|H|psi>/<psi|psi>  <psi|H|psi> = \sum_{ij}c_i<i|H|j>c_j (Y)
+3. Sampling question.
+    a: Compare exact-VMC and sample in same parameters H6-1.50, H4-1.00
+    b: Compare different alpha [2, 6, 8]
+    c: wrap mcmc function "spin_rand_flip" using C++ (Y) and mpi4py
+
+#------2024-04-04------------- zbwu1996@gmail.com
+1. PYSCF-UCISD -> fci-cisd -> basis, phase (Y) Read LaTeX
+2. RMB-MemberFunction:  (exact =<psi|H|psi>/<psi|psi> and VMC = \sum_k E_loc(x_k)|psi_theta(x_k)|**2 )
+3. CIWavefunction: MemberFunction: (Y)
+4. Support torch.complex128 (Y)
+5. torch.compile does not support RNNWavefunction. Why? 
+
+#----------2023-04-13--------- zbuw1996@gmail.com
+1. Debug sampling
+2. Fit UCISD with sampling using MCMC sampling.
+3. the better interface about MCMC sampling or auto-regressive sampling 
+4. A class about complex128 or double64, defaults: double64
+
+#---------------feature's------------------
+1. Add tutorial using "Read the Docs"
+
