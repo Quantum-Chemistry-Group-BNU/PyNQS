@@ -22,6 +22,7 @@ double get_duration_nano(T t) {
 }
 
 typedef std::tuple<torch::Tensor, torch::Tensor> tuple_tensor_2d;
+typedef torch::Tensor Tensor;
 
 torch::Tensor get_Hij_cuda(torch::Tensor &bra_tensor, torch::Tensor &ket_tensor,
                            torch::Tensor &h1e_tensor, torch::Tensor &h2e_tensor,
@@ -40,6 +41,8 @@ torch::Tensor get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
 tuple_tensor_2d get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
                                 const int nele, const int noA, const int noB,
                                 bool flag_bit);
+
+Tensor unpack_to_bit_cuda(const Tensor &states, const int sorb);
 
 int popcnt_cpu(const unsigned long x);
 int get_parity_cpu(const unsigned long x);

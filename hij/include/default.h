@@ -1,3 +1,5 @@
+#pragma once
+
 #define MAX_SORB_LEN 3 // max spin orbital: 64 * 3 
 #define MAX_NELE 100  // max electron: 100
 #define MAX_NO 100 // max occupied orbital
@@ -21,3 +23,11 @@
 #define BIT_FLIP(a, b) ((a) ^= (1ULL << (b)))
 #define BIT_SET(a, b) ((a) |= (1ULL << (b)))
 #define BIT_CLEAR(a, b) ((a) &= ~(1ULL << (b)))
+
+// macro define namespace
+#if !defined(NAMESPACE_BEGIN)
+#define NAMESPACE_BEGIN(name) namespace name {
+#endif
+#if !defined(NAMESPACE_END)
+#define NAMESPACE_END(name) }
+#endif

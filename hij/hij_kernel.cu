@@ -3,8 +3,9 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include<device_launch_parameters.h>
-#include <iostream>
 #include <stdio.h>
+#include <c10/cuda/CUDAStream.h>
+#include <c10/cuda/CUDAException.h>
 #include <torch/extension.h>
 #include <tuple>
 
@@ -14,6 +15,7 @@ __device__ inline unsigned long get_ones(int n) {
   return (1ULL << n) - 1ULL;
 } // parenthesis must be added due to priority
 __device__ inline double num_parity(unsigned long x, int i) {
+  // return 2.0f * static_cast<double>(x >> ( i - 1) & 1) - 1.0f;
   return (x >> (i - 1) & 1) ? 1.00 : -1.00;
 }
 
@@ -331,15 +333,28 @@ __device__ double get_Hij(unsigned long *bra, unsigned long *ket, double *h1e,
 
 __device__ void get_zvec(unsigned long *bra, double *lst, const int sorb,
                          const int bra_len) {
+  constexpr int block = 64; 
   int idx = 0;
-  for (int i = 0; i < bra_len; i++) {
-    for (int j = 1; j <= 64; j++) {
-      if (idx >= sorb)
-        break;
-      lst[idx] = num_parity(bra[i], j) * -1.0;
+  for (int i = 0; i < bra_len -1; i++){
+    for ( int j = 1; j <= block; j++){
+      lst[idx] = num_parity(bra[i], j) * -1.0f;
       idx++;
     }
   }
+  const int reset = sorb % block;
+  for (int j =1; j <= reset; j++){
+    // if (idx >= sorb) break;
+    lst[idx] = num_parity(bra[bra_len-1], j) * -1.0f;
+    idx++;
+  }
+  // for (int i = 0; i < bra_len; i++) {
+  //   for (int j = 1; j <= 64; j++) {
+  //     if (idx >= sorb)
+  //       break;
+  //     lst[idx] = num_parity(bra[i], j) * -1.0;
+  //     idx++;
+  //   }
+  // }
 }
 
 __device__ void get_comb(unsigned long *bra, unsigned long *comb, int n,
@@ -699,7 +714,7 @@ __global__ void get_comb_kernel_1D(unsigned long *comb_ptr, int *merged_ptr, int
 __global__ void get_merged_ovlst_kernel(unsigned long *bra_ptr, int *merged_ptr,
                                         int sorb, int nele, int bra_len,
                                         int n) {
-  int idn = blockIdx.x;
+  // int idn = blockIdx.x;
   int idm = blockIdx.x * blockDim.x + threadIdx.x;
   if (idm >= n)
     return;
@@ -914,6 +929,52 @@ torch::Tensor get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
               << std::endl;
   }
   return comb;
+}
+
+
+
+
+__device__ void get_zvec_new(unsigned long *bra, double *lst, const int sorb, const int bra_len, const int idx){
+  constexpr int block = 64;
+  const int idx_bra = idx / block;
+  const int idx_bit = idx % block;
+  lst[idx] = num_parity(bra[idx_bra], idx_bit +1) * -1.0f;
+  ///
+}
+
+__global__ void get_zvec_kernel_new(double *comb_ptr, unsigned long *bra, const int sorb, const int bra_len, int m){
+  int idn = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idn>= m)
+    return;
+  // printf("idn : %d  %d %d\n", idn, idn/sorb, idn%sorb);
+  int idm = idn/sorb;
+  get_zvec_new(&bra[idm * bra_len], &comb_ptr[idm * sorb], sorb, bra_len, idn%sorb);
+}
+
+
+torch::Tensor unpack_to_bit_cuda(const torch::Tensor &states, const int sorb) {
+  // const int tensor_len = states.size(-1);
+  const int bra_len = (sorb - 1) / 64 + 1;
+  auto shape = states.sizes();
+  auto states_re = states.view({-1, bra_len * 8});
+  const int n = states_re.size(0);
+  torch::Tensor comb_bit;
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kDouble)
+                     .layout(states.layout())
+                     .device(states.device())
+                     .requires_grad(false);
+  comb_bit = torch::zeros({n, sorb}, options);
+
+    unsigned long *bra_ptr =
+      reinterpret_cast<unsigned long *>(states_re.data_ptr<uint8_t>());
+  double *comb_ptr = comb_bit.data_ptr<double>();
+  dim3 threads(1024);
+  dim3 blocks((comb_bit.numel()+ threads.x - 1) / threads.x);
+  const auto stream = c10::cuda::getCurrentCUDAStream();
+  get_zvec_kernel_new<<<blocks, threads, 0, stream>>>(comb_ptr, bra_ptr, sorb, bra_len, comb_bit.numel());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return comb_bit;
 }
 
 torch::Tensor uint8_to_bit_cuda(torch::Tensor &bra_tensor, const int sorb) {

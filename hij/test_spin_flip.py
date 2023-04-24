@@ -5,7 +5,22 @@ import time
 import hij_tensor as hij
 from typing import List 
 
+x0 = torch.tensor([[0b11111111, 0b11, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8).to("cuda")
+x = x0.repeat(1, 1)
+sorb = 30
 
+t1 = time.time_ns()
+a = hij.uint8_to_bit_1(x, sorb)
+torch.cuda.synchronize()
+
+t2 = time.time_ns() 
+b = hij.uint8_to_bit(x, sorb)
+torch.cuda.synchronize()
+t3 = time.time_ns() 
+
+print(f"{(t2-t1)/1.E06:.3f} ms {(t3-t2)/1.E06:.3f} ms")
+
+exit()
 def state_str(state, sorb) -> List :
     tmp = []
     full_bit = ((state+1)//2).to(torch.uint8).tolist()

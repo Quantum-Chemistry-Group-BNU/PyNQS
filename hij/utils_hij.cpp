@@ -198,14 +198,28 @@ int parity_cpu(unsigned long *bra, int n) {
 
 void get_zvec_cpu(unsigned long *bra, double *lst, const int sorb,
                   const int bra_len) {
+  // int idx = 0;
+  // for (int i = 0; i < bra_len; i++) {
+  //   for (int j = 1; j <= 64; j++) {
+  //     if (idx >= sorb) break;
+  //     // TODO: *-1, 04-06
+  //     lst[idx] = num_parity_cpu(bra[i], j) * -1.0;
+  //     idx++;
+  //   }
+  // }
+  constexpr int block = 64; 
   int idx = 0;
-  for (int i = 0; i < bra_len; i++) {
-    for (int j = 1; j <= 64; j++) {
-      if (idx >= sorb) break;
-      // TODO: *-1, 04-06
-      lst[idx] = num_parity_cpu(bra[i], j) * -1.0;
+  for (int i = 0; i < bra_len -1; i++){
+    for ( int j = 1; j <= block; j++){
+      lst[idx] = num_parity_cpu(bra[i], j) * -1.0f;
       idx++;
     }
+  }
+  const int reset = sorb % block;
+  for (int j =1; j <= reset; j++){
+    // if (idx >= sorb) break;
+    lst[idx] = num_parity_cpu(bra[bra_len-1], j) * -1.0f;
+    idx++;
   }
 }
 
@@ -945,6 +959,7 @@ torch::Tensor uint8_to_bit_cpu(torch::Tensor &bra_tensor, const int sorb) {
     comb_bit = torch::zeros({n, sorb}, options);
   } else if (bra_dim == 1) {
     comb_bit = torch::zeros({sorb}, options);
+    std::cout << comb_bit.sizes() << std::endl;
   } else {
     throw "bra dim error";
   }

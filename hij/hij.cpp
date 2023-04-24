@@ -3,6 +3,7 @@
 #include <exception>
 #include <algorithm>
 #include <string>
+#include <sys/types.h>
 #include <tuple>
 
 using namespace std;
@@ -55,7 +56,7 @@ torch::Tensor get_Hij_diag_torch(torch::Tensor &bra_tensor,
   }
 }
 
-// RBM
+// TODO: sorb = 63 is error, 
 torch::Tensor uint8_to_bit(torch::Tensor &bra_tensor, const int sorb) {
   CHECK_CONTIGUOUS(bra_tensor);
   if (bra_tensor.is_cpu()) {
@@ -104,6 +105,11 @@ tuple_tensor_2d get_comb_tensor_1(torch::Tensor &bra_tensor, const int sorb,
     return get_comb_tensor_cuda(bra_tensor, sorb, nele, noA, noB, flag_bit);
   #endif
   }
+}
+
+Tensor uint8_to_bit_new(const Tensor &states, const int sorb){
+  CHECK_CONTIGUOUS(states);
+  return unpack_to_bit_cuda(states, sorb);
 }
 
 auto MCMC_sample(const std::string model_file, torch::Tensor &initial_state,
@@ -164,6 +170,8 @@ auto MCMC_sample(const std::string model_file, torch::Tensor &initial_state,
   return n_accept;
 }
 
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij_torch,
         "Calculate the matrix <x|H|x'> using CPU or GPU");
@@ -192,4 +200,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "get occupied and virtual orbitals in the cpu ");
   m.def("spin_flip_rand_0", &spin_flip_rand, "Flip the spin randomly in MCMC using CPU");
   m.def("spin_flip_rand", &spin_flip_rand_1, "Flip the spin randomly in MCMC using CPU");
+  m.def("uint8_to_bit_1", &uint8_to_bit_new, " ");
 }
