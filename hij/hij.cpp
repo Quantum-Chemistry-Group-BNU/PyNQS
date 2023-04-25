@@ -68,6 +68,27 @@ torch::Tensor uint8_to_bit(torch::Tensor &bra_tensor, const int sorb) {
   }
 }
 
+Tensor unpack_bit(Tensor &bra_tensor, int64_t sorb){
+  CHECK_CONTIGUOUS(bra_tensor);
+  const int dim = bra_tensor.dim();
+  if (dim == 1){
+    Tensor bra = bra_tensor.reshape({1, -1});
+  }else{
+    assert(dim == 2);
+  }
+  if (bra_tensor.is_cpu()){
+    return uint8_to_bit_cpu(bra_tensor, sorb);
+#ifdef GPU
+  } else {
+    return unpack_to_bit_cuda(bra_tensor, sorb);
+#endif
+  }
+}
+
+// https://www.cnblogs.com/xiaxuexiaoab/p/15524047.html,
+// https://pytorch.org/cppdocs/api/define_library_8h_1a0bd5fb09d25dfb58e750d712fc5afb84.html
+// independent file
+
 tuple_tensor_2d get_olst_vlst(torch::Tensor &bra_tensor, const int sorb, const int nele) {
   CHECK_CONTIGUOUS(bra_tensor);
   auto device = bra_tensor.device();

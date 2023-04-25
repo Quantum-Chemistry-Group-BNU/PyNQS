@@ -4,7 +4,7 @@ import torch
 import itertools
 import numpy as np
 from torch import Tensor
-from typing import List, Type, Tuple
+from typing import List, Type, Tuple, Union
 from dataclasses import dataclass
 
 from libs.hij_tensor import uint8_to_bit
@@ -132,6 +132,28 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Te
     assert (torch.all(idx2 < state2.shape[0]))
     return common, idx1, idx2
 
+
+def check_spin_multiplicity(state: Tensor, sorb: int, 
+                            ms: Union[Tuple[int], List[int]] = None) -> Tensor:
+    """
+    Check spin_multiplicity for the given onv
+    """
+    assert (state.dtype == torch.uint8 and state.dim() == 2)
+    if ms is None:
+        ms = (1, )
+    else:
+        assert isinstance(ms, (tuple, list))
+    x = (1 - uint8_to_bit(state, sorb))//2  # 1 occupied, 0 unoccupied
+    x0 = torch.ones_like(x)
+    x0[..., 0::2] = -1
+    x0[..., 1::2] = 1
+    spin = ((x0 * x).sum(axis=-1).abs().to(torch.int32) + 1)
+    idx = torch.zeros_like(spin, dtype=torch.bool)
+    for s in ms:
+        torch.logical_or(spin == s, idx, out=idx)
+
+    return torch.index_select(state, dim=0, index=torch.arange(state.size(0))[idx])
+
 @dataclass(frozen=True)
 class Dtype:
     """
@@ -230,4 +252,11 @@ class ElectronInfo:
 
 if __name__ == "__main__":
     # print(given_onstate(12, 12, 3, 3)) # H20
-    print(state_to_string(torch.tensor([0b1111, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8), 8))
+    # print(state_to_string(torch.tensor([0b1111, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8), 8))
+    s = ['1100', '0011', '1010', '0101', '1001', '0110']
+    lst = []
+    for i in s:
+        lst.append(string_to_state(4, i))
+    state = torch.tensor(lst, dtype=torch.uint8)
+    a = check_spin_multiplicity(state, 4, ms=(1,))
+    print(a)

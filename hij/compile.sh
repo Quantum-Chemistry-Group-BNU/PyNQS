@@ -43,7 +43,7 @@ setup(
         )
     ],
     cmdclass={
-        'build_ext': BuildExtension
+        'build_ext': BuildExtension.with_options(no_python_abi_suffix=False)
     }
 )
 EOF
