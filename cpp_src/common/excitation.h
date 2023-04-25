@@ -3,7 +3,6 @@
 
 NAMESPACE_BEGIN(fock)
 
-
 void unpack_canon(int ij, int *s);
 
 int get_Num_SinglesDoubles(int sorb, int noA, int noB);

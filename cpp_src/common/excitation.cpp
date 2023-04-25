@@ -1,5 +1,6 @@
 #include "utils.h"
 #include "excitation.h"
+
 NAMESPACE_BEGIN(fock)
 
 __device__ __host__ int get_Num_SinglesDoubles(int sorb, int noA, int noB) {
@@ -12,14 +13,7 @@ __device__ __host__ int get_Num_SinglesDoubles(int sorb, int noA, int noB) {
   return nSa + nSb + nDaa + nDbb + nDab;
 }
 
-void unpack_canon(int ij, int *s) {
-  int i = std::sqrt((ij + 1) * 2) + 0.5;
-  int j = ij - i * (i - 1) / 2;
-  s[0] = i;
-  s[1] = j;
-}
-
-void unpack_Singles_Doubles(int sorb, int noA, int noB, int idx,
+__device__ __host__ void unpack_Singles_Doubles(int sorb, int noA, int noB, int idx,
                                 int *idx_lst) {
   int k = sorb / 2;
   int nvA = k - noA, nvB = k - noB;
@@ -114,7 +108,7 @@ void unpack_Singles_Doubles(int sorb, int noA, int noB, int idx,
   idx_lst[3] = b;
 }
 
-void get_comb_SD(unsigned long *comb, int *merged, int r0, int n, int len,
+__device__ __host__ void get_comb_SD(unsigned long *comb, int *merged, int r0, int n, int len,
                      int noa, int nob) {
   int idx_lst[4] = {0};
   // std::cout << "i j k l: ";
@@ -126,7 +120,7 @@ void get_comb_SD(unsigned long *comb, int *merged, int r0, int n, int len,
   // std::cout << std::endl;
 }
 
-void get_comb_SD(unsigned long *comb, double *lst, int *merged, int r0,
+__device__ __host__ void get_comb_SD(unsigned long *comb, double *lst, int *merged, int r0,
                      int n, int len, int noa, int nob) {
   int idx_lst[4] = {0};
   unpack_Singles_Doubles(n, noa, nob, r0, idx_lst);
