@@ -44,6 +44,9 @@ tuple_tensor_2d get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
 
 Tensor unpack_to_bit_cuda(const Tensor &states, const int sorb);
 
+Tensor pack_states_tensor_cuda(const Tensor &bra_tensor, const int sorb);
+Tensor pack_states_tensor_cpu(const Tensor &bra_tensor, const int sorb);
+
 int popcnt_cpu(const unsigned long x);
 int get_parity_cpu(const unsigned long x);
 

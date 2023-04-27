@@ -1,5 +1,6 @@
 #include "utils_hij.h"
 #include <bitset>
+#include <cassert>
 #include <cstdint>
 #include <iterator>
 #include <tuple>
@@ -7,6 +8,8 @@
 
 
 #include "ATen/core/TensorBody.h"
+#include "c10/core/TensorOptions.h"
+#include "torch/types.h"
 
 inline int popcnt_cpu(const unsigned long x) { return __builtin_popcountl(x); }
 inline int get_parity_cpu(const unsigned long x) {
@@ -1158,4 +1161,33 @@ tuple_tensor_2d spin_flip_rand_1(
     BIT_FLIP(bra_ptr[idx/64], idx % 64);
   }
   return std::make_tuple(uint8_to_bit_cpu(bra, sorb), bra);
+}
+
+Tensor pack_states_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
+  const int bra_len = (sorb - 1) / 64 + 1;
+  assert(bra_tensor.dtype() == torch::kUInt8);
+  auto dim = bra_tensor.dim();
+  assert(dim == 2 || dim == 1);
+  int nbatch = 1;
+  if (dim == 2) {
+    nbatch = bra_tensor.size(0);
+  }
+  // const int nbatch = bra_tensor.size(0);
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kUInt8)
+                     .layout(bra_tensor.layout())
+                     .device(bra_tensor.device())
+                     .requires_grad(false);
+  Tensor states = torch::zeros({nbatch, bra_len * 8}, options=options);
+  uint8_t *bra_ptr = bra_tensor.data_ptr<uint8_t>();
+  unsigned long *states_ptr = reinterpret_cast<unsigned long *>(states.data_ptr<uint8_t>());
+
+  for ( int i = 0; i < nbatch; i++){
+    for (int j = 0; j < sorb; j++){
+      if (bra_ptr[i * sorb + j] == 1){ // 1: occupied 0: unoccupied
+        BIT_FLIP(states_ptr[i * bra_len + j/64], j%64);
+      }
+    }
+  }
+  return states;
 }
