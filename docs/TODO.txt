@@ -31,6 +31,15 @@
 2. modify the module of calculating local energy and SR
 3. record log events using "Loguru" package
 
+#----------2023-4-30--------------------
+1. Optimize cpp and cuda code, and compile cpp and cuda separately.
+2. Replace torch.zeros with torch.empty.
+3. c10 namespace instead of torch, TORCH_CHECK marco
+4. Using mpi4py from sampling
+5. Read points and rewrite them in python
+7. Use SIMD instruction set, https://github.com/vectorclass/version2
+8. Generate onv from numpy array
+
 #---------------feature's------------------
 1. Add tutorial using "Read the Docs"
 
