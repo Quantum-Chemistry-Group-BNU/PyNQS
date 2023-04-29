@@ -956,7 +956,7 @@ __global__ void get_zvec_kernel_new(double *comb_ptr, unsigned long *bra, const 
 torch::Tensor unpack_to_bit_cuda(const torch::Tensor &states, const int sorb) {
   // const int tensor_len = states.size(-1);
   const int bra_len = (sorb - 1) / 64 + 1;
-  auto shape = states.sizes();
+  //auto shape = states.sizes();
   auto states_re = states.view({-1, bra_len * 8});
   const int n = states_re.size(0);
   torch::Tensor comb_bit;
@@ -1149,33 +1149,23 @@ auto get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
   return  std::make_tuple(comb, comb_bit);
 }
 
-__device__ void pack_states_cuda(uint8_t *bra_ptr, unsigned long *states_ptr, const int sorb, const int bra_len, const int idx, const int idy){
-  // // printf("idx, idy : %d  %d \n", idx, idy);
-  // if (bra_ptr[idy] == 1){
-  // // printf("vaule: %d %d %d\n", bra_ptr[idx * sorb + idy], idx, idy%64);
-  //   BIT_FLIP(states_ptr[idy/64], idy%64);
-  //   printf("s: %ld\n", states_ptr[idy/64]);
-  //
-}
-
-__global__ void pack_states_kernel(uint8_t *bra_ptr, unsigned long *states_ptr, const int sorb, const int bra_len, const size_t n){
-  // int idn = blockIdx.x * blockDim.x + threadIdx.x;
-  // int idm = blockIdx.y * blockDim.y + threadIdx.y;
-  // if (idn >= n || idm >= sorb)
-  //   return;
-  // //printf("idn, idm : %d  %d \n", idn, idm);
-  // pack_states_cuda(&bra_ptr[idn * sorb], &states_ptr[idn * bra_len], sorb, bra_len, idn, idm);
+__global__ void pack_states_kernel(uint8_t *bra_ptr, uint8_t *states_ptr, const int sorb, const int bra_len, const int m, const size_t n){
   size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn >= n) return;
-  int i = idn/sorb, j = idn%sorb;
-  if (bra_ptr[idn] == 1){
-    BIT_FLIP(states_ptr[i * bra_len + j/64], j%64);
-    printf("s: %ld\n", states_ptr[i * bra_len + j/64]);
+  int idx = idn % m, idy = idn / m;
+  for (int i = 0; i < 8 && idx * 8 + i < sorb; i++){
+    uint8_t value = reinterpret_cast<uint8_t>(bra_ptr[sorb * idy + idx * 8 + i]);
+    states_ptr[idy * 8 * bra_len + idx] |= (value << i);
+    // if (bra_ptr[ sorb * idy + idx * 8 + i] == 1){
+    // // TODO: 或运算
+    //   BIT_FLIP(states_ptr[idy * 8 * bra_len + idx], i);
+    // }
   }
 }
 
 torch::Tensor pack_states_tensor_cuda(const torch::Tensor &bra_tensor, const int sorb){
   const int bra_len = (sorb - 1) / 64 + 1;
+  const int m = (sorb - 1)/8 + 1;
   assert(bra_tensor.dtype() == torch::kUInt8);
   auto dim = bra_tensor.dim();
   assert(dim == 2 || dim == 1);
@@ -1190,20 +1180,13 @@ torch::Tensor pack_states_tensor_cuda(const torch::Tensor &bra_tensor, const int
                      .requires_grad(false);
   torch::Tensor states = torch::zeros({nbatch, bra_len * 8}, options=options);
   uint8_t *bra_ptr = bra_tensor.data_ptr<uint8_t>();
-  unsigned long *states_ptr = reinterpret_cast<unsigned long *>(states.data_ptr<uint8_t>());
+  uint8_t *states_ptr = states.data_ptr<uint8_t>();
 
-  // TODO: how to allocate threads one dims or two dims;
-  /**
-  dim3 threads(1, 1024);
-  dim3 blocks((nbatch + threads.x -1)/threads.x, (sorb + threads.y - 1)/threads.y);
-  std::cout << blocks.x << " " <<blocks.y << std::endl;
-  const auto stream = c10::cuda::getCurrentCUDAStream();
-  pack_states_kernel<<<blocks, threads, 0, stream>>>(bra_ptr, states_ptr, sorb, bra_len, nbatch);
-  **/
   dim3 threads(1024);
-  dim3 blocks((bra_tensor.numel() + threads.x - 1)/threads.x);
+  dim3 blocks(( m * nbatch + threads.x - 1)/threads.x);
   const auto stream = c10::cuda::getCurrentCUDAStream();
-  pack_states_kernel<<<blocks, threads, 0, stream>>>(bra_ptr, states_ptr, sorb, bra_len, bra_tensor.numel());
+  pack_states_kernel<<<blocks, threads, 0, stream>>>(bra_ptr, states_ptr, sorb, bra_len, m, m * nbatch);
+  //std::cout << m << " " << m * nbatch << std::endl;
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   cudaDeviceSynchronize();
   return states;
