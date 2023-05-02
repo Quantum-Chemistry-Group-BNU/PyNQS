@@ -42,13 +42,24 @@ if __name__ == "__main__":
             filename = tempfile.mkstemp()[1]
             sorb, nele, e_ref, cisd_coeff = integral_pyscf(
                 atom, integral_file=filename, cisd_coeff=True)
+            print(filename)
             h1e, h2e, ci_space, ecore, sorb = read_integral(filename, nele,
                                                             # save_onstate=True,
                                                             # external_onstate="profiler/H12-1.50",
-                                                            # given_sorb= (nele + 2),
+                                                            # given_sorb= (sorb + 2),
                                                             device=device,
                                                             # prefix="test-onstate",
                                                             )
+            h1e, h2e, ci_space1, ecore, sorb = read_integral(filename, nele,
+                                                            # save_onstate=True,
+                                                            # external_onstate="profiler/H12-1.50",
+                                                            given_sorb= sorb,
+                                                            device=device,
+                                                            # prefix="test-onstate",
+                                                            )
+            # print(ci_space1)
+            # print(ci_space)
+            print(torch.allclose(torch.sort(ci_space1, dim=0)[0], torch.sort(ci_space, dim=0)[0]))
             info = {"h1e": h1e, "h2e": h2e, "onstate": ci_space,
                     "ecore": ecore, "sorb": sorb, "nele": nele,
                     "nob": nele//2, "noa": nele - nele//2}
@@ -57,6 +68,16 @@ if __name__ == "__main__":
             cisd_wf = ucisd_to_fci(cisd_coeff, sorb, nele, ci_space, device=device)
             pre_train_info = {"pre_max_iter": 5000, "interval": -1, "loss_type": "sample"}
 
+            
+            print(torch.allclose(ci_space1, ci_space))
+            info = {"h1e": h1e, "h2e": h2e, "onstate": ci_space,
+                    "ecore": ecore, "sorb": sorb, "nele": nele,
+                    "nob": nele//2, "noa": nele - nele//2}
+            electron_info = ElectronInfo(info)
+            # cisd_wf = unpack_ucisd(cisd_coeff, sorb, nele, device=device)
+            cisd_wf = ucisd_to_fci(cisd_coeff, sorb, nele, ci_space, device=device)
+            pre_train_info = {"pre_max_iter": 10, "interval": -1, "loss_type": "onstate"}
+
             E_pre = []
             for pre_i in range(4):
                 from vmc.RNNwavefunction import RNNwavefunction
@@ -64,12 +85,12 @@ if __name__ == "__main__":
                 nqs = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
                                       rbm_type='cos', verbose=False).to(device)
 
-                from pyscf import fci
-                psi = nqs(uint8_to_bit(ci_space, sorb))
-                psi /= psi.norm()
-                occslstA = fci.cistring._gen_occslst(range(sorb//2), nele//2)
-                occslstB = fci.cistring._gen_occslst(range(sorb//2), nele//2)
-                dim = len(occslstA)
+                # from pyscf import fci
+                # psi = nqs(uint8_to_bit(ci_space, sorb))
+                # psi /= psi.norm()
+                # occslstA = fci.cistring._gen_occslst(range(sorb//2), nele//2)
+                # occslstB = fci.cistring._gen_occslst(range(sorb//2), nele//2)
+                # dim = len(occslstA)
                 # print(f"State:  exact_random_ci^2     ")
                 # for i,occsa in enumerate(occslstA):
                 #     for j,occsb in enumerate(occslstB):
@@ -92,24 +113,22 @@ if __name__ == "__main__":
                                        opt_params=opt_params,
                                        lr_scheduler=lr_sch,
                                        lr_sch_params=lr_sch_params,
-                                       external_model="Test-1.pth",
+                                       # external_model="Test-1.pth",
                                        dtype=dtype,
                                        sampler_param=sampler_param,
                                        only_sample=False,
                                        electron_info=electron_info,
-                                       max_iter=5,
+                                       max_iter=4000,
                                        HF_init=0,
                                        analytic_derivate=False,
                                        num_diff=False,
                                        verbose=False,
-                                       sr=True,
+                                       sr=False,
                                        pre_CI=cisd_wf,
                                        pre_train_info=pre_train_info
                                        )
-                # opt_vmc.pre_train('Adam')
-                print(f"State:  exact_random_ci^2     ")
-                sorb, nele, e_ref, full_coeff = integral_pyscf(
-                    atom, integral_file=filename, ci_coeff=True)
+                opt_vmc.pre_train('Adam')
+                exit()
                 # psi = opt_vmc.model(uint8_to_bit(onstate, sorb))
                 # psi /= psi.norm()
                 # for i,occsa in enumerate(occslstA):

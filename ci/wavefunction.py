@@ -119,7 +119,7 @@ class CITrain:
               electron_info: ElectronInfo = None, 
               sampler: MCMCSampler = None):
 
-        if True:
+        if False:
             dim = self.onstate.shape[0]
             print(f"State   ci^2")
             for i in range(dim):
@@ -160,8 +160,8 @@ class CITrain:
             self.ovlp_list.append(ovlp.detach().to("cpu").item())
             self.loss_list.append((1-ovlp.norm()**2).detach().to("cpu").item())
 
-            for para in self.model.parameters():
-                print(para.grad.data)
+            # for para in self.model.parameters():
+            #     print(para.grad.data)
             # breakpoint()
             self.opt.zero_grad()
             # calculate energy from CI coefficient.

@@ -1,7 +1,7 @@
 #pragma once
 #include "../common/utils.h"
 
-NAMESPACE_BEGIN(fock)
+NAMESPACE_BEGIN(squant)
 
 inline int popcnt_cpu(const unsigned long x) { return __builtin_popcountl(x); }
 

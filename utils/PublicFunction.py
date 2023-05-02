@@ -1,5 +1,5 @@
 import random
-import sys 
+import sys
 import torch
 import itertools
 import numpy as np
@@ -7,7 +7,7 @@ from torch import Tensor
 from typing import List, Type, Tuple, Union
 from dataclasses import dataclass
 
-from libs.hij_tensor import uint8_to_bit
+from libs.hij_tensor import uint8_to_bit, pack_states
 
 def check_para(bra: Tensor):
     if bra.dtype != torch.uint8:
@@ -97,15 +97,14 @@ def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
     noA_lst = list(itertools.combinations([i for i in range(0, x, 2)], noa))
     noB_lst = list(itertools.combinations([i for i in range(1, x, 2)], nob))
 
-    lst = []
-    for k in noA_lst:
-        for l in noB_lst:
-            state = np.zeros(sorb, dtype=int)
-            state[list(k)] = 1
-            state[list(l)] = 1
-            s = "".join(list(map(str, state[::-1])))
-            lst.append(string_to_state(sorb, s))
-    return torch.tensor(lst, dtype=torch.uint8).to(device)
+    m = len(noA_lst)
+    n = len(noB_lst)
+    spins = np.zeros((m, n, sorb), dtype=np.uint8)
+    for i, lstA in enumerate(noA_lst):
+        for j, lstB in enumerate(noB_lst):
+            spins[i, j, lstA + lstB] = 1
+
+    return convert_onv(spins.reshape(-1, sorb), sorb=sorb, device=device)
 
 def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Tensor]:
     """
@@ -132,7 +131,6 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Te
     assert (torch.all(idx2 < state2.shape[0]))
     return common, idx1, idx2
 
-
 def check_spin_multiplicity(state: Tensor, sorb: int, 
                             ms: Union[Tuple[int], List[int]] = None) -> Tensor:
     """
@@ -153,6 +151,29 @@ def check_spin_multiplicity(state: Tensor, sorb: int,
         torch.logical_or(spin == s, idx, out=idx)
 
     return torch.index_select(state, dim=0, index=torch.arange(state.size(0))[idx])
+
+def convert_onv(spins: Union[Tensor, np.ndarray], sorb: int, device: str = None) -> Tensor:
+    """
+    Convert spins to onv used pytorch tensor uint8 representation.
+     spins: [0, 1, ...], 1: occupied, 0: unoccupied
+    """
+    if isinstance(spins, np.ndarray):
+        if not spins.dtype == np.uint8:
+            raise TypeError(f"spins has invalid datatype: {spins.dtype}, and expected np.uint8")
+        spins = torch.from_numpy(spins)
+
+    if not isinstance(spins, Tensor):
+        raise TypeError(f"spins has invalid type: {type(spins)}, and excepted pytorch-Tensor")
+    
+    if spins.dtype != torch.uint8:
+        raise TypeError(f"spins has invalid datatype: {spins.dtype}, and expected torch.uint8")
+
+    if spins.ndim in (1, 2):
+        assert spins.shape[-1] == sorb
+    else:
+        raise TypeError(f"spins has invalid dim: {spins.ndim}, and expected 1 or 2")
+
+    return pack_states(spins, sorb).to(device)
 
 @dataclass(frozen=True)
 class Dtype:
