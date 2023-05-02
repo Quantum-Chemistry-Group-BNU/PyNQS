@@ -1157,7 +1157,6 @@ __global__ void pack_states_kernel(uint8_t *bra_ptr, uint8_t *states_ptr, const 
     uint8_t value = reinterpret_cast<uint8_t>(bra_ptr[sorb * idy + idx * 8 + i]);
     states_ptr[idy * 8 * bra_len + idx] |= (value << i);
     // if (bra_ptr[ sorb * idy + idx * 8 + i] == 1){
-    // // TODO: 或运算
     //   BIT_FLIP(states_ptr[idy * 8 * bra_len + idx], i);
     // }
   }

@@ -5,10 +5,12 @@ from torch import Tensor
 from typing import Tuple, List
 from numpy import ndarray
 
-import libs.py_fock as fock
-from libs.hij_tensor import uint8_to_bit
 from ci.wavefunction import CIWavefunction
-from utils import string_to_state, state_to_string, ONV
+from utils import state_to_string, ONV
+
+from libs.hij_tensor import pack_states
+from utils.PublicFunction import convert_onv
+from utils.PublicFunction import check_spin_multiplicity
 
 def unpack_ucisd(cisd_amp: ndarray[np.float64],
                  sorb: int,
@@ -22,124 +24,101 @@ def unpack_ucisd(cisd_amp: ndarray[np.float64],
     nob = nele - noa
     nva = (sorb - nele)//2
     nvb = (sorb - nele) - nva
-    hf_array = np.array(nele * [1] + (sorb-nele) * [0], dtype=np.int8)
 
-    join_state = lambda x: "".join(list(map(str, x[::-1])))
-    state_numpy = lambda x: np.array(list(map(int, x[::-1])))
-    hf_state = fock.onstate(join_state(hf_array))
+    # TODO: O2 is error;
+    hf_state = np.array(nele * [1] + (sorb-nele) * [0], dtype=np.uint8)
     cisd_sign = np.ones(len(cisd_amp))
-    cisd_dict = {}
-    cisd_dict[hf_state.to_string()] = (cisd_amp[0], cisd_sign[0], [0], 0)
 
+    cisd_state = np.repeat(hf_state.reshape(1, -1).copy(), len(cisd_amp), axis=0)
     # HF_state: [1, 1, 1, 0 , 0 ,0]
     idx = 0
     "Singlets a->a"
-    sa = []
     for i in range(noa):
         for a in range(nva):
-            state = hf_state
+            idx += 1
             idI = i * 2
             idA = a * 2 + nele
-            sign_i, state = state.ann(idI)
-            sign_a, state = state.cre(idA)
-            s = state.to_string()
-            sa.append(s)
-            idx += 1
-            cisd_sign[idx] = sign_i * sign_a
-            cisd_dict[s] = (cisd_amp[idx], cisd_sign[idx] ,[idI, idA], idx)
-            # print(f"{s} {cisd_amp[idx]:.8e} {cisd_sign[idx]} {idI} {idA}")
+            cisd_state[idx, idI] = 0
+            cisd_state[idx, idA] = 1
+            # sign_i, state = state.ann(idI)
+            # sign_a, state = state.cre(idA)
 
     "Singlets b->b"
-    sb = []
     for i in range(nob):
         for a in range(nvb):
-            state = hf_state
+            idx += 1
             idI = i * 2 + 1
             idA = a * 2 + 1 + nele
-            sign_i, state = state.ann(idI)
-            sign_a, state = state.cre(idA)
-            s = state.to_string()
-            sb.append(s)
-            idx += 1
-            cisd_sign[idx] = sign_i * sign_a
-            cisd_dict[s] = (cisd_amp[idx], cisd_sign[idx], [idI, idA], idx)
-            # print(f"{s} {cisd_amp[idx]:.8e} {cisd_sign[idx]}")
+            cisd_state[idx, idI] = 0
+            cisd_state[idx, idA] = 1
+            # sign_i, state = state.ann(idI)
+            # sign_a, state = state.cre(idA)
+
 
     "Doubles ab->ab"
-    dab = []
     for i in range(noa):
         for j in range(nob):
             for a in range(nva):
                 for b in range(nvb):
-                    state = hf_state
+                    idx += 1
                     idI = i * 2 
                     idJ = j * 2 + 1
                     idA = a * 2 + nele
                     idB = b * 2 + 1 + nele
-                    sign_i, state = state.ann(idI)
-                    sign_j, state = state.ann(idJ)
-                    sign_a, state = state.cre(idA)
-                    sign_b, state = state.cre(idB)
-                    s = state.to_string()
-                    dab.append(s)
-                    idx += 1
-                    cisd_sign[idx] = sign_i * sign_j * sign_a * sign_b
-                    cisd_dict[s] = (cisd_amp[idx], cisd_sign[idx], [idI, idJ, idA, idB], idx)
-                    # print(f"{s} {cisd_amp[idx]:.8e} {cisd_sign[idx]}")
+                    cisd_state[idx, idI] = 0
+                    cisd_state[idx, idJ] = 0
+                    cisd_state[idx, idA] = 1
+                    cisd_state[idx, idB] = 1
+                    # sign_i, state = state.ann(idI)
+                    # sign_j, state = state.ann(idJ)
+                    # sign_a, state = state.cre(idA)
+                    # sign_b, state = state.cre(idB)
+
 
     "Doubles aa->aa"
-    daa = []
     for i in range(noa):
         for j in range(i):
             for a in range(nva):
                 for b in range(a):
-                    state = hf_state
-                    idI = i * 2 
+                    idx += 1
+                    idI = i * 2
                     idJ = j * 2
                     idA = a * 2 + nele
                     idB = b * 2 + nele
-                    sign_i, state = state.ann(idI)
-                    sign_j, state = state.ann(idJ)
-                    sign_a, state = state.cre(idA)
-                    sign_b, state = state.cre(idB)
-                    s = state.to_string()
-                    daa.append(s)
-                    idx += 1
-                    cisd_sign[idx] = sign_i * sign_j * sign_a * sign_b
-                    cisd_dict[s] = (cisd_amp[idx], cisd_sign[idx], [idI, idJ, idA, idB], idx)
-                    # print(f"{s} {cisd_amp[idx]:.8e} {cisd_sign[idx]}")
+                    cisd_state[idx, idI] = 0
+                    cisd_state[idx, idJ] = 0
+                    cisd_state[idx, idA] = 1
+                    cisd_state[idx, idB] = 1
+                    # sign_i, state = state.ann(idI)
+                    # sign_j, state = state.ann(idJ)
+                    # sign_a, state = state.cre(idA)
+                    # sign_b, state = state.cre(idB)
+
 
     "Doubles bb->bb"
-    dbb = []
     for i in range(nob):
         for j in range(i):
             for a in range(nvb):
                 for b in range(a):
-                    state = hf_state
+                    idx += 1
                     idI = i * 2 + 1
                     idJ = j * 2 + 1
                     idA = a * 2 + 1 + nele
                     idB = b * 2 + 1 + nele
-                    sign_i, state = state.ann(idI)
-                    sign_j, state = state.ann(idJ)
-                    sign_a, state = state.cre(idA)
-                    sign_b, state = state.cre(idB)
-                    s = state.to_string()
-                    dbb.append(s)
-                    idx += 1
-                    cisd_sign[idx] = sign_i * sign_j * sign_a * sign_b
-                    cisd_dict[s] = (cisd_amp[idx], cisd_sign[idx], [idI, idJ, idA, idB], idx)
-                    # print(f"{s} {cisd_amp[idx]:.8e} {cisd_sign[idx]}")
+                    cisd_state[idx, idI] = 0
+                    cisd_state[idx, idJ] = 0
+                    cisd_state[idx, idA] = 1
+                    cisd_state[idx, idB] = 1
+                    # sign_i, state = state.ann(idI)
+                    # sign_j, state = state.ann(idJ)
+                    # sign_a, state = state.cre(idA)
+                    # sign_b, state = state.cre(idB)
+
     # Notice, cisd_sign only is used for testing here.
-    assert (idx +1 == len(cisd_amp))
+    assert (idx + 1== len(cisd_amp))
 
-    lst = []
-    hf_str = join_state(hf_array)
-    state_total = [hf_str] + sa + sb + dab + daa + dbb
-    for state in state_total:
-        lst.append(string_to_state(sorb, state))
 
-    assert(len(lst) == len(state_total))
+    # assert(len(lst) == len(state_total))
 
     # UCISD -> FCI vector
     sa_sign = ci.cisd.tn_addrs_signs(noa + nva, noa, 1)[1]
@@ -150,10 +129,14 @@ def unpack_ucisd(cisd_amp: ndarray[np.float64],
     dbb_sign = ci.cisd.tn_addrs_signs(nob + nvb, nob, 2)[1]
     cisd_sign = np.concatenate(([1], sa_sign, sb_sign, dab_sign, daa_sign, dbb_sign))
 
-    phase = np.array([ONV(onv=state_numpy(s)).phase() for s in state_total])
+    # sign IaIb -> onv
+    phase = np.array([ONV(onv=s).phase() for s in cisd_state])
+    print(phase.shape)
+    print(cisd_sign.shape)
+    print(cisd_amp.shape)
     cisd_amp_correct = cisd_amp * cisd_sign * phase
 
-    cisd_state = torch.tensor(lst, dtype=torch.uint8)
+    cisd_state = convert_onv(cisd_state, sorb)
     coeff = torch.from_numpy(cisd_amp_correct).to(dtype=torch.double)
     return CIWavefunction(coeff, cisd_state, device=device)
     # return (cisd_state, coeff)
@@ -195,4 +178,5 @@ if __name__ == "__main__":
     myuci = ci.UCISD(mf)
     cisd_amp = myuci.kernel()[1]
     result = unpack_ucisd(cisd_amp, sorb, nele)
+    print(cisd_amp)
     print(result.coeff)
