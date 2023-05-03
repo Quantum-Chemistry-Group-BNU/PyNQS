@@ -1,4 +1,5 @@
 #include "default.h"
+#include <cstddef>
 #include <cstdint>
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -942,12 +943,12 @@ __device__ void get_zvec_new(unsigned long *bra, double *lst, const int sorb, co
   ///
 }
 
-__global__ void get_zvec_kernel_new(double *comb_ptr, unsigned long *bra, const int sorb, const int bra_len, int m){
-  int idn = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void get_zvec_kernel_new(double *comb_ptr, unsigned long *bra, const int sorb, const int bra_len, size_t m){
+  size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn>= m)
     return;
   // printf("idn : %d  %d %d\n", idn, idn/sorb, idn%sorb);
-  int idm = idn/sorb;
+  size_t idm = idn/sorb;
   get_zvec_new(&bra[idm * bra_len], &comb_ptr[idm * sorb], sorb, bra_len, idn%sorb);
 }
 
@@ -955,7 +956,7 @@ __global__ void get_zvec_kernel_new(double *comb_ptr, unsigned long *bra, const 
 torch::Tensor unpack_to_bit_cuda(const torch::Tensor &states, const int sorb) {
   // const int tensor_len = states.size(-1);
   const int bra_len = (sorb - 1) / 64 + 1;
-  auto shape = states.sizes();
+  //auto shape = states.sizes();
   auto states_re = states.view({-1, bra_len * 8});
   const int n = states_re.size(0);
   torch::Tensor comb_bit;
@@ -1146,4 +1147,46 @@ auto get_comb_tensor_cuda(torch::Tensor &bra_tensor, const int sorb,
   }
   cudaDeviceSynchronize();
   return  std::make_tuple(comb, comb_bit);
+}
+
+__global__ void pack_states_kernel(uint8_t *bra_ptr, uint8_t *states_ptr, const int sorb, const int bra_len, const int m, const size_t n){
+  size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idn >= n) return;
+  int idx = idn % m, idy = idn / m;
+  for (int i = 0; i < 8 && idx * 8 + i < sorb; i++){
+    uint8_t value = reinterpret_cast<uint8_t>(bra_ptr[sorb * idy + idx * 8 + i]);
+    states_ptr[idy * 8 * bra_len + idx] |= (value << i);
+    // if (bra_ptr[ sorb * idy + idx * 8 + i] == 1){
+    //   BIT_FLIP(states_ptr[idy * 8 * bra_len + idx], i);
+    // }
+  }
+}
+
+torch::Tensor pack_states_tensor_cuda(const torch::Tensor &bra_tensor, const int sorb){
+  const int bra_len = (sorb - 1) / 64 + 1;
+  const int m = (sorb - 1)/8 + 1;
+  assert(bra_tensor.dtype() == torch::kUInt8);
+  auto dim = bra_tensor.dim();
+  assert(dim == 2 || dim == 1);
+  int nbatch = 1;
+  if (dim == 2) {
+    nbatch = bra_tensor.size(0);
+  }
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kUInt8)
+                     .layout(bra_tensor.layout())
+                     .device(bra_tensor.device())
+                     .requires_grad(false);
+  torch::Tensor states = torch::zeros({nbatch, bra_len * 8}, options=options);
+  uint8_t *bra_ptr = bra_tensor.data_ptr<uint8_t>();
+  uint8_t *states_ptr = states.data_ptr<uint8_t>();
+
+  dim3 threads(1024);
+  dim3 blocks(( m * nbatch + threads.x - 1)/threads.x);
+  const auto stream = c10::cuda::getCurrentCUDAStream();
+  pack_states_kernel<<<blocks, threads, 0, stream>>>(bra_ptr, states_ptr, sorb, bra_len, m, m * nbatch);
+  //std::cout << m << " " << m * nbatch << std::endl;
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  cudaDeviceSynchronize();
+  return states;
 }

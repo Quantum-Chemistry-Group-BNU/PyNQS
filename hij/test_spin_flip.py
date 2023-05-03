@@ -4,6 +4,20 @@ import torch
 import time
 import hij_tensor as hij
 from typing import List 
+from hij_tensor import pack_states
+
+x = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1, 1, 1], dtype=torch.uint8)
+x = x.repeat(10, 1)
+print(x.stride(), x.is_contiguous())
+sorb = 10
+a = pack_states(x.to("cuda"), sorb)
+b = pack_states(x, sorb)
+print(a)
+print(b)
+
+print(torch.allclose(a.to("cpu"), b))
+
+exit()
 
 x0 = torch.tensor([[0b11111111, 0b11, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8).to("cuda")
 x = x0.repeat(1, 1)

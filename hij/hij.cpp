@@ -133,6 +133,17 @@ Tensor uint8_to_bit_new(const Tensor &states, const int sorb){
   return unpack_to_bit_cuda(states, sorb);
 }
 
+Tensor pack_states(Tensor &bra_tensor, const int sorb){
+  CHECK_CONTIGUOUS(bra_tensor);
+  if (bra_tensor.is_cpu()){
+    return pack_states_tensor_cpu(bra_tensor, sorb);
+  #ifdef GPU
+  }else{
+    return pack_states_tensor_cuda(bra_tensor, sorb);
+  #endif
+  }
+}
+
 auto MCMC_sample(const std::string model_file, torch::Tensor &initial_state,
                  torch::Tensor &state_sample, torch::Tensor &psi_sample,
                  const int sorb, const int nele, const int noA, const int noB,
@@ -222,4 +233,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("spin_flip_rand_0", &spin_flip_rand, "Flip the spin randomly in MCMC using CPU");
   m.def("spin_flip_rand", &spin_flip_rand_1, "Flip the spin randomly in MCMC using CPU");
   m.def("uint8_to_bit_1", &uint8_to_bit_new, " ");
+  m.def("pack_states", &pack_states, "pack states from (1:not occupied, -1: occupied) to onv uint8");
 }

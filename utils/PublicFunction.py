@@ -94,6 +94,7 @@ def get_nbatch(sorb: int, n_sample_unique: int, n_comb_sd: int,
 def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
     assert(x%2==0 and x <= sorb and x >=(noa + nob))
 
+    # NOTICE: the oder is different from pyscf.fci.cistring._gen_occslst(iterable, r)
     noA_lst = list(itertools.combinations([i for i in range(0, x, 2)], noa))
     noB_lst = list(itertools.combinations([i for i in range(1, x, 2)], nob))
 
@@ -131,8 +132,9 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Te
     assert (torch.all(idx2 < state2.shape[0]))
     return common, idx1, idx2
 
-def check_spin_multiplicity(state: Tensor, sorb: int, 
-                            ms: Union[Tuple[int], List[int]] = None) -> Tensor:
+def check_spin_multiplicity(state: Tensor, sorb: int,
+                            ms: Union[Tuple[int],
+                            List[int]] = None) -> Tensor:
     """
     Check spin_multiplicity for the given onv
     """
@@ -141,7 +143,7 @@ def check_spin_multiplicity(state: Tensor, sorb: int,
         ms = (1, )
     else:
         assert isinstance(ms, (tuple, list))
-    x = (1 - uint8_to_bit(state, sorb))//2  # 1 occupied, 0 unoccupied
+    x = (1 - uint8_to_bit(state, sorb))//2 # 1 occupied, 0 unoccupied
     x0 = torch.ones_like(x)
     x0[..., 0::2] = -1
     x0[..., 1::2] = 1
@@ -165,7 +167,7 @@ def convert_onv(spins: Union[Tensor, np.ndarray], sorb: int, device: str = None)
     if not isinstance(spins, Tensor):
         raise TypeError(f"spins has invalid type: {type(spins)}, and excepted pytorch-Tensor")
     
-    if spins.dtype != torch.uint8:
+    if not spins.dtype == torch.uint8:
         raise TypeError(f"spins has invalid datatype: {spins.dtype}, and expected torch.uint8")
 
     if spins.ndim in (1, 2):

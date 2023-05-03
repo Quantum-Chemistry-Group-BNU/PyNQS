@@ -57,9 +57,11 @@ if __name__ == "__main__":
                                                             device=device,
                                                             # prefix="test-onstate",
                                                             )
-            # print(ci_space1)
-            # print(ci_space)
+            print(ci_space1)
+            print(ci_space)
+            print(torch.allclose(ci_space, ci_space1))
             print(torch.allclose(torch.sort(ci_space1, dim=0)[0], torch.sort(ci_space, dim=0)[0]))
+            exit()
             info = {"h1e": h1e, "h2e": h2e, "onstate": ci_space,
                     "ecore": ecore, "sorb": sorb, "nele": nele,
                     "nob": nele//2, "noa": nele - nele//2}
@@ -88,7 +90,7 @@ if __name__ == "__main__":
                 # from pyscf import fci
                 # psi = nqs(uint8_to_bit(ci_space, sorb))
                 # psi /= psi.norm()
-                # occslstA = fci.cistring._gen_occslst(range(sorb//2), nele//2)
+                occslstA = fci.cistring._gen_occslst(range(sorb//2), nele//2)
                 # occslstB = fci.cistring._gen_occslst(range(sorb//2), nele//2)
                 # dim = len(occslstA)
                 # print(f"State:  exact_random_ci^2     ")
