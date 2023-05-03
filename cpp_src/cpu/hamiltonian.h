@@ -1,7 +1,7 @@
 #pragma once
 #include "../common/utils.h"
 
-NAMESPACE_BEGIN(fock)
+namespace squant{
 
 double h1e_get_cpu(double *h1e, size_t i, size_t j, size_t sorb);
 
@@ -20,4 +20,4 @@ double get_Hij_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
                    double *h2e, size_t sorb, size_t nele, size_t tensor_len,
                    size_t bra_len);
 
-NAMESPACE_END(fock)
+} // namespace squant

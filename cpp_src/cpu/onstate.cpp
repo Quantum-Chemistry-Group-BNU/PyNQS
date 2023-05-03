@@ -1,7 +1,7 @@
 #include "onstate.h"
 #include "utils.h"
 
-NAMESPACE_BEGIN(fock)
+namespace squant {
 
 void diff_type_cpu(unsigned long *bra, unsigned long *ket, int *p, int _len) {
   unsigned long idiff, icre, iann;
@@ -124,4 +124,4 @@ void diff_orb_cpu(unsigned long *bra, unsigned long *ket, int _len, int *cre,
   }
 }
 
-NAMESPACE_END(fock)
+} // namespace squant

@@ -1,7 +1,7 @@
 #pragma once
 #include "../common/utils.h"
 
-NAMESPACE_BEGIN(squant)
+namespace squant {
 
 inline int popcnt_cpu(const unsigned long x) { return __builtin_popcountl(x); }
 
@@ -19,17 +19,17 @@ void diff_type_cpu(unsigned long *bra, unsigned long *ket, int *p, int _len);
 
 int parity_cpu(unsigned long *bra, int n);
 
-void get_olst_cpu(unsigned long *bra, int *olst, int _len);
+void diff_orb_cpu(unsigned long *bra, unsigned long *ket, int _len, int *cre,
+                  int *ann);
 
-// olst: abab
-void get_olst_cpu_ab(unsigned long *bra, int *olst, int _len);
+void get_olst_cpu(unsigned long *bra, int *olst, int _len);
 
 void get_vlst_cpu(unsigned long *bra, int *vlst, int n, int _len);
 
 // vlst: abab
 void get_vlst_cpu_ab(unsigned long *bra, int *vlst, int n, int _len);
 
-void diff_orb_cpu(unsigned long *bra, unsigned long *ket, int _len, int *cre,
-                  int *ann);
+// olst: abab
+void get_olst_cpu_ab(unsigned long *bra, int *olst, int _len);
 
-NAMESPACE_END(fock)
+}  // namespace squant
