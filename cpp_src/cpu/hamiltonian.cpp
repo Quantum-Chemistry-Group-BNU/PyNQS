@@ -1,13 +1,16 @@
 #include "hamiltonian.h"
+
 #include "onstate.h"
 
-namespace squant{
+namespace squant {
 
-double h1e_get_cpu(double *h1e, size_t i, size_t j, size_t sorb) {
+double h1e_get_cpu(const double *h1e, const size_t i, const size_t j,
+                   const size_t sorb) {
   return h1e[j * sorb + i];
 }
 
-double h2e_get_cpu(double *h2e, size_t i, size_t j, size_t k, size_t l) {
+double h2e_get_cpu(const double *h2e, const size_t i, const size_t j,
+                   const size_t k, const size_t l) {
   if ((i == j) || (k == l)) return 0.00;
   size_t ij = i > j ? i * (i - 1) / 2 + j : j * (j - 1) / 2 + i;
   size_t kl = k > l ? k * (k - 1) / 2 + l : l * (l - 1) / 2 + k;
@@ -25,25 +28,27 @@ double h2e_get_cpu(double *h2e, size_t i, size_t j, size_t k, size_t l) {
   return val;
 }
 
-double get_Hii_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
-                   double *h2e, int sorb, const int nele, int bra_len) {
+double get_Hii_cpu(const unsigned long *bra, const unsigned long *ket,
+                   const double *h1e, const double *h2e, const int sorb,
+                   const int nele, const int bra_len) {
   double Hii = 0.00;
   int olst[MAX_NELE] = {0};
   get_olst_cpu(bra, olst, bra_len);
 
   for (int i = 0; i < nele; i++) {
-    int p = olst[i]; //<p|h|p>
+    int p = olst[i];  //<p|h|p>
     Hii += h1e_get_cpu(h1e, p, p, sorb);
     for (int j = 0; j < i; j++) {
       int q = olst[j];
-      Hii += h2e_get_cpu(h2e, p, q, p, q); //<pq||pq> Storage not continuous
+      Hii += h2e_get_cpu(h2e, p, q, p, q);  //<pq||pq> Storage not continuous
     }
   }
   return Hii;
 }
 
-double get_HijS_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
-                    double *h2e, size_t sorb, int bra_len) {
+double get_HijS_cpu(const unsigned long *bra, const unsigned long *ket,
+                    const double *h1e, const double *h2e, const size_t sorb,
+                    const int bra_len) {
   double Hij = 0.00;
   int p[1], q[1];
   diff_orb_cpu(bra, ket, bra_len, p, q);
@@ -57,13 +62,14 @@ double get_HijS_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
       repr &= ~(1ULL << j);
     }
   }
-  int sgn =parity_cpu(bra, p[0]) * parity_cpu(ket, q[0]);
+  int sgn = parity_cpu(bra, p[0]) * parity_cpu(ket, q[0]);
   Hij *= static_cast<double>(sgn);
   return Hij;
 }
 
-double get_HijD_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
-                    double *h2e, size_t sorb, int bra_len) {
+double get_HijD_cpu(const unsigned long *bra, const unsigned long *ket,
+                    const double *h1e, const double *h2e, const size_t sorb,
+                    const int bra_len) {
   int p[2], q[2];
   diff_orb_cpu(bra, ket, bra_len, p, q);
   int sgn = parity_cpu(bra, p[0]) * parity_cpu(bra, p[1]) *
@@ -73,4 +79,20 @@ double get_HijD_cpu(unsigned long *bra, unsigned long *ket, double *h1e,
   return Hij;
 }
 
-} // namespace squant
+double get_Hij_cpu(const unsigned long *bra, const unsigned long *ket,
+                   const double *h1e, const double *h2e, const size_t sorb,
+                   const int nele, const int bra_len) {
+  double Hij = 0.00;
+  int type[2] = {0};
+  diff_type_cpu(bra, ket, type, bra_len);
+  if (type[0] == 0 && type[1] == 0) {
+    Hij = get_Hii_cpu(bra, ket, h1e, h2e, sorb, nele, bra_len);
+  } else if (type[0] == 1 && type[1] == 1) {
+    Hij = get_HijS_cpu(bra, ket, h1e, h2e, sorb, bra_len);
+  } else if (type[0] == 2 && type[1] == 2) {
+    Hij = get_HijD_cpu(bra, ket, h1e, h2e, sorb, bra_len);
+  }
+  return Hij;
+}
+
+}  // namespace squant

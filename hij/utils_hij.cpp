@@ -46,24 +46,7 @@ void get_olst_cpu(unsigned long *bra, int *olst, int _len) {
     while (tmp != 0) {
       int j = __builtin_ctzl(tmp);
       olst[idx] = i * 64 + j;
-      tmp &= ~(1ULL << j);
-      idx++;
-    }
-  }
-}
 
-void get_olst_cpu(unsigned long *bra, int *olst, int *olst_a, int *olst_b,
-                  int _len) {
-  unsigned long tmp;
-  int ida = 0;
-  int idb = 0;
-  int idx = 0;
-  for (int i = 0; i < _len; i++) {
-    tmp = bra[i];
-    while (tmp != 0) {
-      int j = __builtin_ctzl(tmp);
-      int s = i * 64 + j;
-      olst[idx] = s;
       idx++;
       if (s & 1) {
         olst_b[idb] = s;

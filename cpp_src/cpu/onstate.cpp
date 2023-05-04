@@ -1,9 +1,11 @@
 #include "onstate.h"
+
 #include "utils.h"
 
 namespace squant {
 
-void diff_type_cpu(unsigned long *bra, unsigned long *ket, int *p, int _len) {
+void diff_type_cpu(const unsigned long *bra, const unsigned long *ket, int *p,
+                   const int _len) {
   unsigned long idiff, icre, iann;
   for (int i = _len - 1; i >= 0; i--) {
     idiff = bra[i] ^ ket[i];
@@ -14,95 +16,19 @@ void diff_type_cpu(unsigned long *bra, unsigned long *ket, int *p, int _len) {
   }
 }
 
-int parity_cpu(unsigned long *bra, int n) {
+int parity_cpu(const unsigned long *bra, const int sorb) {
   int p = 0;
-  for (int i = 0; i < n / 64; i++) {
+  for (int i = 0; i < sorb / 64; i++) {
     p ^= get_parity_cpu(bra[i]);
   }
-  if (n % 64 != 0) {
-    p ^= get_parity_cpu((bra[n / 64] & get_ones_cpu(n % 64)));
+  if (sorb % 64 != 0) {
+    p ^= get_parity_cpu((bra[sorb / 64] & get_ones_cpu(sorb % 64)));
   }
   return -2 * p + 1;
 }
 
-void get_olst_cpu(unsigned long *bra, int *olst, int _len) {
-  unsigned long tmp;
-  int idx = 0;
-  for (int i = 0; i < _len; i++) {
-    tmp = bra[i];
-    while (tmp != 0) {
-      int j = __builtin_ctzl(tmp);
-      olst[idx] = i * 64 + j;
-      tmp &= ~(1ULL << j);
-      idx++;
-    }
-  }
-}
-
-void get_olst_cpu_ab(unsigned long *bra, int *olst, int _len) {
-  // abab
-  unsigned long tmp;
-  int idx = 0;
-  int ida = 0; 
-  int idb = 0;
-  for (int i = 0; i < _len; i++) {
-    tmp = bra[i];
-    while (tmp != 0) {
-      int j = __builtin_ctzl(tmp);
-      int s = i * 64 + j;
-      if ( s & 1){
-        idb++;
-        idx = 2 * idb - 1;
-      }else{
-        ida++;
-        idx = 2 * (ida -1);
-      }
-      olst[idx] = s;
-      tmp &= ~(1ULL << j);
-    }
-  }
-}
-
-void get_vlst_cpu(unsigned long *bra, int *vlst, int n, int _len) {
-  int ic = 0;
-  unsigned long tmp;
-  for (int i = 0; i < _len; i++) {
-    // be careful about the virtual orbital case
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(n % 64));
-    while (tmp != 0) {
-      int j = __builtin_ctzl(tmp);
-      vlst[ic] = i * 64 + j;
-      ic++;
-      tmp &= ~(1ULL << j);
-    }
-  }
-}
-
-void get_vlst_cpu_ab(unsigned long *bra, int *vlst, int n, int _len) {
-  int ic = 0;
-  int idb = 0;
-  int ida = 0;
-  unsigned long tmp;
-  for (int i = 0; i < _len; i++) {
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(n % 64));
-    while (tmp != 0) {
-      int j = __builtin_ctzl(tmp);
-      int s = i * 64 + j;
-      if (s & 1){
-        idb++;
-        ic = 2 * idb - 1;
-      }else{
-        ida++;
-        ic = 2 * (ida - 1);
-      }
-      vlst[ic] = s;
-      tmp &= ~(1ULL << j);
-    }
-  }
-}
-
-void diff_orb_cpu(unsigned long *bra, unsigned long *ket, int _len, int *cre,
-                  int *ann) {
+void diff_orb_cpu(const unsigned long *bra, const unsigned long *ket,
+                  const int _len, int *cre, int *ann) {
   int idx_cre = 0;
   int idx_ann = 0;
   for (int i = _len - 1; i >= 0; i--) {
@@ -124,4 +50,100 @@ void diff_orb_cpu(unsigned long *bra, unsigned long *ket, int _len, int *cre,
   }
 }
 
-} // namespace squant
+void get_olst_cpu(const unsigned long *bra, int *olst, const int _len) {
+  unsigned long tmp;
+  int idx = 0;
+  for (int i = 0; i < _len; i++) {
+    tmp = bra[i];
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      olst[idx] = i * 64 + j;
+      tmp &= ~(1ULL << j);
+      idx++;
+    }
+  }
+}
+
+void get_olst_cpu_ab(const unsigned long *bra, int *olst, const int _len) {
+  // abab
+  unsigned long tmp;
+  int idx = 0;
+  int ida = 0;
+  int idb = 0;
+  for (int i = 0; i < _len; i++) {
+    tmp = bra[i];
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1) {
+        idb++;
+        idx = 2 * idb - 1;
+      } else {
+        ida++;
+        idx = 2 * (ida - 1);
+      }
+      olst[idx] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
+void get_vlst_cpu(const unsigned long *bra, int *vlst, const int sorb,
+                  const int _len) {
+  int ic = 0;
+  unsigned long tmp;
+  for (int i = 0; i < _len; i++) {
+    // be careful about the virtual orbital case
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64));
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      vlst[ic] = i * 64 + j;
+      ic++;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
+void get_vlst_cpu_ab(const unsigned long *bra, int *vlst, const int sorb,
+                     const int _len) {
+  int ic = 0;
+  int idb = 0;
+  int ida = 0;
+  unsigned long tmp;
+  for (int i = 0; i < _len; i++) {
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64));
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1) {
+        idb++;
+        ic = 2 * idb - 1;
+      } else {
+        ida++;
+        ic = 2 * (ida - 1);
+      }
+      vlst[ic] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
+void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
+                  const int bra_len) {
+  constexpr int block = 64;
+  int idx = 0;
+  for (int i = 0; i < bra_len - 1; i++) {
+    for (int j = 1; j <= block; j++) {
+      lst[idx] = num_parity_cpu(bra[i], j) * -1.0f;
+      idx++;
+    }
+  }
+  const int reset = sorb % block;
+  for (int j = 1; j <= reset; j++) {
+    // if (idx >= sorb) break;
+    lst[idx] = num_parity_cpu(bra[bra_len - 1], j) * -1.0f;
+    idx++;
+  }
+}
+
+}  // namespace squant

@@ -2,14 +2,24 @@
 #include "../common/utils.h"
 
 namespace squant {
-void unpack_canon(int ij, int *s);
 
-int get_Num_SinglesDoubles(int sorb, int noA, int noB);
+inline void unpack_canon(const int ij, int *s) {
+  int i = std::sqrt((ij + 1) * 2) + 0.5;
+  int j = ij - i * (i - 1) / 2;
+  s[0] = i;
+  s[1] = j;
+}
 
-void unpack_SinglesDoubles(int sorb, int noA, int noB, int idx, int *idx_lst);
+int get_Num_SinglesDoubles(const int sorb, const int noA, const int noB);
 
-void get_comb_SD(unsigned long *bra, int merged, int r0, int n, int len, int noa, int nob);
+void unpack_SinglesDoubles(const int sorb, const int noA, const int noB,
+                           const int idx, int *idx_lst);
 
-void get_comb_SD(unsigned long *bra, double *lst,int merged, int r0, int n, int len, int noa, int nob);
+void get_comb_SD(unsigned long *comb, const int *merged, const int r0,
+                 const int sorb, const int len, const int noA, const int noB);
 
-} // namespace
+void get_comb_SD(unsigned long *comb, double *lst, const int *merged,
+                 const int r0, const int sorb, const int len, const int noA,
+                 const int noB);
+
+}  // namespace squant

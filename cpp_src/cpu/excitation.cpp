@@ -1,8 +1,8 @@
 #include "excitation.h"
 
 namespace squant {
-  
-int get_Num_SinglesDoubles(int sorb, int noA, int noB) {
+
+int get_Num_SinglesDoubles(const int sorb, const int noA, const int noB) {
   int k = sorb / 2;
   int nvA = k - noA, nvB = k - noB;
   int nSa = noA * nvA, nSb = noB * nvB;
@@ -12,8 +12,8 @@ int get_Num_SinglesDoubles(int sorb, int noA, int noB) {
   return nSa + nSb + nDaa + nDbb + nDab;
 }
 
-void unpack_Singles_Doubles(int sorb, int noA, int noB, int idx,
-                                int *idx_lst) {
+void unpack_SinglesDoubles(const int sorb, const int noA, const int noB,
+                            const int idx, int *idx_lst) {
   int k = sorb / 2;
   int nvA = k - noA, nvB = k - noB;
   int nSa = noA * nvA, nSb = noB * nvB;
@@ -101,11 +101,11 @@ void unpack_Singles_Doubles(int sorb, int noA, int noB, int idx,
   idx_lst[3] = b;
 }
 
-void get_comb_SD(unsigned long *comb, int *merged, int r0, int n, int len,
-                     int noa, int nob) {
+void get_comb_SD(unsigned long *comb, const int *merged, const int r0,
+                 const int sorb, const int len, const int noA, const int noB) {
   int idx_lst[4] = {0};
   // std::cout << "i j k l: ";
-  unpack_Singles_Doubles(n, noa, nob, r0, idx_lst);
+  unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
     BIT_FLIP(comb[idx / 64], idx % 64);
@@ -113,10 +113,11 @@ void get_comb_SD(unsigned long *comb, int *merged, int r0, int n, int len,
   // std::cout << std::endl;
 }
 
- void get_comb_SD(unsigned long *comb, double *lst, int *merged, int r0,
-                     int n, int len, int noa, int nob) {
+void get_comb_SD(unsigned long *comb, double *lst, const int *merged,
+                 const int r0, const int sorb, const int len, const int noA,
+                 const int noB){
   int idx_lst[4] = {0};
-  unpack_Singles_Doubles(n, noa, nob, r0, idx_lst);
+  unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
     BIT_FLIP(comb[idx / 64], idx % 64);
@@ -124,4 +125,4 @@ void get_comb_SD(unsigned long *comb, int *merged, int r0, int n, int len,
   }
 }
 
-} // namespace squant
+}  // namespace squant
