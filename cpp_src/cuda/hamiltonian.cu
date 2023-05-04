@@ -1,14 +1,18 @@
-#include "../common/default.h"
+#include <cstddef>
 #include "hamiltonian_cuda.h"
 #include "onstate_cuda.h"
 
+#include "../common/default.h"
+
 namespace squant {
 
-__device__ double h1e_get_cuda(double *h1e, size_t i, size_t j, size_t sorb) {
+__device__ double h1e_get_cuda(const double *h1e, const size_t i,
+                               const size_t j, const size_t sorb) {
   return h1e[j * sorb + i];
 }
 
-__device__ double h2e_get_cuda(double *h2e, size_t i, size_t j, size_t k, size_t l) {
+__device__ double h2e_get_cuda(const double *h2e, const size_t i,
+                               const size_t j, const size_t k, const size_t l) {
   if ((i == j) || (k == l))
     return 0.00;
   size_t ij = i > j ? i * (i - 1) / 2 + j : j * (j - 1) / 2 + i;
@@ -19,7 +23,7 @@ __device__ double h2e_get_cuda(double *h2e, size_t i, size_t j, size_t k, size_t
   double val;
   if (ij >= kl) {
     size_t ijkl = ij * (ij + 1) / 2 + kl;
-    val = sgn * h2e[ijkl]; 
+    val = sgn * h2e[ijkl];
   } else {
     size_t ijkl = kl * (kl + 1) / 2 + ij;
     val = sgn * h2e[ijkl]; // sgn * conjugate(h2e[ijkl])
@@ -27,8 +31,10 @@ __device__ double h2e_get_cuda(double *h2e, size_t i, size_t j, size_t k, size_t
   return val;
 }
 
-__device__ double get_Hii_cuda(unsigned long *bra, unsigned long *ket, double *h1e,
-                          double *h2e, int sorb, const int nele, int bra_len) {
+__device__ double get_Hii_cuda(const unsigned long *bra,
+                               const unsigned long *ket, const double *h1e,
+                               const double *h2e, const size_t sorb,
+                               const int nele, const int bra_len) {
   double Hii = 0.00;
   int olst[MAX_NELE] = {0};
   get_olst_cuda(bra, olst, bra_len);
@@ -44,8 +50,10 @@ __device__ double get_Hii_cuda(unsigned long *bra, unsigned long *ket, double *h
   return Hii;
 }
 
-__device__ double get_HijS_cuda(unsigned long *bra, unsigned long *ket, double *h1e,
-                           double *h2e, size_t sorb, int bra_len) {
+__device__ double get_HijS_cuda(const unsigned long *bra,
+                                const unsigned long *ket, const double *h1e,
+                                const double *h2e, const size_t sorb,
+                                const int bra_len) {
   double Hij = 0.00;
   int p[1], q[1];
   diff_orb_cuda(bra, ket, bra_len, p, q);
@@ -64,20 +72,24 @@ __device__ double get_HijS_cuda(unsigned long *bra, unsigned long *ket, double *
   return Hij;
 }
 
-__device__ double get_HijD_cuda(unsigned long *bra, unsigned long *ket, double *h1e,
-                           double *h2e, size_t sorb, int bra_len) {
+__device__ double get_HijD_cuda(const unsigned long *bra,
+                                const unsigned long *ket, const double *h1e,
+                                const double *h2e, const size_t sorb,
+                                const int bra_len) {
   int p[2], q[2];
   diff_orb_cuda(bra, ket, bra_len, p, q);
-  int sgn = parity_cuda(bra, p[0]) * parity_cuda(bra, p[1]) * parity_cuda(ket, q[0]) *
-            parity_cuda(ket, q[1]);
+  int sgn = parity_cuda(bra, p[0]) * parity_cuda(bra, p[1]) *
+            parity_cuda(ket, q[0]) * parity_cuda(ket, q[1]);
   double Hij = h2e_get_cuda(h2e, p[0], p[1], q[0], q[1]);
   Hij *= static_cast<double>(sgn);
   return Hij;
 }
 
-__device__ double get_Hij_cuda(unsigned long *bra, unsigned long *ket, double *h1e,
-                          double *h2e, size_t sorb, size_t nele,
-                          size_t tensor_len, size_t bra_len) {
+__device__ double get_Hij_cuda(const unsigned long *bra,
+                               const unsigned long *ket, const double *h1e,
+                               const double *h2e, const size_t sorb,
+                               const int nele, const int tensor_len,
+                               const int bra_len) {
   double Hij = 0.00;
 
   int type[2] = {0};
