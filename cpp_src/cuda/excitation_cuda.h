@@ -26,4 +26,4 @@ __device__ void get_comb_SD_cuda(unsigned long *bra, double *lst,
                                  const int *merged, const int r0,
                                  const int sorb, const int noA, const int noB);
 
-}  // namespace squant
+} // namespace squant

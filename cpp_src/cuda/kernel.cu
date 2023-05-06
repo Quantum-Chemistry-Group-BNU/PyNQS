@@ -7,9 +7,9 @@
 
 #include "../common/default.h"
 
-__global__ void pack_states_kernel(const uint8_t *bra, uint8_t *states,
-                                   const int sorb, const int bra_len,
-                                   const int m, const size_t n) {
+__global__ void tensor_to_onv_kernel(const uint8_t *bra, uint8_t *states,
+                                     const int sorb, const int bra_len,
+                                     const int m, const size_t n) {
   size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn >= n)
     return;
@@ -20,20 +20,19 @@ __global__ void pack_states_kernel(const uint8_t *bra, uint8_t *states,
   }
 }
 
-__host__ void squant::pack_states_cuda(uint8_t *states, const uint8_t *bra,
-                                       const int sorb, const int nbatch,
-                                       const int bra_len,
-                                       const int tensor_len) {
-
+// tensor(uint8): [1, 1, 0, 0] -> onv(uint8): 0b0011, 1 occupied, 0 unoccupied
+__host__ void squant::tensor_to_onv_cuda(uint8_t *states, const uint8_t *bra,
+                                    const int sorb, const int nbatch,
+                                    const int bra_len, const int tensor_len) {
   dim3 threads(1024);
   dim3 blocks((tensor_len * nbatch + threads.x - 1) / threads.x);
-  pack_states_kernel<<<blocks, threads>>>(bra, states, sorb, bra_len,
-                                          tensor_len, tensor_len * nbatch);
+  tensor_to_onv_kernel<<<blocks, threads>>>(bra, states, sorb, bra_len,
+                                            tensor_len, tensor_len * nbatch);
 }
 
-__host__ __global__ void get_zvec_kernel(double *comb, const unsigned long *bra,
-                                         const int sorb, const int bra_len,
-                                         const size_t m) {
+__global__ void onv_to_tensor_kernel(double *comb, const unsigned long *bra,
+                                     const int sorb, const int bra_len,
+                                     const size_t m) {
   size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn >= m)
     return;
@@ -43,71 +42,70 @@ __host__ __global__ void get_zvec_kernel(double *comb, const unsigned long *bra,
                         idn % sorb);
 }
 
-__host__ void squant::unpack_states_cuda(double *comb, const unsigned long *bra,
-                                         const int sorb, const int bra_len,
-                                         const int nbatch, const size_t numel) {
+// onv(unsinged long): 0b0011 -> tensor(double): [1.0. 1.0, 0.0, 0.0],
+// 1: occupied, 0: unoccupied
+__host__ void squant::onv_to_tensor_cuda(double *comb, const unsigned long *bra,
+                                    const int sorb, const int bra_len,
+                                    const int nbatch, const size_t numel) {
   dim3 threads(1024);
   dim3 blocks((numel + threads.x - 1) / threads.x);
-  get_zvec_kernel<<<blocks, threads>>>(comb, bra, sorb, bra_len, numel);
+  onv_to_tensor_kernel<<<blocks, threads>>>(comb, bra, sorb, bra_len, numel);
 }
 
-// <i|H|j> matrix, i,j: 2D (nbatch, onv)
-// construct Hij matrix -> (nbatch, nbatch)
 __global__ void get_Hij_kernel_2D(double *Hmat, const unsigned long *bra,
                                   const unsigned long *ket, const double *h1e,
                                   const double *h2e, const size_t sorb,
-                                  const size_t nele, const size_t tensor_len,
-                                  const size_t bra_len, const int n,
-                                  const int m) {
+                                  const size_t nele, const size_t bra_len,
+                                  const int n, const int m) {
   int idn = blockIdx.x * blockDim.x + threadIdx.x;
   int idm = blockIdx.y * blockDim.y + threadIdx.y;
   if (idn >= n || idm >= m)
     return;
-  Hmat[idn * m + idm] =
-      squant::get_Hij_cuda(&bra[idn * bra_len], &ket[idm * bra_len], h1e, h2e,
-                           sorb, nele, tensor_len, bra_len);
+  Hmat[idn * m + idm] = squant::get_Hij_cuda(
+      &bra[idn * bra_len], &ket[idm * bra_len], h1e, h2e, sorb, nele, bra_len);
 }
 
-// <i|H|j> i: 2D(nbatch, onv), j: 3D(nbatch, ncomb, onv)
-// local energy -> (nbatch, ncomb)
 __global__ void get_Hij_kernel_3D(double *Hmat, const unsigned long *bra,
                                   const unsigned long *ket, const double *h1e,
                                   const double *h2e, const size_t sorb,
-                                  const size_t nele, const size_t tensor_len,
-                                  const size_t bra_len, const int n,
-                                  const int m) {
+                                  const size_t nele, const size_t bra_len,
+                                  const int n, const int m) {
   int idn = blockIdx.x * blockDim.x + threadIdx.x;
   int idm = blockIdx.y * blockDim.y + threadIdx.y;
   if (idn >= n || idm >= m)
     return;
   Hmat[idn * m + idm] = squant::get_Hij_cuda(
       &bra[idn * bra_len], &ket[idn * m * bra_len + idm * bra_len], h1e, h2e,
-      sorb, nele, tensor_len, bra_len);
+      sorb, nele, bra_len);
 }
 
+// <i|H|j> i: 2D(nbatch, onv), j: 3D(nbatch, ncomb, onv)
+// local energy -> (nbatch, ncomb)
 __host__ void squant::get_Hij_3D_cuda(double *Hmat, const unsigned long *bra,
                                       const unsigned long *ket,
                                       const double *h1e, const double *h2e,
                                       const int sorb, const int nele,
-                                      const int tensor_len, const int bra_len,
+                                      const int bra_len,
                                       const int nbatch, const int ncomb) {
   dim3 threads(THREAD, THREAD);
   dim3 blocks((nbatch + threads.x - 1) / threads.x,
               (ncomb + threads.y - 1) / threads.y);
   get_Hij_kernel_3D<<<blocks, threads>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
-                                         tensor_len, bra_len, nbatch, ncomb);
+                                          bra_len, nbatch, ncomb);
 }
 
+// <i|H|j> matrix, i,j: 2D (nbatch, onv)
+// construct Hij matrix -> (nbatch1, nbatch2)
 __host__ void squant::get_Hij_2D_cuda(double *Hmat, const unsigned long *bra,
                                       const unsigned long *ket,
                                       const double *h1e, const double *h2e,
                                       const int sorb, const int nele,
-                                      const int tensor_len, const int bra_len,
+                                      const int bra_len,
                                       const int n, const int m) {
   dim3 threads(THREAD, THREAD);
   dim3 blocks((n + threads.x - 1) / threads.x, (m + threads.y - 1) / threads.y);
   get_Hij_kernel_2D<<<blocks, threads>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
-                                         tensor_len, bra_len, n, m)
+                                          bra_len, n, m);
 }
 
 __global__ void get_merged_ovlst_kernel(const unsigned long *bra, int *merged,
@@ -153,6 +151,7 @@ __global__ void get_comb_SD_kernel(unsigned long *comb, const int *merged,
                            &merged[idn * sorb], idm - 1, sorb, noA, noB);
 }
 
+// get all Singles-Doubles for given onv(2D)
 __host__ void squant::get_comb_cuda(unsigned long *comb,
                                     const int *merged_ovlst, const int sorb,
                                     const int bra_len, const int noA,
@@ -165,6 +164,7 @@ __host__ void squant::get_comb_cuda(unsigned long *comb,
                                           noA, noB, nbatch, ncomb);
 }
 
+// get all Singles-Doubles and states(3D: nbatch, ncomb, sorb) for given onv(2D)
 __host__ void squant::get_comb_cuda(double *comb_bit, unsigned long *comb,
                                     const int *merged_ovlst, const int sorb,
                                     const int bra_len, const int noA,

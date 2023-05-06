@@ -143,7 +143,7 @@ __device__ void get_zvec_cuda(const unsigned long *bra, double *lst,
   constexpr int block = 64;
   const int idx_bra = idx / block;
   const int idx_bit = idx % block;
-  lst[idx] = num_parity_cuda(bra[idx_bra], idx_bit + 1) * -1.0f;
+  lst[idx] = num_parity_cuda(bra[idx_bra], idx_bit + 1);
   ///
 }
 

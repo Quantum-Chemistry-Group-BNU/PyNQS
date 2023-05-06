@@ -3,9 +3,9 @@
 #include <cassert>
 #include <random>
 
-#include "ATen/ops/empty.h"
-
-Tensor pack_states_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
+Tensor tensor_to_onv_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
+  // bra_tensor(nbatch, sorb)uint8: [1, 1, 0, 0] -> 0b0011 uint8
+  // return states: (nbatch, bra_len * 8)
   const int bra_len = (sorb - 1) / 64 + 1;
   assert(bra_tensor.dtype() == torch::kUInt8);
   auto dim = bra_tensor.dim();
@@ -35,8 +35,10 @@ Tensor pack_states_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
   return states;
 }
 
-torch::Tensor unpack_states_tensor_cpu(const torch::Tensor &bra_tensor,
+torch::Tensor onv_to_tensor_tensor_cpu(const torch::Tensor &bra_tensor,
                                        const int sorb) {
+  // bra_tensor(nbatch, bra_len)uint8: 0b0011 -> [1.0, 1.0, 0.0, 0.0](double)
+  // return comb_bit: (nbatch, sorb)
   const int bra_len = (sorb - 1) / 64 + 1;
   auto bra_dim = bra_tensor.dim();
   assert(bra_dim == 2);
@@ -80,10 +82,10 @@ tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
   int idx_lst[4] = {0};
   squant::unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
-    int idx = merged[idx_lst[i]];  // merged[olst, vlst]
+    int idx = merged[idx_lst[i]]; // merged[olst, vlst]
     BIT_FLIP(bra_ptr[idx / 64], idx % 64);
   }
-  return std::make_tuple(pack_states_tensor_cpu(bra, sorb), bra);
+  return std::make_tuple(tensor_to_onv_tensor_cpu(bra, sorb), bra);
 }
 
 torch::Tensor get_merged_tensor_cpu(torch::Tensor bra, const int nele,
@@ -123,7 +125,7 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
   // bra_tensor: (nbatch, bra_len * 8)
   comb = bra_tensor.reshape({nbatch, 1, -1}).repeat({1, ncomb, 1});
   if (flag_bit) {
-    comb_bit = pack_states_tensor_cpu(bra_tensor, sorb)
+    comb_bit = tensor_to_onv_tensor_cpu(bra_tensor, sorb)
                    .reshape({nbatch, 1, -1})
                    .repeat({1, ncomb, 1});
   } else {
@@ -156,18 +158,16 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
   auto ket_dim = ket_tensor.dim();
   assert(bra_dim == 2);
   assert(ket_dim == 2 or ket_dim == 3);
-  bool flag_3d = false;
+  bool flag_eloc = false;
   const int bra_len = (sorb - 1) / 64 + 1;
   if (ket_dim == 3) {
-    flag_3d = true;
-    // bra: (n, tensor_len), ket: (n, m, tensor_len)
+    flag_eloc = true;
+    // bra: (n, bra_len), ket: (n, m, bra_len), calculate local energy
     n = bra_tensor.size(0), m = ket_tensor.size(1);
   } else if (ket_dim == 2) {
-    flag_3d = false;
-    // bra: (n, tensor_len), ket: (m, tensor_len)
+    flag_eloc = false;
+    // bra: (n, tensor_len), ket: (m, tensor_len), construct Hij matrix
     n = bra_tensor.size(0), m = ket_tensor.size(0);
-  } else {
-    throw "bra dim error";
   }
 
   // torch::empty is faster than 'torch::zeros'
@@ -181,10 +181,10 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
       reinterpret_cast<unsigned long *>(ket_tensor.data_ptr<uint8_t>());
   double *Hmat_ptr = Hmat.data_ptr<double>();
 
-  if (flag_3d) {
+  if (flag_eloc) {
     for (int i = 0; i < n; i++) {
       for (int j = 0; j < m; j++) {
-        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[i, m])
+        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[i, j])
         Hmat_ptr[i * m + j] = squant::get_Hij_cpu(
             &bra_ptr[i * bra_len], &ket_ptr[i * m * bra_len + j * bra_len],
             h1e_ptr, h2e_ptr, sorb, nele, bra_len);

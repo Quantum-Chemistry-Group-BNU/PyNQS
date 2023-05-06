@@ -1,3 +1,4 @@
+#pragma once
 #include <cstddef>
 
 #include "utils_cuda.h"
@@ -28,7 +29,6 @@ __device__ double get_HijD_cuda(const unsigned long *bra,
 __device__ double get_Hij_cuda(const unsigned long *bra,
                                const unsigned long *ket, const double *h1e,
                                const double *h2e, const size_t sorb,
-                               const int nele, const int tensor_len,
-                               const int bra_len);
+                               const int nele, const int bra_len);
 
-}  // namespace squant
+} // namespace squant

@@ -11,10 +11,10 @@ endif
 nvcc = nvcc
 
 ifeq ($(strip $(sys_name)), myarch)
-	cxx = g++-11
+	CXX = g++-11
 	CUDA_HOME = /home/zbwu/soft/anaconda3
 else
-	cxx = g++
+	CXX = g++
 	CUDA_HOME = /usr/local/cuda
 endif
-cxxflags = -O3 -std=c++17 -I${CUDA_HOME}/include $(CUDA_NVCC_PLAGS)
+CXXflags = -O3 -std=c++17 -I${CUDA_HOME}/include $(CUDA_NVCC_PLAGS) -ccbin CXX

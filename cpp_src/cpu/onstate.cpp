@@ -134,14 +134,14 @@ void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
   int idx = 0;
   for (int i = 0; i < bra_len - 1; i++) {
     for (int j = 1; j <= block; j++) {
-      lst[idx] = num_parity_cpu(bra[i], j) * -1.0f;
+      lst[idx] = num_parity_cpu(bra[i], j);
       idx++;
     }
   }
   const int reset = sorb % block;
   for (int j = 1; j <= reset; j++) {
     // if (idx >= sorb) break;
-    lst[idx] = num_parity_cpu(bra[bra_len - 1], j) * -1.0f;
+    lst[idx] = num_parity_cpu(bra[bra_len - 1], j);
     idx++;
   }
 }

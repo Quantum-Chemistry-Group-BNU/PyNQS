@@ -3,9 +3,9 @@
 #include "../cpu/onstate.h"
 #include "utils_tensor.h"
 
-Tensor pack_states_tensor_cpu(const Tensor &bra_tensor, const int sorb);
+Tensor tensor_to_onv_tensor_cpu(const Tensor &bra_tensor, const int sorb);
 
-Tensor unpack_states_tensor_cpu(const Tensor &bra_tensor, const int sorb);
+Tensor onv_to_tensor_tensor_cpu(const Tensor &bra_tensor, const int sorb);
 
 tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
                                const int nele, const int noA, const int noB,
