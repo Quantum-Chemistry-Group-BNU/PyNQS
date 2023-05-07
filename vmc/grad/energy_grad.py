@@ -8,7 +8,7 @@ def energy_grad(nqs: nn.Module, states: Tensor, eloc: Tensor,
                 state_prob,
                 exact: bool = False,
                 dtype=torch.double,
-                method: str= None) -> None:
+                method: str= None) -> Tensor:
     """
     calculate the energy gradients using "auto difference or analytic"
     F_p = 2*Real(<E_loc * O*> - <E_loc> * <O*>)

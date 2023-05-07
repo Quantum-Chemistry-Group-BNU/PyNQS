@@ -13,8 +13,13 @@ def sr(nqs: nn.Module, states: Tensor, eloc: Tensor,
        dtype=torch.double,
        method_grad="AD",
        method_jacobian="vector",
-       diag_shift=0.02) -> None:
-
+       diag_shift=0.02) -> Tensor:
+    """Stochastic Reconfiguration in quantum many-body problem
+    
+        theta^{k+1} = theta^k - alpha * S^{-1} * F \\
+        S_{ij}(k) = <O_i^* O_j> - <O_i^*><O_j>  \\
+        F_i{k} = <E_{loc}O_i^*> - <E_{loc}><O_i^*> 
+    """
     # Compute per sample grad
     # [N_state, N_param_all]
     per_sample_grad = jacobian(nqs, states, method=method_jacobian)
@@ -50,6 +55,7 @@ def sr(nqs: nn.Module, states: Tensor, eloc: Tensor,
             param.shape).detach().clone()
         begin_idx = end_idx
 
+    return psi
 
 def _calculate_sr(grad_total: Tensor, F_p: Tensor,
                   state_prob: Tensor, diag_shift: float = 0.02, p: int = None) -> Tensor:
