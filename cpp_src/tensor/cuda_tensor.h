@@ -1,9 +1,7 @@
 #pragma once
-#include "../cuda/excitation_cuda.h"
-#include "../cuda/hamiltonian_cuda.h"
-#include "../cuda/onstate_cuda.h"
-#include "../cuda/utils_cuda.h"
+
 #include "../cuda/kernel.h"
+#include "../cuda/excitation_cuda.h"
 #include "utils_tensor.h"
 
 Tensor tensor_to_onv_tensor_cuda(const Tensor &bra_tensor, const int sorb);

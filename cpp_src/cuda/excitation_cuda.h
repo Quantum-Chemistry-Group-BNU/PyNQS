@@ -12,7 +12,7 @@ __device__ inline void unpack_canon_cuda(const int ij, int *s) {
   s[1] = j;
 }
 
-int get_Num_SinglesDoubles_cuda(const int sorb, const int noA, const int noB);
+__device__ __host__ int get_Num_SinglesDoubles_cuda(const int sorb, const int noA, const int noB);
 
 __device__ void unpack_SinglesDoubles_cuda(const int sorb, const int noA,
                                            const int noB, const int idx,

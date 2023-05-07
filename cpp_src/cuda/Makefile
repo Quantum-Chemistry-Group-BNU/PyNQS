@@ -1,5 +1,6 @@
  gpu = GTX1650
  sys_name = myarch
+
 ifeq ($(strip $(gpu)), GTX1650)
 	CUDA_NVCC_PLAGS = -gencode=arch=compute_75,code=sm_75
 else ifeq ($(strip $(gpu)), A100)
@@ -8,8 +9,6 @@ else ifeq ($(strip $(gpu)), V100)
 	CUDA_NVCC_PLAGS = -gencode=arch=compute_70,code=sm_70
 endif
 
-nvcc = nvcc
-
 ifeq ($(strip $(sys_name)), myarch)
 	CXX = g++-11
 	CUDA_HOME = /home/zbwu/soft/anaconda3
@@ -17,4 +16,32 @@ else
 	CXX = g++
 	CUDA_HOME = /usr/local/cuda
 endif
-CXXflags = -O3 -std=c++17 -I${CUDA_HOME}/include $(CUDA_NVCC_PLAGS) -ccbin CXX
+
+NVCC = $(shell which nvcc)
+CUDA_flags = -I${CUDA_HOME}/include
+CUDA_post_flags = -rdc=true $(CUDA_NVCC_PLAGS) --expt-relaxed-constexpr -c --compile
+# CUDA_post_flags = $(CUDA_NVCC_PLAGS) --expt-relaxed-constexpr -c 
+CXX_flags = -O3 -std=c++17 -ccbin $(CXX)
+
+SRC = $(shell ls *.cu)
+# SRC = hamiltonian.cu onstate.cu excitation.cu kernel.cu
+OBJECTS = $(patsubst %.cu, %.o, $(SRC))
+
+echo:
+	@echo $(SRC)
+	@echo $(NVCC)
+	@echo $(OBJECTS)
+
+# kernel: kernel.cu
+	
+main: $(OBJECTS) kernel
+
+kernel: $(OBJECTS)
+	$(CXX) $(OBJECTS)  -shared -L kernel.so
+
+$(OBJECTS): %.o: %.cu
+	$(NVCC) $(CUDA_flags) $(CUDA_post_flags) $(CXX_flags) $< -o $@
+
+.PHONY: clean
+clean:
+	-rm *.o

@@ -3,13 +3,16 @@
 #include "cpu_tensor.h"
 #include "cuda_tensor.h"
 #include "utils_tensor.h"
+#include "torch/types.h"
 
-#define GPU 1
+// #define GPU 1
 
 Tensor tensor_to_onv(const Tensor &bra_tensor, const int sorb) {
-  CHECK_CONTIGUOUS(bra_tensor);
   const auto dim = bra_tensor.dim();
+  CHECK_CONTIGUOUS(bra_tensor);
   assert(dim == 1 || dim == 2);
+  assert(bra_tensor.dtype() == torch::kUInt8);
+
   if (bra_tensor.is_cpu()) {
     return tensor_to_onv_tensor_cpu(bra_tensor.view({-1, sorb}), sorb);
 #ifdef GPU
@@ -20,10 +23,12 @@ Tensor tensor_to_onv(const Tensor &bra_tensor, const int sorb) {
 }
 
 Tensor onv_to_tensor(const Tensor &bra_tensor, const int sorb) {
-  CHECK_CONTIGUOUS(bra_tensor);
   const auto dim = bra_tensor.dim();
-  assert(dim == 1 || dim == 2);
   const auto bra_len = bra_tensor.size(-1);
+  CHECK_CONTIGUOUS(bra_tensor);
+  assert(dim == 1 || dim == 2);
+  assert(bra_tensor.dtype() == torch::kUInt8);
+
   if (bra_tensor.is_cpu()) {
     return onv_to_tensor_tensor_cpu(bra_tensor.view({-1, bra_len}), sorb);
 #ifdef GPU
@@ -36,11 +41,18 @@ Tensor onv_to_tensor(const Tensor &bra_tensor, const int sorb) {
 Tensor get_Hij(const Tensor &bra_tensor, const Tensor &ket_tensor,
                const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                const size_t sorb, const size_t nele) {
+  auto bra_dim = bra_tensor.dim();
+  auto ket_dim = ket_tensor.dim();
   // Storage must be continuous
   CHECK_CONTIGUOUS(ket_tensor);
   CHECK_CONTIGUOUS(bra_tensor);
   CHECK_CONTIGUOUS(h1e_tensor);
   CHECK_CONTIGUOUS(h2e_tensor);
+  assert(bra_dim == 2);
+  assert(ket_dim == 2 or ket_dim == 3);
+  assert(bra_tensor.dtype() == torch::kUInt8);
+  assert(ket_tensor.dtype() == torch::kUInt8);
+
   if (bra_tensor.is_cpu() && ket_tensor.is_cpu() && h1e_tensor.is_cpu() &&
       h2e_tensor.is_cpu()) {
     return get_Hij_tensor_cpu(bra_tensor, ket_tensor, h1e_tensor, h2e_tensor,
@@ -56,11 +68,13 @@ Tensor get_Hij(const Tensor &bra_tensor, const Tensor &ket_tensor,
 tuple_tensor_2d get_comb(const Tensor &bra_tensor, const int sorb,
                          const int nele, const int noA, const int noB,
                          bool flag_bit) {
+  const auto dim = bra_tensor.dim();
+  const int bra_len = (sorb - 1) / 64 + 1;
   // bra_tensor: (nbatch, bra_len)
   CHECK_CONTIGUOUS(bra_tensor);
-  const auto dim = bra_tensor.dim();
   assert(dim == 1 || dim == 2);
-  const auto bra_len = bra_tensor.size(-1);
+  assert(bra_len == bra_tensor.size(-1));
+
   if (bra_tensor.is_cpu()) {
     return get_comb_tensor_cpu(bra_tensor.view({-1, bra_len}), sorb, nele, noA,
                                noB, flag_bit);

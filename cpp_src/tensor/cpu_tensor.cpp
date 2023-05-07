@@ -3,6 +3,8 @@
 #include <cassert>
 #include <random>
 
+#include "torch/types.h"
+
 Tensor tensor_to_onv_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
   // bra_tensor(nbatch, sorb)uint8: [1, 1, 0, 0] -> 0b0011 uint8
   // return states: (nbatch, bra_len * 8)
@@ -82,19 +84,17 @@ tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
   int idx_lst[4] = {0};
   squant::unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
-    int idx = merged[idx_lst[i]]; // merged[olst, vlst]
+    int idx = merged[idx_lst[i]];  // merged[olst, vlst]
     BIT_FLIP(bra_ptr[idx / 64], idx % 64);
   }
   return std::make_tuple(tensor_to_onv_tensor_cpu(bra, sorb), bra);
 }
 
-torch::Tensor get_merged_tensor_cpu(torch::Tensor bra, const int nele,
-                                    const int sorb, const int noA,
-                                    const int noB) {
-  const int dim = bra.dim();
-  assert(dim == 2);
-  const int bra_len = (sorb - 1) / 64 + 1;
+Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
+                             const int noA, const int noB) {
+  // bra: (nbatch, bra_len * 8)
   const int nbatch = bra.size(0);
+  const int bra_len = (sorb - 1) / 64 + 1;
   auto options = torch::TensorOptions()
                      .dtype(torch::kInt32)
                      .layout(bra.layout())
@@ -102,12 +102,13 @@ torch::Tensor get_merged_tensor_cpu(torch::Tensor bra, const int nele,
                      .requires_grad(false);
   torch::Tensor merged = torch::ones({nbatch, sorb}, options);
   int *merged_ptr = merged.data_ptr<int32_t>();
+  unsigned long *bra_ptr =
+      reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
   for (int i = 0; i < nbatch; i++) {
-    unsigned long *bra_ptr =
-        reinterpret_cast<unsigned long *>(bra[i].data_ptr<uint8_t>());
-    squant::get_olst_cpu_ab(bra_ptr, &merged_ptr[i * sorb], bra_len);
-    squant::get_vlst_cpu_ab(bra_ptr, &merged_ptr[i * sorb + nele], sorb,
+    squant::get_olst_cpu_ab(&bra_ptr[i * (bra_len * 8)], &merged_ptr[i * sorb],
                             bra_len);
+    squant::get_vlst_cpu_ab(&bra_ptr[i * (bra_len * 8)],
+                            &merged_ptr[i * sorb + nele], sorb, bra_len);
   }
   return merged;
 }
@@ -118,8 +119,6 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
   const int bra_len = (sorb - 1) / 64 + 1;
   const int ncomb = squant::get_Num_SinglesDoubles(sorb, noA, noB) + 1;
   const int nbatch = bra_tensor.size(0);
-  const int dim = bra_tensor.dim();
-  assert(dim == 2);
   Tensor comb, comb_bit;
 
   // bra_tensor: (nbatch, bra_len * 8)
@@ -154,9 +153,7 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
                           const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                           const int sorb, const int nele) {
   int n, m;
-  auto bra_dim = bra_tensor.dim();
   auto ket_dim = ket_tensor.dim();
-  assert(bra_dim == 2);
   assert(ket_dim == 2 or ket_dim == 3);
   bool flag_eloc = false;
   const int bra_len = (sorb - 1) / 64 + 1;

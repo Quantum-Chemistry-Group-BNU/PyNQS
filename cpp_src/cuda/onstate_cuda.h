@@ -58,7 +58,7 @@ __device__ void get_ovlst_cuda(const unsigned long *bra, int *merged,
                                const int sorb, const int nele,
                                const int bra_len);
 
-// -1: occupied 1: unoccupied
+// 0: unoccupied 1: occupied
 __device__ void get_zvec_cuda(const unsigned long *bra, double *lst,
                               const int sorb, const int bra_len, const int idx);
 

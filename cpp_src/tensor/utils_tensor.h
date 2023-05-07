@@ -2,6 +2,7 @@
 #include "../common/default.h"
 #include <tuple>
 
+#include <ATen/ATen.h>
 #include <torch/extension.h>
 #include <torch/script.h>
 #include "ATen/core/TensorBody.h"

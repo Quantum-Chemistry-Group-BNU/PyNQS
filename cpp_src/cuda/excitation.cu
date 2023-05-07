@@ -3,7 +3,7 @@
 
 namespace squant {
 
-int get_Num_SinglesDoubles_cuda(const int sorb, const int noA, const int noB) {
+__host__ __device__ int get_Num_SinglesDoubles_cuda(const int sorb, const int noA, const int noB) {
   int k = sorb / 2;
   int nvA = k - noA, nvB = k - noB;
   int nSa = noA * nvA, nSb = noB * nvB;
