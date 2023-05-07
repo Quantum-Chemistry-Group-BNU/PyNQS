@@ -125,7 +125,7 @@ if __name__ == "__main__":
                                        analytic_derivate=False,
                                        num_diff=False,
                                        verbose=False,
-                                       sr=False,
+                                       sr_flag=False,
                                        pre_CI=cisd_wf,
                                        pre_train_info=pre_train_info
                                        )

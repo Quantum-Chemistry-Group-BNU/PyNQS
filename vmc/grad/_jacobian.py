@@ -6,10 +6,12 @@ from torch.func import functional_call, vmap, grad
 
 __all__ = ["jacobian"]
 
-def jacobian(module: nn.Module, states: Tensor, method="vector") -> Tensor:
+def jacobian(module: nn.Module, states: Tensor, method: str= None) -> Tensor:
     """
     Compute the ln-gradient for each and very sample when using 'SR' method
     """
+    if method is None:
+        method = "vector"
     if method == "vector":
         return jacobian_vector(module, states)
     elif method == "simple":
@@ -39,8 +41,8 @@ def jacobian_vector(module: nn.Module, states: Tensor) -> Tensor:
 
     out: List[Tensor] = []
     for k, dws in ft_per_sample_grads.items():
-        out.append(torch.cat(tuple(dws[k].reshape(
-            1, -1).detach() for k in range(states.shape[0]))))
+        out.append(torch.cat(tuple(dws[l].reshape(
+            1, -1).detach() for l in range(states.shape[0]))))
 
     return torch.cat(tuple(out), dim=1)
 

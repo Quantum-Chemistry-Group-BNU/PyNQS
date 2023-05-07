@@ -26,7 +26,7 @@ def setup_seed(x: int):
 
 def string_to_state(sorb: int, string: str) -> List[int]:
     """
-    Convert onstate from string ("0011", right->left) to uint8 list (left->right) 
+    Convert onstate from string ("0011", right->left) to onv(0b0011, left->right) 
     """
     arr = np.array(list(map(int, string)))[::-1]
     state = [0] * ((sorb-1)//64 +1)*8
@@ -46,8 +46,8 @@ def state_to_string(state: Tensor, sorb: int = None, occ_one: bool = False) -> L
         if sorb is None:
             raise ValueError(f"sorb {sorb} must be given when state dtype is uint8")
         assert (sorb > 0)
-        # full_bit = ((1 + uint8_to_bit(state, sorb))//2).to(torch.uint8).tolist()
-        full_bit = ((1 - uint8_to_bit(state, sorb))//2).to(torch.uint8).tolist()
+        full_bit = ((1 + uint8_to_bit(state, sorb))//2).to(torch.uint8).tolist()
+        # full_bit = ((1 - uint8_to_bit(state, sorb))//2).to(torch.uint8).tolist()
     else:
         if not occ_one:
             state = (1 - state)//2

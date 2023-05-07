@@ -6,7 +6,7 @@ from torch import Tensor
 from typing import Tuple
 
 import libs.py_fock as fock
-from .PublicFunction import given_onstate, string_to_state
+from .public_function import given_onstate, string_to_state
 
 # TODO: int2e, is complex ???
 class Integral:

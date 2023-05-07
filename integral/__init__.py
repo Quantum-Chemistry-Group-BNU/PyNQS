@@ -1,4 +1,5 @@
-from integral import ipyscf_real
+from .ipyscf_real import ipyscf_real
+
 from typing import Tuple
 from pyscf import gto, scf, fci, cc, ci
 

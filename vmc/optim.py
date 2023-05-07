@@ -16,12 +16,12 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from typing import List, Tuple
 
 from .sample import MCMCSampler
-from .eloc import total_energy, energy_grad
-from ci import CITrain, CIWavefunction, energy_CI
-from utils import ElectronInfo,Dtype
+from .energy import total_energy
+from .grad import energy_grad, sr
+from ci import CITrain, CIWavefunction
+from utils import ElectronInfo, Dtype
 from libs.hij_tensor import uint8_to_bit
 
-__all__ = ["SR", "_calculate_sr", "sr_grad"]
 print = partial(print, flush=True)
 
 class VMCOptimizer():
@@ -42,12 +42,14 @@ class VMCOptimizer():
                 verbose: bool = False,
                 analytic_derivate: bool = True,
                 dtype: Dtype = None,
-                sr: bool = False,
                 HF_init: int = None,
                 external_model: any = None,
                 only_sample: bool = False,
                 pre_CI: CIWavefunction = None, 
                 pre_train_info: dict = None,
+                method_grad: str = "AD",
+                sr_flag: bool = False,
+                method_sr: str = None,
                 ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -67,10 +69,11 @@ class VMCOptimizer():
             self.lr_scheduler = None
 
         self.HF_init = HF_init
-        self.sr = sr
+        self.sr_flag: bool = sr_flag
+        self.method_sr: str = method_sr if self.sr else None
         self.max_iter = max_iter
         self.num_diff = num_diff
-        self.analytic_derivate = analytic_derivate
+        self.method_grad = method_grad
         self.verbose = verbose
 
         # Sample
@@ -268,7 +271,7 @@ class VMCOptimizer():
         if self.num_diff:
             F_p_lst = self._numerical_differentiation(state)
         else:
-            if self.analytic_derivate:
+            if self.method_grad:
                 grad_lnPsi, psi = self._analytic_derivate_lnPsi(state)
             else:
                 grad_lnPsi, psi = self._auto_diff_lnPsi(state)
