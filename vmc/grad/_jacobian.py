@@ -14,8 +14,10 @@ def jacobian(module: nn.Module, states: Tensor, method="vector") -> Tensor:
         return jacobian_vector(module, states)
     elif method == "simple":
         return jacobian_simple(module, states)
+    elif method == "analytic":
+        return jacobian_analytic(module, states)
     else:
-        raise ValueError(f"method {method} must be in ('vector', 'simple')")
+        raise TypeError(f"method {method} must be in ('vector', 'simple', 'analytic')")
 
 def jacobian_vector(module: nn.Module, states: Tensor) -> Tensor:
     """
@@ -56,3 +58,9 @@ def jacobian_simple(module: nn.Module, states: Tensor) -> Tensor:
         dws = torch.autograd.grad([module(states[[i]]).log()], params)
         torch.cat([dw.flatten() for dw in dws], out=out[i])
     return out
+
+def jacobian_analytic(module: nn.Module, states: Tensor) -> Tensor:
+    """
+    Per-sample-gradient using model analytic grad, model(KeyWords: dlnPsi = True)
+    """
+    return module(states, dlnPsi=True)

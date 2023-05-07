@@ -3,39 +3,6 @@ import torch
 from typing import Union
 from torch import nn, Tensor
 
-from ci import energy_CI
-from vmc.eloc import total_energy
-from utils import ElectronInfo
-from abc import ABC, abstractmethod
-
-class AnsatzFunction(ABC):
-    @abstractmethod
-    def amplitude(self, x):
-        """
-        Args:
-            string: The type of ansatz, e.g. RBM
-        Return:
-            I do not known.
-        """
-
-    @abstractmethod
-    def phase(self, x):
-        """
-        Args:
-            x: a tensor
-        Return
-            the phase 
-        """
-
-    @abstractmethod
-    def prob(self, x):
-        """
-        Args:
-            x: tensor
-        Return:
-            the unnormalized probability
-        """
-
 class RBMWavefunction(nn.Module):
 
     __constants__ = ['num_visible', 'num_hidden']
@@ -127,25 +94,6 @@ class RBMWavefunction(nn.Module):
             return ((db.detach(), dw.detach()), self.psi(x))
         else:
             return ((da.detach(), db.detach(), dw.detach()), self.psi(x))
-
-    @property
-    def electron_info(self):
-        return self._electron_info
-
-    @electron_info.setter
-    def electron_info(self, t: ElectronInfo):
-        assert (isinstance(t, ElectronInfo))
-        self._electron_info = t
-
-    def energy(self):
-        pass
-
-    # TODO: the conflict between class MCMCSampler first parameters(nn.Module) and ansatz
-    def _e_vmc(self):
-        pass 
-
-    def _e_exact_ci(self):
-        pass 
 
     def forward(self, x: Tensor, dlnPsi: bool = False):
         if dlnPsi:

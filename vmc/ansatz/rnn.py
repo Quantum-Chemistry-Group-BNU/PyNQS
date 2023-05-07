@@ -19,12 +19,12 @@ def heavyside(inputs):
     return 0.5*(sign+1.0)
 
 
-class RNNwavefunction(nn.Module):
+class RNNWavefunction(nn.Module):
     # __constants__ = ['num_hiddens', 'num_layers']  # 这里将这两个输入赋值给self后，jit不能使用这两个变量了，所以对这两个变量进行处理
 
     def __init__(self, sorb: int, num_hiddens: int, num_layers: int, num_labels: int, device: str = None):
         #torch._dynamo.config.suppress_errors = True
-        super(RNNwavefunction, self).__init__()
+        super(RNNWavefunction, self).__init__()
         self.device = device
         self.factory_kwargs = {'device': self.device, "dtype": torch.double}
         self.sorb = sorb  # 10
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     num_classes = 2
     num_samples = 500
     
-    model = RNNwavefunction(systemsize, num_hidden, num_layers, num_classes, num_samples)
+    model = RNNWavefunction(systemsize, num_hidden, num_layers, num_classes, num_samples)
     # summary(RNN)
     samp = model.samples()
     # print(samp)
