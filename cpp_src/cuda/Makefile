@@ -19,7 +19,7 @@ endif
 
 NVCC = $(shell which nvcc)
 CUDA_flags = -I${CUDA_HOME}/include
-CUDA_post_flags = -rdc=true $(CUDA_NVCC_PLAGS) --expt-relaxed-constexpr -c --compile
+CUDA_post_flags = $(CUDA_NVCC_PLAGS) --expt-relaxed-constexpr -c --compile --device-link --compiler-options ''"'"'-fPIC'"'"'' -lcudart -lcudadevrt -L$(CUDA_HOME)/lib
 # CUDA_post_flags = $(CUDA_NVCC_PLAGS) --expt-relaxed-constexpr -c 
 CXX_flags = -O3 -std=c++17 -ccbin $(CXX)
 
@@ -34,10 +34,11 @@ echo:
 
 # kernel: kernel.cu
 	
-main: $(OBJECTS) kernel
+all: $(OBJECTS) kernel
 
 kernel: $(OBJECTS)
-	$(CXX) $(OBJECTS)  -shared -L kernel.so
+# $(NVCC) $(OBJECTS) $(CUDA_flags) $(CUDA_post_flags) -dlink -o out.o
+	$(CXX) $(OBJECTS) -shared -o kernel.so -L$(CUDA_HOME)/lib -lcudart -lcudadevrt
 
 $(OBJECTS): %.o: %.cu
 	$(NVCC) $(CUDA_flags) $(CUDA_post_flags) $(CXX_flags) $< -o $@

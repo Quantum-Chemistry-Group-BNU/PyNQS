@@ -1,4 +1,4 @@
-from rbm import RBMWavefunction
-from rnn import RNNWavefunction
+from .rbm import RBMWavefunction
+from .rnn import RNNWavefunction
 
 __all__ = ["RBMWavefunction", "RNNWavefunction"]

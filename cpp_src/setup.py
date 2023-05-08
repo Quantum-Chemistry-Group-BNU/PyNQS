@@ -21,13 +21,24 @@ include_dirs = [osp.join(ROOT_DIR)]
 sources = glob.glob('*/*.cpp') + glob.glob('*/*.cu')
 
 print(sources)
-s = "C"
+s = "C_extension"
 
 CppExtension(
     name=s,
     sources=sources,
     include_dirs=include_dirs,
     extra_compile_args={'cxx': ['-O3', '-std=c++17', '-UGPU']}
+)
+
+CUDA = CUDAExtension(
+    name=s,
+    sources=sources,
+    library_dirs=["/home/zbwu/soft/anaconda3/lib"],
+    # dlink=True,
+    # dlink_libraries=["cudalink"],
+    include_dirs=include_dirs,
+    extra_compile_args={'cxx': ['-O3', '-std=c++17', '-DGPU=1'],
+                        'nvcc': ['-O3',"-lcudart", "-rdc=true", "--compile", "--expt-relaxed-constexpr", "-lcudadevrt"]}
 )
 
 setup(
@@ -38,20 +49,7 @@ setup(
     description=s,
     long_description=s,
     ext_modules=[
-        CUDAExtension(
-            name=s,
-            sources=sources,
-            include_dirs=include_dirs,
-            # dlink_libraries=["dlink_lib"],
-            extra_compile_args={'cxx': ['-O3', '-std=c++17', '-DGPU=1'],
-                                'nvcc': ['-c', '-O3', '-rdc=true', '--compile', '--device-link']}
-        )
-    # CppExtension(
-    # name=s,
-    # sources=[i for i in glob.glob('*/*.cpp') if "cuda" not in i],
-    # include_dirs=include_dirs,
-    # extra_compile_args={'cxx': ['-O3', '-std=c++17', '-UGPU']}
-    # )
+    CUDA
     ],
     cmdclass={
         'build_ext': BuildExtension.with_options(no_python_abi_suffix=True)

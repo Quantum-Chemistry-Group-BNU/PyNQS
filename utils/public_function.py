@@ -7,7 +7,7 @@ from torch import Tensor
 from typing import List, Type, Tuple, Union
 from dataclasses import dataclass
 
-from libs.hij_tensor import uint8_to_bit, pack_states
+from libs.C_extension import onv_to_tensor, tensor_to_onv
 
 def check_para(bra: Tensor):
     if bra.dtype != torch.uint8:
@@ -46,8 +46,8 @@ def state_to_string(state: Tensor, sorb: int = None, occ_one: bool = False) -> L
         if sorb is None:
             raise ValueError(f"sorb {sorb} must be given when state dtype is uint8")
         assert (sorb > 0)
-        full_bit = ((1 + uint8_to_bit(state, sorb))//2).to(torch.uint8).tolist()
-        # full_bit = ((1 - uint8_to_bit(state, sorb))//2).to(torch.uint8).tolist()
+        full_bit = onv_to_tensor(state, sorb).to(torch.uint8).tolist() # 0:unoccupied, 1: occupied
+        # full_bit = ((1 - onv_to_tensor(state, sorb))//2).to(torch.uint8).tolist()
     else:
         if not occ_one:
             state = (1 - state)//2
@@ -80,7 +80,7 @@ def get_nbatch(sorb: int, n_sample_unique: int, n_comb_sd: int,
     Calculate the nbatch of total energy when using local energy
     """
     def comb_memory():
-        x1 = n_comb_sd * sorb * 8 /(1<<30) * 2 # uint8_to_bit, double, GiB
+        x1 = n_comb_sd * sorb * 8 /(1<<30) * 2 # onv_to_tensor, double, GiB
         x2 = n_comb_sd * ((sorb-1)//64 + 1) * 8 / (1<<30) # SD, uint8, GiB
         return x1 + x2
     m = comb_memory() * n_sample_unique
@@ -143,8 +143,8 @@ def check_spin_multiplicity(state: Tensor, sorb: int,
         ms = (1, )
     else:
         assert isinstance(ms, (tuple, list))
-    x = (1 - uint8_to_bit(state, sorb))//2 # 1 occupied, 0 unoccupied
-    x0 = torch.ones_like(x)
+    x = onv_to_tensor(state, sorb) # 1 occupied, 0 unoccupied
+    x0 = torch.empty_like(x)
     x0[..., 0::2] = -1
     x0[..., 1::2] = 1
     spin = ((x0 * x).sum(axis=-1).abs().to(torch.int32) + 1)
@@ -175,7 +175,7 @@ def convert_onv(spins: Union[Tensor, np.ndarray], sorb: int, device: str = None)
     else:
         raise TypeError(f"spins has invalid dim: {spins.ndim}, and expected 1 or 2")
 
-    return pack_states(spins, sorb).to(device)
+    return tensor_to_onv(spins, sorb).to(device)
 
 @dataclass(frozen=True)
 class Dtype:
@@ -204,7 +204,7 @@ class Logger():
 class ElectronInfo:
     """
     A class about electronic structure information, 
-     and include 'h1e, h2e, sorb, nele, noa, nob, ecore, nv,onstate'
+     and include 'h1e, h2e, sorb, nele, noa, nob, ecore, nv, onstate'
     """
     def __init__(self, electron_info: dict, device=None) -> None:
         self._h1e = electron_info["h1e"].to(device)
@@ -213,7 +213,8 @@ class ElectronInfo:
         self._nele = electron_info["nele"]
         self._ecore = electron_info["ecore"]
         self._ci_space = electron_info["onstate"].to(device)
-        self._noa = electron_info["noa"]
+        self._noa = electron_info.get("noa", self._nele//2)
+        self._nva = electron_info.get("nva", self.nv//2)
 
     @property
     def __name__(self):
@@ -244,6 +245,14 @@ class ElectronInfo:
         return self._nele - self._noa
     
     @property
+    def nva(self) -> int:
+        return self._nva
+    
+    @property
+    def nvb(self) ->int:
+        return self.nv - self.nva
+
+    @property
     def ecore(self) -> float:
         return self._ecore
 
@@ -267,7 +276,8 @@ class ElectronInfo:
             f"    onstate shape:{tuple(self.ci_space.shape)}\n" +
             f"    ecore: {self.ecore:.8f}\n" +
             f"    sorb: {self.sorb}, nele: {self.sorb}\n" +
-            f"    noa: {self.noa}, nob: {self.nob}\n" 
+            f"    noa: {self.noa}, nob: {self.nob}\n" +
+            f"    nva: {self.nva}, nvb: {self.nvb}\n" +
             f"    Singles + Doubles: {self.n_SinglesDoubles}\n" +
             f")"
         )

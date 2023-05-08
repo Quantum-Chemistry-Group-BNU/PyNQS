@@ -3,7 +3,7 @@ import torch
 from typing import Tuple, Callable
 from torch import Tensor
 
-from eloc import local_energy
+from .eloc import local_energy
 
 def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Callable,
                 ecore: float,

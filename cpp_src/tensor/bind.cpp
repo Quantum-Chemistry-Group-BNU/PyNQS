@@ -95,7 +95,7 @@ auto MCMC_sample(const std::string model_file, torch::Tensor &initial_state,
   torch::Tensor current_state = initial_state.clone();
   torch::jit::script::Module nqs = torch::jit::load(model_file);
   std::vector<torch::jit::IValue> inputs = {
-      onv_to_tensor(current_state, sorb).view({-1})};
+      2 * (onv_to_tensor(current_state, sorb).view({-1})) - 1.0f};
   torch::Tensor psi_current = nqs.forward(inputs).toTensor();
   double prob_current = std::pow(psi_current.norm().item<double>(), 2);
   static std::mt19937 rng(seed);

@@ -85,7 +85,8 @@ class CITrain:
                  pre_train_info: dict,
                  sorb: int,
                  dtype = torch.double,
-                 lr_scheduler=None) -> None:
+                 lr_scheduler=None, 
+                 exact: bool = False) -> None:
         r"""
         Pre train CI wavefunction.
         Args:
@@ -96,6 +97,7 @@ class CITrain:
             sorb: the spin orbital
             dtype: Default torch.double
             lr_scheduler: the schedule of learning rate
+            exact: exact sampling
         """
         self.model = model
         self.opt = opt
@@ -109,6 +111,7 @@ class CITrain:
         else:
             self.nprt = 1
         self.lr_scheduler = lr_scheduler
+        self.exact = exact
         self.loss_type: str = pre_train_info["loss_type"].lower()
         self.dtype = dtype
         if not self.loss_type in self.LOSS_TYPE:
@@ -146,7 +149,6 @@ class CITrain:
                 loss, ovlp, model_CI = self.onstate_loss(state)
                 onstate = self.onstate
             elif self.loss_type == "sample":
-                # loss, ovlp, model_CI, ovlp_onstate = self.sample_loss(sampler)
                 loss, ovlp, model_CI, ovlp_onstate = self.qgt_loss(sampler)
                 onstate = self.onstate
                 # onstate = ovlp_onstate
@@ -167,12 +169,11 @@ class CITrain:
             # calculate energy from CI coefficient.
             if epoch == 0:
                 if flag_energy:
-                    # eCI_0 = get_energy(model_CI, onstate)
+                    eCI_0 = get_energy(model_CI, onstate)
                     eCI_ref = get_energy(self.pre_ci, onstate)
             elif epoch == self.pre_max_iter:
                 if flag_energy:
-                    ...
-                    # eCI_1= get_energy(model_CI, onstate)
+                    eCI_1= get_energy(model_CI, onstate)
             if (epoch % self.nprt) == 0:
                 delta = (time.time_ns() - t0)/1.E06
                 print(
@@ -194,21 +195,6 @@ class CITrain:
 
         self.plot_figure(prefix)
 
-    def plot_figure(self, prefix: str = None):
-        prefix = prefix if prefix is not None else "CI"
-        fig = plt.figure()
-        ax1 = fig.add_subplot(2, 1, 1)
-        x = np.arange(self.pre_max_iter+1)
-        ax1.plot(x, np.array(self.loss_list), color='cadetblue', label="Loss")
-        # ax1.set_yscale("log")
-        ax1.legend(loc="best")
-        ax2 = fig.add_subplot(2, 1, 2)
-        ax2.plot(x, np.abs(self.ovlp_list), color='tomato', label="Ovlp")
-        ax2.legend(loc="best")
-        fig.subplots_adjust(wspace=0, hspace=0.5)
-        fig.savefig(prefix + "-pre_train.png", format="png",
-                    dpi=1000, bbox_inches='tight')
-
     def onstate_loss(self, state: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
         state is CISD
@@ -219,25 +205,6 @@ class CITrain:
         ovlp = torch.einsum("i, i", model_CI, self.pre_ci)
         loss = 1 - ovlp.norm()**2
         return (loss, ovlp.detach(), model_CI.detach())
-
-    # def sample_loss(self, sampler: MCMCSampler) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-    #     """
-    #     Loss Function = <psi|CI><CI|psi>/(<CI|CI><psi|psi>), psi comes from sampling
-    #     """
-    #     with torch.no_grad():
-    #         # notice onstate[0] is HF state
-    #         sampler.prepare_sample(self.onstate[0])
-    #         sample_unique, sample_counts, state_prob, psi_unique = sampler.MCMC()
-    #         x, idx_ci, idx_sample = find_common_state(self.onstate, sample_unique)
-    #         state_sample = pt.uint8_to_bit(sample_unique, self.sorb)
-    #     if len(idx_ci) == 0:
-    #         breakpoint()
-    #     psi = self.model(state_sample.requires_grad_())
-    #     ovlp1 = torch.einsum( "i, i, i", psi[idx_sample].conj(), self.pre_ci[idx_ci], state_prob[idx_sample].sqrt())
-    #     ovlp2 = torch.einsum('i, i, i', psi.conj(), psi, state_prob)
-    #     ovlp = ovlp1.norm()**2/ovlp2
-    #     loss = 1 - ovlp**2
-    #     return (loss, ovlp, state_prob[idx_sample], x)
 
     def qgt_loss(self, sampler: MCMCSampler):
         """
@@ -250,7 +217,7 @@ class CITrain:
             self.mc = sampler
             initial_state = self.onstate[random.randrange(dim)].clone().detach()
             sampler.prepare_sample(initial_state)
-            if True:
+            if self.exact:
                 sample_unique = self.mc.ele_info.ci_space.clone()
                 psi_unique = self.model(pt.uint8_to_bit(sample_unique, self.sorb)).to(self.dtype)
                 state_prob = (psi_unique * psi_unique.conj()/psi_unique.norm()**2)
@@ -260,20 +227,23 @@ class CITrain:
             state_prob = state_prob.to(self.dtype)
             ovlp, oloc = self.get_local_ovlp(state_prob, psi_unique, idx_sample, idx_ci, sample_unique)
             state_sample = pt.uint8_to_bit(sample_unique[idx_sample], self.sorb)
+
         if len(idx_ci) == 0:
-            breakpoint()
+            raise ValueError(f"There is no common states between in CISD and sample-states")
 
         psi = self.model(state_sample.requires_grad_()).to(self.dtype)
         log_psi = psi.log()
         if torch.any(torch.isnan(log_psi)):
             raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
+
         # grad = 2R(<O* eloc> - <O*><eloc>)
-        # loss1 = torch.einsum("i, i, i ->", oloc, log_psi.conj(), state_prob[idx_sample])
-        # loss2 = ovlp * torch.einsum("i, i->", log_psi.conj(), state_prob[idx_sample])
-        # loss = 2 * (loss1 - loss2).real
-        loss1 = torch.einsum("i, i, i, i ->", log_psi.conj(), state_prob, log_psi, state_prob)
-        loss2 = torch.einsum("i, i ->", log_psi.conj(), state_prob) * torch.einsum("i, i->", log_psi, state_prob)
-        loss = loss1 - loss2
+        loss1 = torch.einsum("i, i, i ->", oloc, log_psi.conj(), state_prob[idx_sample])
+        loss2 = ovlp * torch.einsum("i, i->", log_psi.conj(), state_prob[idx_sample])
+        loss = 2 * (loss1 - loss2).real
+        # loss1 = torch.einsum("i, i, i, i ->", log_psi.conj(), state_prob, log_psi, state_prob)
+        # loss2 = torch.einsum("i, i ->", log_psi.conj(), state_prob) * torch.einsum("i, i->", log_psi, state_prob)
+        # loss = loss1 - loss2
+
         return (loss, ovlp.real, state_prob[idx_sample], sample_unique)
 
     def get_local_ovlp(self, prob, psi_sample: Tensor, idx_sample: Tensor, idx_ci: Tensor, sample_unique):
@@ -284,6 +254,8 @@ class CITrain:
         psi0 = torch.dot(self.pre_ci.conj(), model_ci)
         e_lst = -1 * self.pre_ci[idx_ci] * psi0/psi_sample[idx_sample]
         e = torch.dot(e_lst, prob[idx_sample])
+
+        # Testing optimization
         if False:
             # print(sample_unique)
             full_space = pt.uint8_to_bit(self.mc.ele_info.ci_space, self.sorb)
@@ -301,8 +273,20 @@ class CITrain:
             print(e.real.item())
         return e, e_lst.to(self.dtype)
 
-    def get_energy(self, state, coeff):
-        ...
+    def plot_figure(self, prefix: str = None):
+        prefix = prefix if prefix is not None else "CI"
+        fig = plt.figure()
+        ax1 = fig.add_subplot(2, 1, 1)
+        x = np.arange(self.pre_max_iter+1)
+        ax1.plot(x, np.array(self.loss_list), color='cadetblue', label="Loss")
+        # ax1.set_yscale("log")
+        ax1.legend(loc="best")
+        ax2 = fig.add_subplot(2, 1, 2)
+        ax2.plot(x, np.abs(self.ovlp_list), color='tomato', label="Ovlp")
+        ax2.legend(loc="best")
+        fig.subplots_adjust(wspace=0, hspace=0.5)
+        fig.savefig(prefix + "-pre_train.png", format="png",
+                    dpi=1000, bbox_inches='tight')
 
     def __repr__(self) -> str:
         return (

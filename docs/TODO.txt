@@ -28,9 +28,14 @@
 
 #----------2023-4-20---------- zbwu1996@gmail.com
 1. refactor code referring to https://github.com/twesterhout/nqs-playground
-2. modify the module of calculating local energy and SR
+2. modify the module of calculating local energy and SR (Y)
 3. record log events using "Loguru" package
+
+#----------2023-5-08---------- zbwu1996@gmail.com
+1. Using Separate Compilation in CUDA
+BUG: pre_train failure
 
 #---------------feature's------------------
 1. Add tutorial using "Read the Docs"
-
+2. Support spin_multiplicity == 1
+3. Support mpi4py

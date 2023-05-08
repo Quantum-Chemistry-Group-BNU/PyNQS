@@ -46,7 +46,7 @@ Tensor onv_to_tensor_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
 Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
                            const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                            const int sorb, const int nele) {
-  int n, m;
+  int n = 0, m = 0;
   auto ket_dim = ket_tensor.dim();
   bool flag_eloc = false;
   const int bra_len = (sorb - 1) / 64 + 1;

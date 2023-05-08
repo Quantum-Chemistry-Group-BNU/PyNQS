@@ -10,12 +10,12 @@ from line_profiler import LineProfiler
 from torch import optim
 from pyscf import fci
 
-from utils import setup_seed, read_integral, Logger, ElectronInfo, Dtype, state_to_string
-from vmc.ansatz import RBMWavefunction
-from vmc.optim import VMCOptimizer, SR, GD
-from integral import integral_pyscf
+from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string
+from utils.integral import read_integral, integral_pyscf
+from vmc.ansatz import RBMWavefunction,  RNNWavefunction
+from vmc.optim import VMCOptimizer
 from ci import unpack_ucisd, ucisd_to_fci
-from libs.hij_tensor import get_comb_tensor, uint8_to_bit
+from libs.hij_tensor import get_comb_tensor
 
 torch.set_default_dtype(torch.double)
 torch.set_printoptions(precision=6)
@@ -50,18 +50,6 @@ if __name__ == "__main__":
                                                             device=device,
                                                             # prefix="test-onstate",
                                                             )
-            h1e, h2e, ci_space1, ecore, sorb = read_integral(filename, nele,
-                                                            # save_onstate=True,
-                                                            # external_onstate="profiler/H12-1.50",
-                                                            given_sorb= sorb,
-                                                            device=device,
-                                                            # prefix="test-onstate",
-                                                            )
-            print(ci_space1)
-            print(ci_space)
-            print(torch.allclose(ci_space, ci_space1))
-            print(torch.allclose(torch.sort(ci_space1, dim=0)[0], torch.sort(ci_space, dim=0)[0]))
-            exit()
             info = {"h1e": h1e, "h2e": h2e, "onstate": ci_space,
                     "ecore": ecore, "sorb": sorb, "nele": nele,
                     "nob": nele//2, "noa": nele - nele//2}
@@ -71,10 +59,9 @@ if __name__ == "__main__":
             pre_train_info = {"pre_max_iter": 5000, "interval": -1, "loss_type": "sample"}
 
             
-            print(torch.allclose(ci_space1, ci_space))
             info = {"h1e": h1e, "h2e": h2e, "onstate": ci_space,
                     "ecore": ecore, "sorb": sorb, "nele": nele,
-                    "nob": nele//2, "noa": nele - nele//2}
+                    "nob": nele//2, "noa": nele - nele//2, "nva": (sorb-nele)//2}
             electron_info = ElectronInfo(info)
             # cisd_wf = unpack_ucisd(cisd_coeff, sorb, nele, device=device)
             cisd_wf = ucisd_to_fci(cisd_coeff, sorb, nele, ci_space, device=device)
@@ -82,7 +69,6 @@ if __name__ == "__main__":
 
             E_pre = []
             for pre_i in range(4):
-                from vmc.RNNwavefunction import RNNwavefunction
                 # nqs = RNNwavefunction(sorb, num_hiddens=50, num_labels=2, num_layers=1)
                 nqs = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
                                       rbm_type='cos', verbose=False).to(device)
@@ -102,19 +88,14 @@ if __name__ == "__main__":
                                  "debug_exact": True, "therm_step": 10000,
                                  "seed": seed, "record_sample": True,
                                  "max_memory": 4, "alpha": 0.15}
-                opt_type = optim.Adam
-                # opt_type = GD
-                # opt_params = {"lr": 0.005, "weight_decay": 0.001}
-                opt_params = {"lr": 0.010}
-                lr_sch = optim.lr_scheduler.MultiStepLR
+                optimizer = optim.Adam(nqs.parameters(), lr = 0.005, weight_decay= 0.001)
                 lr_sch_params = {"milestones": [
                     2000, 2500, 3000], "gamma": 0.10}
+                lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, **lr_sch_params)
                 dtype = Dtype(dtype=torch.complex128, device=device)
                 opt_vmc = VMCOptimizer(nqs=nqs,
-                                       opt_type=opt_type,
-                                       opt_params=opt_params,
-                                       lr_scheduler=lr_sch,
-                                       lr_sch_params=lr_sch_params,
+                                       opt=optimizer,
+                                       lr_scheduler=lr_scheduler,
                                        # external_model="Test-1.pth",
                                        dtype=dtype,
                                        sampler_param=sampler_param,
@@ -122,12 +103,11 @@ if __name__ == "__main__":
                                        electron_info=electron_info,
                                        max_iter=4000,
                                        HF_init=0,
-                                       analytic_derivate=False,
-                                       num_diff=False,
                                        verbose=False,
-                                       sr_flag=False,
+                                       sr = False,
                                        pre_CI=cisd_wf,
-                                       pre_train_info=pre_train_info
+                                       pre_train_info=pre_train_info,
+                                       method_grad="AD",
                                        )
                 opt_vmc.pre_train('Adam')
                 exit()
