@@ -3,8 +3,6 @@
 #include <cassert>
 #include <random>
 
-#include "torch/types.h"
-
 Tensor tensor_to_onv_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
   // bra_tensor(nbatch, sorb)uint8: [1, 1, 0, 0] -> 0b0011 uint8
   // return states: (nbatch, bra_len * 8)
@@ -39,7 +37,7 @@ Tensor tensor_to_onv_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
 
 torch::Tensor onv_to_tensor_tensor_cpu(const torch::Tensor &bra_tensor,
                                        const int sorb) {
-  // bra_tensor(nbatch, bra_len)uint8: 0b0011 -> [1.0, 1.0, 0.0, 0.0](double)
+  // bra_tensor(nbatch, bra_len)uint8: 0b0011 -> [1.0, 1.0, -1.0, -1.0](double)
   // return comb_bit: (nbatch, sorb)
   const int bra_len = (sorb - 1) / 64 + 1;
   auto bra_dim = bra_tensor.dim();
@@ -87,7 +85,8 @@ tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
     int idx = merged[idx_lst[i]];  // merged[olst, vlst]
     BIT_FLIP(bra_ptr[idx / 64], idx % 64);
   }
-  return std::make_tuple(tensor_to_onv_tensor_cpu(bra, sorb), bra);
+  return std::make_tuple(
+      onv_to_tensor_tensor_cpu(bra.unsqueeze(0), sorb).squeeze(), bra);
 }
 
 Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
@@ -100,15 +99,15 @@ Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
                      .layout(bra.layout())
                      .device(bra.device())
                      .requires_grad(false);
-  torch::Tensor merged = torch::ones({nbatch, sorb}, options);
+  torch::Tensor merged = torch::empty({nbatch, sorb}, options);
   int *merged_ptr = merged.data_ptr<int32_t>();
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
   for (int i = 0; i < nbatch; i++) {
-    squant::get_olst_cpu_ab(&bra_ptr[i * (bra_len * 8)], &merged_ptr[i * sorb],
+    squant::get_olst_cpu_ab(&bra_ptr[i * bra_len], &merged_ptr[i * sorb],
                             bra_len);
-    squant::get_vlst_cpu_ab(&bra_ptr[i * (bra_len * 8)],
-                            &merged_ptr[i * sorb + nele], sorb, bra_len);
+    squant::get_vlst_cpu_ab(&bra_ptr[i * bra_len], &merged_ptr[i * sorb + nele],
+                            sorb, bra_len);
   }
   return merged;
 }
@@ -121,29 +120,36 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
   const int nbatch = bra_tensor.size(0);
   Tensor comb, comb_bit;
 
-  // bra_tensor: (nbatch, bra_len * 8)
-  comb = bra_tensor.reshape({nbatch, 1, -1}).repeat({1, ncomb, 1});
+  // bra_tensor: (nbatch, ncomb, bra_len *8)
+  comb = bra_tensor.unsqueeze(1).repeat({1, ncomb, 1});
   if (flag_bit) {
-    comb_bit = tensor_to_onv_tensor_cpu(bra_tensor, sorb)
-                   .reshape({nbatch, 1, -1})
+    // comb_bit: (nbatch, ncomb, sorb)
+    comb_bit = onv_to_tensor_tensor_cpu(bra_tensor, sorb)
+                   .unsqueeze(1)
                    .repeat({1, ncomb, 1});
   } else {
     comb_bit = torch::ones({1}, torch::TensorOptions().dtype(torch::kDouble));
   }
-
   unsigned long *comb_ptr =
       reinterpret_cast<unsigned long *>(comb.data_ptr<uint8_t>());
   double *comb_bit_ptr = comb_bit.data_ptr<double>();
 
+  // merged: (nbatch, ncomb)
   Tensor merged = get_merged_tensor_cpu(bra_tensor, nele, sorb, noA, noB);
   int *merged_ptr = merged.data_ptr<int32_t>();
-  for (int i = 1; i < ncomb; i++) {
-    if (flag_bit) {
-      squant::get_comb_SD(&comb_ptr[i * bra_len], &comb_bit_ptr[i * sorb],
-                          merged_ptr, i - 1, sorb, bra_len, noA, noB);
-    } else {
-      squant::get_comb_SD(&comb_ptr[i * bra_len], merged_ptr, i - 1, sorb,
-                          bra_len, noA, noB);
+  for (int i = 0; i < nbatch; i++) {
+    for (int j = 1; j < ncomb; j++) {
+      if (flag_bit) {
+        // comb[i, j], comb_bit[i, j], merged[i]
+        squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
+                            &comb_bit_ptr[i * ncomb * sorb + j * sorb],
+                            &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
+                            noB);
+      } else {
+        squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
+                            &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
+                            noB);
+      }
     }
   }
   return std::make_tuple(comb, comb_bit);

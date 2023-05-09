@@ -23,9 +23,9 @@ sources = glob.glob('*/*.cpp') + glob.glob('*/*.cu')
 print(sources)
 s = "C_extension"
 
-CppExtension(
+CPU = CppExtension(
     name=s,
-    sources=sources,
+    sources=[i for i in glob.glob('*/*.cpp') if "cuda" not in i],
     include_dirs=include_dirs,
     extra_compile_args={'cxx': ['-O3', '-std=c++17', '-UGPU']}
 )
@@ -49,7 +49,7 @@ setup(
     description=s,
     long_description=s,
     ext_modules=[
-    CUDA
+    CPU
     ],
     cmdclass={
         'build_ext': BuildExtension.with_options(no_python_abi_suffix=True)

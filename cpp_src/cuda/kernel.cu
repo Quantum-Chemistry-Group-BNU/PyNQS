@@ -24,9 +24,9 @@ __global__ void tensor_to_onv_kernel(const uint8_t *bra, uint8_t *states,
 __host__ void squant::tensor_to_onv_cuda(uint8_t *states, const uint8_t *bra,
                                     const int sorb, const int nbatch,
                                     const int bra_len, const int tensor_len) {
-  dim3 threads(1024);
-  dim3 blocks((tensor_len * nbatch + threads.x - 1) / threads.x);
-  tensor_to_onv_kernel<<<blocks, threads>>>(bra, states, sorb, bra_len,
+  dim3 blockDim(1024);
+  dim3 gridDim((tensor_len * nbatch + blockDim.x - 1) / blockDim.x);
+  tensor_to_onv_kernel<<<gridDim, blockDim>>>(bra, states, sorb, bra_len,
                                             tensor_len, tensor_len * nbatch);
 }
 
@@ -47,9 +47,9 @@ __global__ void onv_to_tensor_kernel(double *comb, const unsigned long *bra,
 __host__ void squant::onv_to_tensor_cuda(double *comb, const unsigned long *bra,
                                     const int sorb, const int bra_len,
                                     const int nbatch, const size_t numel) {
-  dim3 threads(1024);
-  dim3 blocks((numel + threads.x - 1) / threads.x);
-  onv_to_tensor_kernel<<<blocks, threads>>>(comb, bra, sorb, bra_len, numel);
+  dim3 blockDim(1024);
+  dim3 gridDim((numel + blockDim.x - 1) / blockDim.x);
+  onv_to_tensor_kernel<<<gridDim, blockDim>>>(comb, bra, sorb, bra_len, numel);
 }
 
 __global__ void get_Hij_kernel_2D(double *Hmat, const unsigned long *bra,
@@ -87,10 +87,10 @@ __host__ void squant::get_Hij_3D_cuda(double *Hmat, const unsigned long *bra,
                                       const int sorb, const int nele,
                                       const int bra_len,
                                       const int nbatch, const int ncomb) {
-  dim3 threads(THREAD, THREAD);
-  dim3 blocks((nbatch + threads.x - 1) / threads.x,
-              (ncomb + threads.y - 1) / threads.y);
-  get_Hij_kernel_3D<<<blocks, threads>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
+  dim3 blockDim(THREAD, THREAD);
+  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x,
+              (ncomb + blockDim.y - 1) / blockDim.y);
+  get_Hij_kernel_3D<<<gridDim, blockDim>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
                                           bra_len, nbatch, ncomb);
 }
 
@@ -102,9 +102,9 @@ __host__ void squant::get_Hij_2D_cuda(double *Hmat, const unsigned long *bra,
                                       const int sorb, const int nele,
                                       const int bra_len,
                                       const int n, const int m) {
-  dim3 threads(THREAD, THREAD);
-  dim3 blocks((n + threads.x - 1) / threads.x, (m + threads.y - 1) / threads.y);
-  get_Hij_kernel_2D<<<blocks, threads>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
+  dim3 blockDim(THREAD, THREAD);
+  dim3 gridDim((n + blockDim.x - 1) / blockDim.x, (m + blockDim.y - 1) / blockDim.y);
+  get_Hij_kernel_2D<<<gridDim, blockDim>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
                                           bra_len, n, m);
 }
 
@@ -121,9 +121,9 @@ __global__ void get_merged_ovlst_kernel(const unsigned long *bra, int *merged,
 __host__ void squant::get_merged_cuda(const unsigned long *bra, int *merged,
                                       const int sorb, const int nele,
                                       const int bra_len, const int nbatch) {
-  dim3 threads(1024);
-  dim3 blocks((nbatch + threads.x - 1) / threads.x);
-  get_merged_ovlst_kernel<<<blocks, threads>>>(bra, merged, sorb, nele, bra_len,
+  dim3 blockDim(1024);
+  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
+  get_merged_ovlst_kernel<<<gridDim, blockDim>>>(bra, merged, sorb, nele, bra_len,
                                                nbatch);
 }
 
@@ -134,6 +134,7 @@ __global__ void get_comb_SD_kernel(unsigned long *comb, double *comb_bit,
   int idm = blockIdx.y * blockDim.y + threadIdx.y;
   if (idn >= nbatch || idm >= ncomb || idm == 0)
     return;
+  // comb[idn, idm], merged[idn], comb_bit[idn, idm]
   squant::get_comb_SD_cuda(&comb[idn * ncomb * bra_len + idm * bra_len],
                            &comb_bit[idn * ncomb * sorb + idm * sorb],
                            &merged[idn * sorb], idm - 1, sorb, noA, noB);
@@ -147,6 +148,7 @@ __global__ void get_comb_SD_kernel(unsigned long *comb, const int *merged,
   const int idm = blockIdx.y * blockDim.y + threadIdx.y;
   if (idn >= nbatch || idm >= ncomb || idm == 0)
     return;
+  // comb[idn, idm], merged[idn]
   squant::get_comb_SD_cuda(&comb[idn * ncomb * bra_len + idm * bra_len],
                            &merged[idn * sorb], idm - 1, sorb, noA, noB);
 }
@@ -157,10 +159,11 @@ __host__ void squant::get_comb_cuda(unsigned long *comb,
                                     const int bra_len, const int noA,
                                     const int noB, const int nbatch,
                                     const int ncomb) {
-  dim3 threads(THREAD, THREAD);
-  dim3 blocks((nbatch + threads.x - 1) / threads.x,
-              (ncomb + threads.y - 1) / threads.y);
-  get_comb_SD_kernel<<<blocks, threads>>>(comb, merged_ovlst, sorb, bra_len,
+  // comb: (nbatch, ncomb, bra_len) merged: (nbatch, sorb)
+  dim3 blockDim(THREAD, THREAD);
+  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x,
+              (ncomb + blockDim.y - 1) / blockDim.y);
+  get_comb_SD_kernel<<<gridDim, blockDim>>>(comb, merged_ovlst, sorb, bra_len,
                                           noA, noB, nbatch, ncomb);
 }
 
@@ -170,9 +173,11 @@ __host__ void squant::get_comb_cuda(double *comb_bit, unsigned long *comb,
                                     const int bra_len, const int noA,
                                     const int noB, const int nbatch,
                                     const int ncomb) {
-  dim3 threads(THREAD, THREAD);
-  dim3 blocks((nbatch + threads.x - 1) / threads.x,
-              (ncomb + threads.y - 1) / threads.y);
-  get_comb_SD_kernel<<<blocks, threads>>>(comb, comb_bit, merged_ovlst, sorb,
+  // comb: (nbatch, ncomb, bra_len), comb_bit: (nbatch, ncomb, sorb)
+  // merged: [nbatch, sorb]
+  dim3 blockDim(THREAD, THREAD);
+  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x,
+              (ncomb + blockDim.y - 1) / blockDim.y);
+  get_comb_SD_kernel<<<gridDim, blockDim>>>(comb, comb_bit, merged_ovlst, sorb,
                                           bra_len, noA, noB, nbatch, ncomb);
 }

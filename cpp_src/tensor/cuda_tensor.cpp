@@ -109,7 +109,7 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
   if (flag_bit) {
     // run cuda
     comb_bit = tensor_to_onv_tensor_cuda(bra_tensor, sorb)
-                   .reshape({nbatch, 1, -1})
+                   .unsqueeze(1)
                    .repeat({1, ncomb, 1});
   } else {
     comb_bit = torch::ones({1}, torch::TensorOptions().dtype(torch::kDouble));

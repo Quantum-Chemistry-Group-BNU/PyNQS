@@ -1,9 +1,6 @@
-#include <cassert>
-
 #include "cpu_tensor.h"
 #include "cuda_tensor.h"
 #include "utils_tensor.h"
-#include "torch/types.h"
 
 // #define GPU 1
 
@@ -28,7 +25,6 @@ Tensor onv_to_tensor(const Tensor &bra_tensor, const int sorb) {
   CHECK_CONTIGUOUS(bra_tensor);
   assert(dim == 1 || dim == 2);
   assert(bra_tensor.dtype() == torch::kUInt8);
-
   if (bra_tensor.is_cpu()) {
     return onv_to_tensor_tensor_cpu(bra_tensor.view({-1, bra_len}), sorb);
 #ifdef GPU
@@ -73,30 +69,29 @@ tuple_tensor_2d get_comb(const Tensor &bra_tensor, const int sorb,
   // bra_tensor: (nbatch, bra_len)
   CHECK_CONTIGUOUS(bra_tensor);
   assert(dim == 1 || dim == 2);
-  assert(bra_len == bra_tensor.size(-1));
-
+  assert(bra_tensor.dtype() == torch::kUInt8);
+  assert((bra_len * 8 ) == bra_tensor.size(-1));
   if (bra_tensor.is_cpu()) {
-    return get_comb_tensor_cpu(bra_tensor.view({-1, bra_len}), sorb, nele, noA,
+    return get_comb_tensor_cpu(bra_tensor, sorb, nele, noA,
                                noB, flag_bit);
 #ifdef GPU
   } else {
-    return get_comb_tensor_cuda(bra_tensor.view({-1, bra_len}), sorb, nele, noA,
+    return get_comb_tensor_cuda(bra_tensor.view({-1, bra_len * 8}), sorb, nele, noA,
                                 noB, flag_bit);
 #endif
   }
 }
 
-auto MCMC_sample(const std::string model_file, torch::Tensor &initial_state,
-                 torch::Tensor &state_sample, torch::Tensor &psi_sample,
+auto MCMC_sample(const std::string model_file, Tensor &initial_state,
+                 Tensor &state_sample, Tensor &psi_sample,
                  const int sorb, const int nele, const int noA, const int noB,
                  const int seed, const int n_sweep, const int therm_step) {
   int n_accept = 0;
-  torch::Tensor next_state = initial_state.clone();
-  torch::Tensor current_state = initial_state.clone();
+  Tensor next_state = initial_state.clone();
+  Tensor current_state = initial_state.clone();
   torch::jit::script::Module nqs = torch::jit::load(model_file);
-  std::vector<torch::jit::IValue> inputs = {
-      2 * (onv_to_tensor(current_state, sorb).view({-1})) - 1.0f};
-  torch::Tensor psi_current = nqs.forward(inputs).toTensor();
+  std::vector<torch::jit::IValue> inputs = {onv_to_tensor(current_state, sorb).view({-1})};
+  Tensor psi_current = nqs.forward(inputs).toTensor();
   double prob_current = std::pow(psi_current.norm().item<double>(), 2);
   static std::mt19937 rng(seed);
   static std::uniform_real_distribution<double> u0(0, 1);
@@ -105,7 +100,7 @@ auto MCMC_sample(const std::string model_file, torch::Tensor &initial_state,
         spin_flip_rand(current_state, sorb, nele, noA, noB, seed);
     std::vector<torch::jit::IValue> inputs = {psi};
     // auto t1 = get_time();
-    torch::Tensor psi_next = nqs.forward(inputs).toTensor();
+    Tensor psi_next = nqs.forward(inputs).toTensor();
     double prob_next = std::pow(psi_next.norm().item<double>(), 2);
     double prob_accept = std::min(1.00, prob_next / prob_current);
     double p = u0(rng);
@@ -133,10 +128,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Return all singles and doubles excitation for given onstate(1D, 2D) "
         "using CPU or GPU");
   m.def("onv_to_tensor", &onv_to_tensor,
-        "convert onv to bit (1:unoccupied, -1: occupied) for given onv(1D, 2D) "
+        "convert onv to bit (-1:unoccupied, 1: occupied) for given onv(1D, 2D) "
         "using CPU or GPU");
   m.def("spin_flip_rand", &spin_flip_rand,
         "Flip the spin randomly in MCMC using CPU");
   m.def("tensor_to_onv", &tensor_to_onv,
-        "convert states (1:unoccupied, -1: occupied) to onv uint8");
+        "convert states (0:unoccupied, 1: occupied) to onv uint8");
 }
