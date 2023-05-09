@@ -114,6 +114,7 @@ def ucisd_to_fci(cisd_amp: ndarray[np.float64],
                 sorb: int, nele: int, 
                 onstate: Tensor, 
                 device= None) -> CIWavefunction:
+    raise ImportError(f"'ucisd_to_fci'is error, Please using 'unpack_ucisd'")
     # TODO: the onstate may be is errors
     fci_amp = ci.ucisd.to_fcivec(cisd_amp, sorb//2, nele)
     dim = fci_amp.shape[0]

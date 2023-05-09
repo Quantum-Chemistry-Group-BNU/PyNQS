@@ -45,8 +45,6 @@ class MCMCSampler():
                  ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
-        
-
 
         self.ele_info = ele_info
         self.read_electron_info(self.ele_info)
@@ -146,7 +144,7 @@ class MCMCSampler():
 
     def MCMC(self) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         if True:
-            example_inputs = 2 * onv_to_tensor(self.current_state, self.sorb) - 1.0 # -1:unoccupied, 1: occupied
+            example_inputs = onv_to_tensor(self.current_state, self.sorb) # -1:unoccupied, 1: occupied
             serialized_model = torch.jit.trace(self.nqs, example_inputs)
             model_file = tempfile.mkstemp()[1]
             serialized_model.save(model_file)
@@ -199,7 +197,7 @@ class MCMCSampler():
             # torch.unique could not return unique indices in old tensor
             sample_unique, sample_counts = torch.unique(
                 self.state_sample, dim=0, return_counts=True)
-            psi_unique = self.nqs(2 * onv_to_tensor(sample_unique, self.sorb) -1.0) # -1:unoccupied, 1: occupied
+            psi_unique = self.nqs(onv_to_tensor(sample_unique, self.sorb)) # -1:unoccupied, 1: occupied
         else:
             # CPU using Numpy
             sample_unique, psi_idx, sample_counts = np.unique(
@@ -215,13 +213,11 @@ class MCMCSampler():
         ...
 
     def prepare_sample(self, initial_state: Tensor, n_sweep: int = None):
-        self.state_sample: Tensor = torch.empty_like(
-            initial_state).repeat(self.n_sample, 1)
+        self.state_sample: Tensor = torch.empty_like(initial_state).repeat(self.n_sample, 1)
         self.current_state: Tensor = initial_state.clone()
         self.next_state: Tensor = initial_state.clone()
         self.n_accept = 0
-        self.psi_sample: Tensor = torch.empty(
-            self.n_sample, dtype=self.dtype, device=self.device)
+        self.psi_sample: Tensor = torch.empty(self.n_sample, dtype=self.dtype, device=self.device)
 
         if (n_sweep is None) or (n_sweep <= self.therm_step + self.n_sample):
             self.n_sweep = self.therm_step + self.n_sample

@@ -32,7 +32,7 @@ if __name__ == "__main__":
             sys.stdout = Logger("/dev/null", sys.stdout)
             sys.stderr = Logger("/dev/null", sys.stderr)
             # seed = int(time.time_ns()%2**31)
-            seed = 28178530  # H6 1.20
+            seed = 2023 # H6 1.20
             setup_seed(seed)
             atom: str = ""
             bond = 1.20
@@ -42,31 +42,20 @@ if __name__ == "__main__":
             filename = tempfile.mkstemp()[1]
             sorb, nele, e_ref, cisd_coeff = integral_pyscf(
                 atom, integral_file=filename, cisd_coeff=True)
-            print(filename)
             h1e, h2e, ci_space, ecore, sorb = read_integral(filename, nele,
                                                             # save_onstate=True,
                                                             # external_onstate="profiler/H12-1.50",
                                                             # given_sorb= (sorb + 2),
                                                             device=device,
                                                             # prefix="test-onstate",
-                                                            )
-            info = {"h1e": h1e, "h2e": h2e, "onstate": ci_space,
-                    "ecore": ecore, "sorb": sorb, "nele": nele,
-                    "nob": nele//2, "noa": nele - nele//2}
-            electron_info = ElectronInfo(info)
-            # cisd_wf = unpack_ucisd(cisd_coeff, sorb, nele, device=device)
-            cisd_wf = ucisd_to_fci(cisd_coeff, sorb, nele, ci_space, device=device)
-            pre_train_info = {"pre_max_iter": 5000, "interval": -1, "loss_type": "sample"}
-
-            
+                                                            )            
             info = {"h1e": h1e, "h2e": h2e, "onstate": ci_space,
                     "ecore": ecore, "sorb": sorb, "nele": nele,
                     "nob": nele//2, "noa": nele - nele//2, "nva": (sorb-nele)//2}
             electron_info = ElectronInfo(info)
-            # cisd_wf = unpack_ucisd(cisd_coeff, sorb, nele, device=device)
-            cisd_wf = ucisd_to_fci(cisd_coeff, sorb, nele, ci_space, device=device)
+            cisd_wf = unpack_ucisd(cisd_coeff, sorb, nele, device=device)
+            # cisd_wf = ucisd_to_fci(cisd_coeff, sorb, nele, ci_space, device=device)
             pre_train_info = {"pre_max_iter": 10, "interval": -1, "loss_type": "onstate"}
-
             E_pre = []
             for pre_i in range(4):
                 # nqs = RNNwavefunction(sorb, num_hiddens=50, num_labels=2, num_layers=1)
@@ -76,7 +65,7 @@ if __name__ == "__main__":
                 # from pyscf import fci
                 # psi = nqs(uint8_to_bit(ci_space, sorb))
                 # psi /= psi.norm()
-                occslstA = fci.cistring._gen_occslst(range(sorb//2), nele//2)
+                # occslstA = fci.cistring._gen_occslst(range(sorb//2), nele//2)
                 # occslstB = fci.cistring._gen_occslst(range(sorb//2), nele//2)
                 # dim = len(occslstA)
                 # print(f"State:  exact_random_ci^2     ")
@@ -88,29 +77,34 @@ if __name__ == "__main__":
                                  "debug_exact": True, "therm_step": 10000,
                                  "seed": seed, "record_sample": True,
                                  "max_memory": 4, "alpha": 0.15}
-                optimizer = optim.Adam(nqs.parameters(), lr = 0.005, weight_decay= 0.001)
-                lr_sch_params = {"milestones": [
-                    2000, 2500, 3000], "gamma": 0.10}
-                lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, **lr_sch_params)
+                opt_type = optim.Adam
+                # opt_type = GD
+                # opt_params = {"lr": 0.005, "weight_decay": 0.001}
+                opt_params = {"lr": 0.010}
+                lr_scheduler = optim.lr_scheduler.MultiStepLR
+                lr_sch_params = {"milestones": [2000, 2500, 3000], "gamma": 0.10}
                 dtype = Dtype(dtype=torch.complex128, device=device)
+                # dtype = Dtype(dtype=torch.double, device=device)
                 opt_vmc = VMCOptimizer(nqs=nqs,
-                                       opt=optimizer,
+                                       opt_type= opt_type,
+                                       opt_params=opt_params,
                                        lr_scheduler=lr_scheduler,
+                                       lr_sch_params=lr_sch_params,
                                        # external_model="Test-1.pth",
                                        dtype=dtype,
                                        sampler_param=sampler_param,
                                        only_sample=False,
                                        electron_info=electron_info,
-                                       max_iter=4000,
+                                       max_iter=40,
                                        HF_init=0,
                                        verbose=False,
-                                       sr = False,
+                                       sr=False,
                                        pre_CI=cisd_wf,
                                        pre_train_info=pre_train_info,
+                                       # method_grad="analytic",
                                        method_grad="AD",
                                        )
-                opt_vmc.pre_train('Adam')
-                exit()
+                # opt_vmc.pre_train('Adam')
                 # psi = opt_vmc.model(uint8_to_bit(onstate, sorb))
                 # psi /= psi.norm()
                 # for i,occsa in enumerate(occslstA):
@@ -122,6 +116,7 @@ if __name__ == "__main__":
                 # e = t.energy(electron_info, sampler_param)
                 # print(e)
                 opt_vmc.run()
+                exit()
                 print(e_ref)
                 psi = opt_vmc.model(uint8_to_bit(ci_space, sorb))
                 psi /= psi.norm()

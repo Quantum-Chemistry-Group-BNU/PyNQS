@@ -95,7 +95,7 @@ def read_integral(filename: str, nele: int,
     """
 
     t = Integral(filename)
-    int2e, int1e, ecore, sorb = t.load()
+    int1e, int2e, ecore, sorb = t.load()
 
     # print(np.array(int1e.data))
     # h1e/h2e

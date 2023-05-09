@@ -4,8 +4,10 @@ from torch import Tensor, nn
 
 
 
-def energy_grad(nqs: nn.Module, states: Tensor, eloc: Tensor,
-                state_prob,
+def energy_grad(nqs: nn.Module,
+                states: Tensor,
+                state_prob: Tensor,
+                eloc: Tensor,
                 exact: bool = False,
                 dtype=torch.double,
                 method: str= None) -> Tensor:
@@ -26,8 +28,8 @@ def energy_grad(nqs: nn.Module, states: Tensor, eloc: Tensor,
 
 def _analytical_grad(nqs: nn.Module,
                     states: Tensor,
-                    eloc: Tensor,
                     state_prob: Tensor,
+                    eloc: Tensor,
                     exact: bool = False,
                     dtype=torch.double,
                     method: str = "analytic") ->Tensor:
@@ -59,8 +61,7 @@ def _analytical_grad(nqs: nn.Module,
         # (n_sample, n_para), two dim
         dlnPsi = dws.reshape(n_sample, -1).to(dtype)
         F_p = torch.einsum("i, ij, i ->j", eloc, dlnPsi.conj(), state_prob)
-        F_p -= torch.einsum("i, i ->", eloc, state_prob) * \
-            torch.einsum("ij, i -> j", dlnPsi.conj(), state_prob)
+        F_p -= torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("ij, i -> j", dlnPsi.conj(), state_prob)
         grad_update_lst.append(2 * F_p.real)
 
     # update nqs gradient
@@ -71,8 +72,8 @@ def _analytical_grad(nqs: nn.Module,
 
 def _ad_grad(nqs: nn.Module, 
             states: Tensor, 
+            state_prob: Tensor,
             eloc: Tensor,
-            state_prob,
             exact: bool = False,
             dtype=torch.double) -> Tensor:
     """
@@ -84,17 +85,17 @@ def _ad_grad(nqs: nn.Module,
     with torch.no_grad():
         if exact:
             state_prob = psi * psi.conj() / psi.norm()**2
+    state_prob = state_prob.to(dtype)
+    eloc = eloc.to(dtype)
 
     # F_p = 2R(<O* * eloc> - <O*><eloc>)
     log_psi = psi.log()
     if torch.any(torch.isnan(log_psi)):
         raise ValueError(
             f"There are negative numbers in the log-psi, please use complex128")
-
     loss1 = torch.einsum("i, i, i ->", eloc, log_psi.conj(), state_prob)
     # loss2 = (e_total - self.ecore) * torch.einsum("i, i -> ", log_psi.conj(), state_prob)
-    loss2 = torch.einsum("i, i ->", eloc, state_prob) * \
-        torch.einsum("i, i -> ", log_psi.conj(), state_prob)
+    loss2 = torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("i, i ->", log_psi.conj(), state_prob)
     loss = 2 * (loss1 - loss2).real
     loss.backward()
 
