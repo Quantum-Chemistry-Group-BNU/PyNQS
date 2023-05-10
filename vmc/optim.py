@@ -103,6 +103,7 @@ class VMCOptimizer():
         print(f"NQS model:\n{self.model}")
         print(f"Optimizer:\n{self.opt}")
         print(f"Sampler:\n{self.sampler}")
+        print(f"Grad method: {self.method_grad}")
 
         # pre-train CI wavefunction
         self.pre_CI = pre_CI
@@ -147,7 +148,7 @@ class VMCOptimizer():
             # exit()
 
             state, state_prob, eloc, e_total, stats = self.sampler.run(initial_state)
-            breakpoint()
+            # breakpoint()
 
             self.n_sample = len(state)
             self.e_lst.append(e_total)
@@ -195,6 +196,10 @@ class VMCOptimizer():
                     self.lr_scheduler, self.exact)
         print(t)
         t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
+
+    def summary(self, e_ref: float = None, prefix: str = "VMC"):
+        self.save(prefix)
+        self.plot_figure(e_ref, prefix)
 
     def save(self, prefix: str = "VMC", nqs: bool = True, sample: bool = True):
         sample_file, model_file = [prefix + i for i in (".csv", ".pth")]

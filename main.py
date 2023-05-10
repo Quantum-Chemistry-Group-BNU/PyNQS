@@ -77,10 +77,11 @@ if __name__ == "__main__":
                                  "debug_exact": True, "therm_step": 10000,
                                  "seed": seed, "record_sample": True,
                                  "max_memory": 4, "alpha": 0.15}
-                opt_type = optim.Adam
+                from vmc.optim import GD
+                opt_type = GD
                 # opt_type = GD
                 # opt_params = {"lr": 0.005, "weight_decay": 0.001}
-                opt_params = {"lr": 0.010}
+                opt_params = {"lr": 0.005, "weight_decay": 0.001}
                 lr_scheduler = optim.lr_scheduler.MultiStepLR
                 lr_sch_params = {"milestones": [2000, 2500, 3000], "gamma": 0.10}
                 dtype = Dtype(dtype=torch.complex128, device=device)
@@ -90,19 +91,20 @@ if __name__ == "__main__":
                                        opt_params=opt_params,
                                        lr_scheduler=lr_scheduler,
                                        lr_sch_params=lr_sch_params,
-                                       # external_model="Test-1.pth",
+                                       external_model="Test-1.pth",
                                        dtype=dtype,
                                        sampler_param=sampler_param,
                                        only_sample=False,
                                        electron_info=electron_info,
-                                       max_iter=40,
+                                       max_iter=1,
                                        HF_init=0,
                                        verbose=False,
                                        sr=False,
                                        pre_CI=cisd_wf,
                                        pre_train_info=pre_train_info,
                                        # method_grad="analytic",
-                                       method_grad="AD",
+                                       method_grad="analytic",
+                                       method_jacobian="vector",
                                        )
                 # opt_vmc.pre_train('Adam')
                 # psi = opt_vmc.model(uint8_to_bit(onstate, sorb))
@@ -116,17 +118,16 @@ if __name__ == "__main__":
                 # e = t.energy(electron_info, sampler_param)
                 # print(e)
                 opt_vmc.run()
-                exit()
                 print(e_ref)
-                psi = opt_vmc.model(uint8_to_bit(ci_space, sorb))
-                psi /= psi.norm()
-                for i, occsa in enumerate(occslstA):
-                    for j, occsb in enumerate(occslstB):
-                        print(
-                            f"{state_to_string(ci_space[dim*i+j], sorb)} {full_coeff[i, j]**2:.8f} {psi[dim*i+j]**2:.8f} ")
+                # psi = opt_vmc.model(uint8_to_bit(ci_space, sorb))
+                # psi /= psi.norm()
+                # for i, occsa in enumerate(occslstA):
+                #     for j, occsb in enumerate(occslstB):
+                #         print(
+                #             f"{state_to_string(ci_space[dim*i+j], sorb)} {full_coeff[i, j]**2:.8f} {psi[dim*i+j]**2:.8f} ")
                 # print(opt_vmc.e_lst)
                 # E_pre.append(opt_vmc.e_lst)
-                opt_vmc.save(prefix="Test-1", nqs=True)
+                # opt_vmc.save(prefix="Test-1", nqs=True)
                 # opt_vmc.summary(e_ref = e_ref, prefix="1111"+ str(pre_i))
                 exit()
                 # os.remove(filename)

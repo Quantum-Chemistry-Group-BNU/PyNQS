@@ -24,10 +24,17 @@ def setup_seed(x: int):
     torch.cuda.manual_seed(x)
     torch.cuda.manual_seed_all(x)
 
-def string_to_state(sorb: int, string: str) -> List[int]:
+def string_to_state(sorb: int, string: str) -> Tensor:
     """
-    Convert onstate from string ("0011", right->left) to onv(0b0011, left->right) 
-    """
+    Convert onstate from string ("0011", right->left) to onv(0b0011, right->left)
+
+    Examples:
+    >>> output = string_to_state(4, "11")
+    >>> output
+    tensor([3, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8) # bin(3) = "0b0011"
+    >>> output = string_to_state(8, "1111")
+    tensor([15, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8) # bin(15) = "0b00001111"
+    """ 
     arr = np.array(list(map(int, string)))[::-1]
     state = [0] * ((sorb-1)//64 +1)*8
     for i in range((sorb-1)//8+1):
@@ -35,11 +42,33 @@ def string_to_state(sorb: int, string: str) -> List[int]:
         end = (i+1) * 8 if (i+1)*8 < sorb else sorb
         idx = arr[begin:end]
         state[i] = np.sum(2**np.arange(len(idx)) * idx)
-    return state
+    return torch.tensor(state, dtype=torch.uint8)
 
-def state_to_string(state: Tensor, sorb: int = None, occ_one: bool = False) -> List[str]:
+def state_to_string(state: Tensor, sorb: int = None, vcc_one: bool = False) -> List[str]:
     """
     Convert onstate from [-1, 1] or uint8 to string list("0011", right->left)
+
+    Args:
+        state(Tensor): onv or states:
+        sorb(int): the number of sorb  orbital
+        vcc_one(bool): if True, -1:unoccupied, 1: occupied else, 0:unoccupied, 1: occupied. default: False
+
+    Return:
+        s(List[str]): the string of onv
+
+    Examples:
+    >>> onv = torch.tensor([[9, 0, 0, 0, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
+    >>> output = state_to_string(onv, 4)
+    >>> output
+    ['1001', '0011']
+    >>> states = torch.tensor([[ 1., -1., -1., 1.], [ 1., 1., -1., -1.]], dtype=torch.float64)
+    >>> output = state_to_string(states, vcc_one = True)
+    >>> output
+    ['1001', '0011']
+    >>> states = torch.tensor([[ 1., 0., 0., 1.], [ 1., 1., 0., 0.]], dtype=torch.float64)
+    >>> output = state_to_string(states, vcc_one = false)
+    >>> output
+    ['1001', '0011']
     """
     tmp = []
     if state.dtype == torch.uint8:
@@ -49,9 +78,10 @@ def state_to_string(state: Tensor, sorb: int = None, occ_one: bool = False) -> L
         full_bit = ((onv_to_tensor(state, sorb) + 1)//2).to(torch.uint8).tolist() # -1:unoccupied, 1: occupied
         # full_bit = ((1 - onv_to_tensor(state, sorb))//2).to(torch.uint8).tolist()
     else:
-        if not occ_one:
-            state = (1 - state)//2
-        full_bit = ((state+1)//2).to(torch.uint8).tolist()
+        if vcc_one:
+            full_bit = ((state+1)//2).to(torch.uint8).tolist()
+        else:
+            full_bit = state.to(torch.uint8).tolist()
 
     if not any(isinstance(i, list) for i in full_bit):
         full_bit = [full_bit]
@@ -116,11 +146,13 @@ def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
 def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Tensor]:
     """
      find the common onv in the two different onstate
+
     Returns
         common : Tensor, common onv in state1 and state2 
         idx1, idx2: index of in state1 and state2
     """
-    assert (state1.dtype == torch.uint8 and state2.dtype == torch.uint8)
+    assert (state1.dtype == torch.uint8)
+    assert (state2.dtype == torch.uint8)
     assert (state1.dim() == 2 and state2.dim() == 2)
     union,counts = torch.cat([state1, state2]).unique(dim=0, return_counts=True)
     common = union[torch.where(counts.gt(1))]
@@ -162,7 +194,7 @@ def check_spin_multiplicity(state: Tensor, sorb: int,
 
 def convert_onv(spins: Union[Tensor, np.ndarray], sorb: int, device: str = None) -> Tensor:
     """
-    Convert spins to onv used pytorch tensor uint8 representation.
+    Convert spins to onv used pytorch tensor uint8 or numpy.ndarray[uint8] representation.
      spins: [0, 1, ...], 1: occupied, 0: unoccupied
     """
     if isinstance(spins, np.ndarray):
