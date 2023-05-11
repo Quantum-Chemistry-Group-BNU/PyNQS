@@ -29,11 +29,11 @@ void get_vlst_cpu(const unsigned long *bra, int *vlst, const int sorb,
                   const int _len);
 
 // vlst: abab
-void get_vlst_cpu_ab(const unsigned long *bra, int *vlst, const int sorb,
+void get_vlst_ab_cpu(const unsigned long *bra, int *vlst, const int sorb,
                      const int _len);
 
 // olst: abab
-void get_olst_cpu_ab(const unsigned long *bra, int *olst, const int _len);
+void get_olst_ab_cpu(const unsigned long *bra, int *olst, const int _len);
 
 void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
                   const int bra_len);

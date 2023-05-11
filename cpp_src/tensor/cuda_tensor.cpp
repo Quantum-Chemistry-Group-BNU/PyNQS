@@ -81,6 +81,7 @@ Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
 
 Tensor get_merged_tensor_cuda(const Tensor bra, const int nele, const int sorb,
                               const int noA, const int noB) {
+  // bra: (nbatch, bra_len * 8)
   const int bra_len = (sorb - 1) / 64 + 1;
   const int nbatch = bra.size(0);
   auto options = torch::TensorOptions()
@@ -88,7 +89,7 @@ Tensor get_merged_tensor_cuda(const Tensor bra, const int nele, const int sorb,
                      .layout(bra.layout())
                      .device(bra.device())
                      .requires_grad(false);
-  torch::Tensor merged = torch::ones({nbatch, sorb}, options);
+  torch::Tensor merged = torch::empty({nbatch, sorb}, options);
   int *merged_ptr = merged.data_ptr<int32_t>();
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
@@ -101,25 +102,28 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
                                      const int noB, bool flag_bit) {
   // bra_tensor: (nbatch, bra_len * 8)
   const int bra_len = (sorb - 1) / 64 + 1;
-  const int ncomb = squant::get_Num_SinglesDoubles_cuda(sorb, noA, noB);
+  const int ncomb = squant::get_Num_SinglesDoubles_cuda(sorb, noA, noB) + 1;
   const int nbatch = bra_tensor.size(0);
   Tensor comb, comb_bit;
 
-  comb = bra_tensor.reshape({nbatch, 1, -1}).repeat({1, ncomb, 1});
+  // comb: (nbatch, ncomb, bra_len * 8)
+  comb = bra_tensor.unsqueeze(1).repeat({1, ncomb, 1});
   if (flag_bit) {
-    // run cuda
-    comb_bit = tensor_to_onv_tensor_cuda(bra_tensor, sorb)
+    // run cuda, comb_bit (nbatch, ncomb, sorb)
+    comb_bit = onv_to_tensor_tensor_cuda(bra_tensor, sorb)
                    .unsqueeze(1)
                    .repeat({1, ncomb, 1});
   } else {
     comb_bit = torch::ones({1}, torch::TensorOptions().dtype(torch::kDouble));
   }
+
   unsigned long *comb_ptr =
       reinterpret_cast<unsigned long *>(comb.data_ptr<uint8_t>());
   double *comb_bit_ptr = comb_bit.data_ptr<double>();
 
-  // run cuda
+  // run cuda, merged: (nbatch, ncomb)
   Tensor merged = get_merged_tensor_cuda(bra_tensor, nele, sorb, noA, noB);
+  // std::cout <<"merged_cuda: \n" << merged << std::endl;
   int *merged_ptr = merged.data_ptr<int32_t>();
   if (flag_bit) {
     squant::get_comb_cuda(comb_bit_ptr, comb_ptr, merged_ptr, sorb, bra_len,

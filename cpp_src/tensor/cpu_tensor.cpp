@@ -73,8 +73,8 @@ tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
 
-  squant::get_olst_cpu_ab(bra_ptr, merged, bra_len);
-  squant::get_vlst_cpu_ab(bra_ptr, merged + nele, sorb, bra_len);
+  squant::get_olst_ab_cpu(bra_ptr, merged, bra_len);
+  squant::get_vlst_ab_cpu(bra_ptr, merged + nele, sorb, bra_len);
   const int ncomb = squant::get_Num_SinglesDoubles(sorb, noA, noB);
   static std::mt19937 rng(seed);
   static std::uniform_int_distribution<int> u0(0, ncomb - 1);
@@ -104,9 +104,9 @@ Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
   for (int i = 0; i < nbatch; i++) {
-    squant::get_olst_cpu_ab(&bra_ptr[i * bra_len], &merged_ptr[i * sorb],
+    squant::get_olst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb],
                             bra_len);
-    squant::get_vlst_cpu_ab(&bra_ptr[i * bra_len], &merged_ptr[i * sorb + nele],
+    squant::get_vlst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb + nele],
                             sorb, bra_len);
   }
   return merged;
@@ -136,6 +136,7 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
 
   // merged: (nbatch, ncomb)
   Tensor merged = get_merged_tensor_cpu(bra_tensor, nele, sorb, noA, noB);
+  // std::cout <<"merged: \n" << merged << std::endl;
   int *merged_ptr = merged.data_ptr<int32_t>();
   for (int i = 0; i < nbatch; i++) {
     for (int j = 1; j < ncomb; j++) {

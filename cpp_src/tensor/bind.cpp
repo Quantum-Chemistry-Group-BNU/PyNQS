@@ -76,7 +76,7 @@ tuple_tensor_2d get_comb(const Tensor &bra_tensor, const int sorb,
                                noB, flag_bit);
 #ifdef GPU
   } else {
-    return get_comb_tensor_cuda(bra_tensor.view({-1, bra_len * 8}), sorb, nele, noA,
+    return get_comb_tensor_cuda(bra_tensor, sorb, nele, noA,
                                 noB, flag_bit);
 #endif
   }

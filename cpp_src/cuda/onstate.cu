@@ -26,7 +26,7 @@ __device__ int parity_cuda(const unsigned long *bra, const int n) {
   return -2 * p + 1;
 }
 
-__device__ void diff_orb(const unsigned long *bra, const unsigned long *ket,
+__device__ void diff_orb_cuda(const unsigned long *bra, const unsigned long *ket,
                          const int _len, int *cre, int *ann) {
   int idx_cre = 0;
   int idx_ann = 0;
@@ -65,7 +65,7 @@ __device__ void get_olst_cuda(const unsigned long *bra, int *olst,
   }
 }
 
-__device__ void get_olst_ab(const unsigned long *bra, int *olst,
+__device__ void get_olst_ab_cuda(const unsigned long *bra, int *olst,
                             const int _len) {
   // abab
   unsigned long tmp;
@@ -108,6 +108,7 @@ __device__ void get_vlst_cuda(const unsigned long *bra, int *vlst, const int n,
 
 __device__ void get_vlst_ab_cuda(const unsigned long *bra, int *vlst,
                                  const int n, const int _len) {
+  //abab
   int ic = 0;
   int idb = 0;
   int ida = 0;
@@ -133,8 +134,8 @@ __device__ void get_vlst_ab_cuda(const unsigned long *bra, int *vlst,
 __device__ void get_ovlst_cuda(const unsigned long *bra, int *merged,
                                const int sorb, const int nele,
                                const int bra_len) {
-  get_olst_cuda(bra, merged, bra_len);
-  get_vlst_cuda(bra, merged + nele, sorb, bra_len);
+  get_olst_ab_cuda(bra, merged, bra_len);
+  get_vlst_ab_cuda(bra, merged + nele, sorb, bra_len);
 }
 
 __device__ void get_zvec_cuda(const unsigned long *bra, double *lst,

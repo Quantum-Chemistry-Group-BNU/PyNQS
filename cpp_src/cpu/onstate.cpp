@@ -64,7 +64,7 @@ void get_olst_cpu(const unsigned long *bra, int *olst, const int _len) {
   }
 }
 
-void get_olst_cpu_ab(const unsigned long *bra, int *olst, const int _len) {
+void get_olst_ab_cpu(const unsigned long *bra, int *olst, const int _len) {
   // abab
   unsigned long tmp;
   int idx = 0;
@@ -104,7 +104,7 @@ void get_vlst_cpu(const unsigned long *bra, int *vlst, const int sorb,
   }
 }
 
-void get_vlst_cpu_ab(const unsigned long *bra, int *vlst, const int sorb,
+void get_vlst_ab_cpu(const unsigned long *bra, int *vlst, const int sorb,
                      const int _len) {
   int ic = 0;
   int idb = 0;
