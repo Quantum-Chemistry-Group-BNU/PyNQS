@@ -104,6 +104,8 @@ class VMCOptimizer():
         print(f"Optimizer:\n{self.opt}")
         print(f"Sampler:\n{self.sampler}")
         print(f"Grad method: {self.method_grad}")
+        if self.sr:
+            print(f"Jacobian method: {self.method_jacobian}")
 
         # pre-train CI wavefunction
         self.pre_CI = pre_CI
@@ -117,7 +119,8 @@ class VMCOptimizer():
         self.nv = ele_info.nv
         self.nob = ele_info.nob
         self.noa = ele_info.noa
-        if self.external_model is None:
+        # if read external model, h1e and h2e come from external-model
+        if self.external_model is not None:
             self.h1e: Tensor = ele_info.h1e
             self.h2e: Tensor = ele_info.h2e
         self.ecore = ele_info.ecore
@@ -159,7 +162,7 @@ class VMCOptimizer():
                 print(f"{p} only Sampling finished, cost time {delta:.3f} ms")
                 continue
 
-            sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
+            sample_state = onv_to_tensor(state, self.sorb) # -1:unoccupied, 1: occupied
 
             delta = (time.time_ns() - t0) / 1.00E06
             self.time_sample.append(delta)
@@ -172,8 +175,8 @@ class VMCOptimizer():
                 psi = energy_grad(self.model, sample_state, state_prob, eloc, self.exact, self.dtype,
                                   self.method_grad)
 
-            for param in self.model.parameters():
-                print(param.grad)
+            # for param in self.model.parameters():
+            #     print(param.grad)
 
             # save the energy grad
             for i, param in enumerate(self.model.parameters()):
@@ -186,7 +189,7 @@ class VMCOptimizer():
                     self.lr_scheduler.step()
 
             delta = (time.time_ns() - t0) / 1.00E09
-            print(f"{p} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3f} s")
+            print(f"{p} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3E} s")
             self.time_iter.append(delta)
 
             del sample_state, eloc, state, psi
@@ -247,8 +250,8 @@ class VMCOptimizer():
             ylim1 = np.max(y) + (np.min(y) - e_ref) * y_ratio
             axins.set_xlim(xlim0, xlim1)
             axins.set_ylim(ylim0, ylim1)
-            print(f"last energy: {e[-1]:.9f}")
-            print(f"reference energy: {e_ref:.9f}, error: {abs((e[-1]-e_ref)/e_ref) * 100:.6f} %")
+            print(f"Last energy: {e[-1]:.9f}")
+            print(f"Reference energy: {e_ref:.9f}, error: {abs((e[-1]-e_ref)/e_ref) * 100:.6f} %")
 
         # grad L2-norm/max
         for i in range(self.n_para):

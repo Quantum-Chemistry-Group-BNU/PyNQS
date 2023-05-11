@@ -61,7 +61,7 @@ def total_energy(x: Tensor, nbatch: int, h1e: Tensor, h2e: Tensor, ansatz: Calla
 
     t1 = time.time_ns()
     if verbose:
-        print(f"total energy cost time: {(t1-t0)/1.0E06:.3f} ms")
+        print(f"total energy cost time: {(t1-t0)/1.0E06:.3E} ms")
 
     del psi_lst, idx_lst
     print(f"total energy: {e_total.real.item():.8f}")

@@ -148,7 +148,7 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Te
      find the common onv in the two different onstate
 
     Returns
-        common : Tensor, common onv in state1 and state2 
+        common[Tensor]: common onv in state1 and state2 
         idx1, idx2: index of in state1 and state2
     """
     assert (state1.dtype == torch.uint8)
@@ -311,7 +311,7 @@ class ElectronInfo:
             f"{type(self).__name__}" + "(\n"
             f"    h1e shape: {self.h1e.shape[0]}\n" +
             f"    h2e shape: {self.h2e.shape[0]}\n" +
-            f"    onstate shape:{tuple(self.ci_space.shape)}\n" +
+            f"    ci shape:{tuple(self.ci_space.shape)}\n" +
             f"    ecore: {self.ecore:.8f}\n" +
             f"    sorb: {self.sorb}, nele: {self.sorb}\n" +
             f"    noa: {self.noa}, nob: {self.nob}\n" +

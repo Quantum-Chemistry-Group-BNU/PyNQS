@@ -165,7 +165,7 @@ def _numerical_differentiation(nqs: nn.Module,
                     param.data.add_(delta, alpha=-1.0)
                     e3 = nqs(states.detach()) # f(x)
                 diff = (-1 * e1 + 4 * e2 - 3 * e3) / (2 * eps) # dPsi
-                tmp[:, j] = diff/psi
+                tmp[:, j] = diff/psi #dlnPsi
         dlnPsi_num.append(tmp)
 
     return dlnPsi_num, psi

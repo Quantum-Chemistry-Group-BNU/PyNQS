@@ -22,8 +22,8 @@ torch.set_printoptions(precision=6)
 print = partial(print, flush=True)
 
 if __name__ == "__main__":
+    # device = "cpu"
     device = "cpu"
-    # device = "cuda"
     for i in range(5):
         for alpha in [2]:
             # output = "H4-1.00-random-opt" + str(alpha) + "-" + str(i)
@@ -78,7 +78,7 @@ if __name__ == "__main__":
                                  "seed": seed, "record_sample": True,
                                  "max_memory": 4, "alpha": 0.15}
                 from vmc.optim import GD
-                opt_type = GD
+                opt_type = optim.Adam
                 # opt_type = GD
                 # opt_params = {"lr": 0.005, "weight_decay": 0.001}
                 opt_params = {"lr": 0.005, "weight_decay": 0.001}
@@ -96,14 +96,14 @@ if __name__ == "__main__":
                                        sampler_param=sampler_param,
                                        only_sample=False,
                                        electron_info=electron_info,
-                                       max_iter=1,
+                                       max_iter=100,
                                        HF_init=0,
                                        verbose=False,
                                        sr=False,
                                        pre_CI=cisd_wf,
                                        pre_train_info=pre_train_info,
                                        # method_grad="analytic",
-                                       method_grad="analytic",
+                                       method_grad="AD",
                                        method_jacobian="vector",
                                        )
                 # opt_vmc.pre_train('Adam')
@@ -128,7 +128,7 @@ if __name__ == "__main__":
                 # print(opt_vmc.e_lst)
                 # E_pre.append(opt_vmc.e_lst)
                 # opt_vmc.save(prefix="Test-1", nqs=True)
-                # opt_vmc.summary(e_ref = e_ref, prefix="1111"+ str(pre_i))
+                # opt_vmc.summary(e_ref = e_ref, prefix="1111")
                 exit()
                 # os.remove(filename)
                 # sys.stdout.log.close()
