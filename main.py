@@ -12,7 +12,7 @@ from pyscf import fci
 
 from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string
 from utils.integral import read_integral, integral_pyscf
-from vmc.ansatz import RBMWavefunction,  RNNWavefunction
+from vmc.ansatz import RBMWavefunction, RNNWavefunction
 from vmc.optim import VMCOptimizer
 from ci import unpack_ucisd, ucisd_to_fci
 from libs.hij_tensor import get_comb_tensor
@@ -22,8 +22,8 @@ torch.set_printoptions(precision=6)
 print = partial(print, flush=True)
 
 if __name__ == "__main__":
+    device = "cuda"
     # device = "cpu"
-    device = "cpu"
     for i in range(5):
         for alpha in [2]:
             # output = "H4-1.00-random-opt" + str(alpha) + "-" + str(i)
@@ -31,12 +31,12 @@ if __name__ == "__main__":
             # sys.stdout = Logger(output + ".log", sys.stdout)
             sys.stdout = Logger("/dev/null", sys.stdout)
             sys.stderr = Logger("/dev/null", sys.stderr)
-            # seed = int(time.time_ns()%2**31)
-            seed = 2023 # H6 1.20
+            seed = int(time.time_ns()%2**31)
+            # seed = 2023 # H6 1.20
             setup_seed(seed)
             atom: str = ""
             bond = 1.20
-            for k in range(4):
+            for k in range(2):
                 atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
             # atom = "Li 0.00 0.00 0.00; H 0.0 0.0 1.54"
             filename = tempfile.mkstemp()[1]
@@ -58,9 +58,9 @@ if __name__ == "__main__":
             pre_train_info = {"pre_max_iter": 10, "interval": -1, "loss_type": "onstate"}
             E_pre = []
             for pre_i in range(4):
-                # nqs = RNNwavefunction(sorb, num_hiddens=50, num_labels=2, num_layers=1)
+                nqs = RNNWavefunction(sorb, num_hiddens=sorb*2, num_labels=2, num_layers=1, device=device).to(device)
                 nqs = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
-                                      rbm_type='cos', verbose=False).to(device)
+                                       rbm_type='cos', verbose=False).to(device)
 
                 # from pyscf import fci
                 # psi = nqs(uint8_to_bit(ci_space, sorb))
@@ -80,8 +80,8 @@ if __name__ == "__main__":
                 from vmc.optim import GD
                 opt_type = optim.Adam
                 # opt_type = GD
-                # opt_params = {"lr": 0.005, "weight_decay": 0.001}
                 opt_params = {"lr": 0.005, "weight_decay": 0.001}
+                # opt_params = {"lr": 0.005}
                 lr_scheduler = optim.lr_scheduler.MultiStepLR
                 lr_sch_params = {"milestones": [2000, 2500, 3000], "gamma": 0.10}
                 dtype = Dtype(dtype=torch.complex128, device=device)
@@ -89,14 +89,14 @@ if __name__ == "__main__":
                 opt_vmc = VMCOptimizer(nqs=nqs,
                                        opt_type= opt_type,
                                        opt_params=opt_params,
-                                       lr_scheduler=lr_scheduler,
-                                       lr_sch_params=lr_sch_params,
-                                       external_model="Test-1.pth",
+                                    #    lr_scheduler=lr_scheduler,
+                                    #    lr_sch_params=lr_sch_params,
+                                       # external_model="Test-1.pth",
                                        dtype=dtype,
                                        sampler_param=sampler_param,
                                        only_sample=False,
                                        electron_info=electron_info,
-                                       max_iter=100,
+                                       max_iter=4000,
                                        HF_init=0,
                                        verbose=False,
                                        sr=False,
@@ -127,8 +127,8 @@ if __name__ == "__main__":
                 #             f"{state_to_string(ci_space[dim*i+j], sorb)} {full_coeff[i, j]**2:.8f} {psi[dim*i+j]**2:.8f} ")
                 # print(opt_vmc.e_lst)
                 # E_pre.append(opt_vmc.e_lst)
-                # opt_vmc.save(prefix="Test-1", nqs=True)
-                # opt_vmc.summary(e_ref = e_ref, prefix="1111")
+                # opt_vmc.save(prefix="Test-1", nqs=False)
+                opt_vmc.summary(e_ref = e_ref, prefix="1111")
                 exit()
                 # os.remove(filename)
                 # sys.stdout.log.close()

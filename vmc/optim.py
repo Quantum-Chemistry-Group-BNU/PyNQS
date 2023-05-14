@@ -120,7 +120,7 @@ class VMCOptimizer():
         self.nob = ele_info.nob
         self.noa = ele_info.noa
         # if read external model, h1e and h2e come from external-model
-        if self.external_model is not None:
+        if self.external_model is None:
             self.h1e: Tensor = ele_info.h1e
             self.h2e: Tensor = ele_info.h2e
         self.ecore = ele_info.ecore
@@ -253,6 +253,7 @@ class VMCOptimizer():
             print(f"Last energy: {e[-1]:.9f}")
             print(f"Reference energy: {e_ref:.9f}, error: {abs((e[-1]-e_ref)/e_ref) * 100:.6f} %")
 
+        # TODO: L2-norm/max all params
         # grad L2-norm/max
         for i in range(self.n_para):
             ax = fig.add_subplot(self.n_para + 1, 1, i + 2)

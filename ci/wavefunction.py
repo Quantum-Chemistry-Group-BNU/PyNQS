@@ -213,6 +213,7 @@ class CITrain:
         state is CISD
         """
         psi = self.model(state.requires_grad_())
+        # TODO: if psi is complex and self.pre_ci is real?
         model_CI = psi / torch.norm(psi).reshape(-1)
         # breakpoint()
         ovlp = torch.einsum("i, i", model_CI, self.pre_ci)
