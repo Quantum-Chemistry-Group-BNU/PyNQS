@@ -143,6 +143,15 @@ class MCMCSampler():
         return sample_unique.detach(), sample_prob, eloc, e_total, stats_dict
 
     def MCMC(self) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        # convert to CPU and 'spin_flip_rand' is not implemented in "GPU"
+        if self.is_cuda:
+            self.state_sample = self.state_sample.to("cpu")
+            self.current_state = self.current_state.to("cpu")
+            self.next_state = self.next_state.to("cpu")
+            self.nqs = self.nqs.to("cpu")
+            self.psi_sample = self.psi_sample.to("cpu")
+        
+        # Implement MCMC-Sample in CPP functions
         if True:
             example_inputs = onv_to_tensor(self.current_state, self.sorb) # -1:unoccupied, 1: occupied
             serialized_model = torch.jit.trace(self.nqs, example_inputs)
@@ -221,14 +230,6 @@ class MCMCSampler():
 
         if (n_sweep is None) or (n_sweep <= self.therm_step + self.n_sample):
             self.n_sweep = self.therm_step + self.n_sample
-
-        # convert to CPU and 'spin_flip_rand' is not implemented in "GPU"
-        if self.is_cuda:
-            self.state_sample = self.state_sample.to("cpu")
-            self.current_state = self.current_state.to("cpu")
-            self.next_state = self.next_state.to("cpu")
-            self.nqs = self.nqs.to("cpu")
-            self.psi_sample = self.psi_sample.to("cpu")
 
     # TODO: how to calculate batch_size;
     # calculate the max nbatch for given Max Memory

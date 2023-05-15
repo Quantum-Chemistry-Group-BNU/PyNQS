@@ -36,7 +36,7 @@ if __name__ == "__main__":
             setup_seed(seed)
             atom: str = ""
             bond = 1.20
-            for k in range(2):
+            for k in range(4):
                 atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
             # atom = "Li 0.00 0.00 0.00; H 0.0 0.0 1.54"
             filename = tempfile.mkstemp()[1]
@@ -55,24 +55,12 @@ if __name__ == "__main__":
             electron_info = ElectronInfo(info)
             cisd_wf = unpack_ucisd(cisd_coeff, sorb, nele, device=device)
             # cisd_wf = ucisd_to_fci(cisd_coeff, sorb, nele, ci_space, device=device)
-            pre_train_info = {"pre_max_iter": 10, "interval": -1, "loss_type": "onstate"}
+            pre_train_info = {"pre_max_iter": 500, "interval": 10, "loss_type": "sample"}
             E_pre = []
             for pre_i in range(4):
-                nqs = RNNWavefunction(sorb, num_hiddens=sorb*2, num_labels=2, num_layers=1, device=device).to(device)
-                nqs = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
-                                       rbm_type='cos', verbose=False).to(device)
-
-                # from pyscf import fci
-                # psi = nqs(uint8_to_bit(ci_space, sorb))
-                # psi /= psi.norm()
-                # occslstA = fci.cistring._gen_occslst(range(sorb//2), nele//2)
-                # occslstB = fci.cistring._gen_occslst(range(sorb//2), nele//2)
-                # dim = len(occslstA)
-                # print(f"State:  exact_random_ci^2     ")
-                # for i,occsa in enumerate(occslstA):
-                #     for j,occsb in enumerate(occslstB):
-                #         print(f"{state_to_string(onstate[dim*i+j], sorb)} {psi[dim*i+j]**2:.8f} ")
-
+                nqs = RNNWavefunction(sorb, num_hiddens=40, num_labels=2, num_layers=1, device=device).to(device)
+                # nqs = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
+                #                        rbm_type='cos', verbose=False).to(device)
                 sampler_param = {"n_sample": 10000, "verbose": True,
                                  "debug_exact": True, "therm_step": 10000,
                                  "seed": seed, "record_sample": True,
@@ -83,14 +71,14 @@ if __name__ == "__main__":
                 opt_params = {"lr": 0.005, "weight_decay": 0.001}
                 # opt_params = {"lr": 0.005}
                 lr_scheduler = optim.lr_scheduler.MultiStepLR
-                lr_sch_params = {"milestones": [2000, 2500, 3000], "gamma": 0.10}
+                lr_sch_params = {"milestones": [3000, 3500, 4000], "gamma": 0.20}
                 dtype = Dtype(dtype=torch.complex128, device=device)
                 # dtype = Dtype(dtype=torch.double, device=device)
                 opt_vmc = VMCOptimizer(nqs=nqs,
                                        opt_type= opt_type,
                                        opt_params=opt_params,
-                                    #    lr_scheduler=lr_scheduler,
-                                    #    lr_sch_params=lr_sch_params,
+                                       lr_scheduler=lr_scheduler,
+                                       lr_sch_params=lr_sch_params,
                                        # external_model="Test-1.pth",
                                        dtype=dtype,
                                        sampler_param=sampler_param,
@@ -106,7 +94,7 @@ if __name__ == "__main__":
                                        method_grad="AD",
                                        method_jacobian="vector",
                                        )
-                # opt_vmc.pre_train('Adam')
+                opt_vmc.pre_train('Adam')
                 # psi = opt_vmc.model(uint8_to_bit(onstate, sorb))
                 # psi /= psi.norm()
                 # for i,occsa in enumerate(occslstA):

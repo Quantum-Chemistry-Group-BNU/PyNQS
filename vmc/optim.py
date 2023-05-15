@@ -199,6 +199,7 @@ class VMCOptimizer():
                     self.lr_scheduler, self.exact)
         print(t)
         t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
+        del t
 
     def summary(self, e_ref: float = None, prefix: str = "VMC"):
         self.save(prefix)
@@ -224,11 +225,13 @@ class VMCOptimizer():
 
     def plot_figure(self, e_ref: float = None, prefix: str = "VMC"):
         fig = plt.figure()
-        ax = fig.add_subplot(self.n_para + 1, 1, 1)
+        ax = fig.add_subplot(2, 1, 1)
         e = np.array(self.e_lst)
         idx = 0
         idx_e = np.arange(len(e))
         ax.plot(idx_e[idx:], e[idx:])
+        ax.set_xlabel("Iteration Time")
+        ax.set_ylabel("Energy")
         if e_ref is not None:
             ax.axhline(e_ref, color='coral', ls='--')
             axins = inset_axes(ax,
@@ -253,16 +256,24 @@ class VMCOptimizer():
             print(f"Last energy: {e[-1]:.9f}")
             print(f"Reference energy: {e_ref:.9f}, error: {abs((e[-1]-e_ref)/e_ref) * 100:.6f} %")
 
-        # TODO: L2-norm/max all params
-        # grad L2-norm/max
+        # plot the L2-norm and max-abs of the gradients
+        param_L2: List[np.ndarray] = []
+        param_max: List[np.ndarray] = []
         for i in range(self.n_para):
-            ax = fig.add_subplot(self.n_para + 1, 1, i + 2)
             x = np.linalg.norm(np.array(self.grad_e_lst[i]), axis=1)  # ||g||
+            param_L2.append(x)
             x1 = np.abs(np.array(self.grad_e_lst[i])).max(axis=1)  # max
-            ax.plot(np.arange(len(x))[idx:], x[idx:], label="||g||")
-            ax.plot(np.arange(len(x1))[idx:], x1[idx:], label="max|g|")
-            ax.set_yscale("log")
-            plt.legend(loc="best")
+            param_max.append(x1)
+        param_L2 = np.stack(param_L2, axis=1).sum(axis=1)
+        param_max = np.stack(param_max, axis=1).max(axis=1)
+
+        ax = fig.add_subplot(2, 1, 2)
+        ax.plot(np.arange(len(param_L2))[idx:], param_L2[idx:], label="||g||")
+        ax.plot(np.arange(len(param_max))[idx:], param_max[idx:], label="max|g|")
+        ax.set_xlabel("Iteration Time")
+        ax.set_yscale("log")
+        ax.set_ylabel("Gradients")
+        plt.legend(loc="best")
 
         plt.subplots_adjust(wspace=0, hspace=0.5)
         plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches='tight')

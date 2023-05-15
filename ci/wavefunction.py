@@ -63,8 +63,8 @@ def energy_CI(coeff: Tensor, onstate: Tensor, h1e: Tensor, h2e: Tensor, ecore: f
     if abs(coeff.norm().to("cpu").item() - 1.00) >= 1.0E-06:
         raise ValueError(f"Normalization CI coefficient")
 
-    hij = get_hij_torch(onstate, onstate, h1e, h2e, sorb, nele)
-    e = torch.einsum("i, ij, j", coeff.reshape(-1), hij, torch.conj(coeff.reshape(-1))) + ecore
+    hij = get_hij_torch(onstate, onstate, h1e, h2e, sorb, nele).type_as(coeff)
+    e = torch.einsum("i, ij, j", coeff.flatten(), hij, coeff.flatten().conj()) + ecore
 
     return e.real.item()
 
@@ -107,8 +107,9 @@ class CITrain:
         """
         self.model = model
         self.opt = opt
+        self.dtype = dtype
         self.sorb = sorb
-        self.pre_ci = pre_CI.coeff.reshape(-1)
+        self.pre_ci = pre_CI.coeff.reshape(-1).to(self.dtype)
         self.onstate = pre_CI.space
         self.state = onv_to_tensor(self.onstate, self.sorb)
         self.pre_max_iter = pre_train_info.get("pre_max_iter", 200)
@@ -120,7 +121,6 @@ class CITrain:
         self.lr_scheduler = lr_scheduler
         self.exact = exact
         self.loss_type: str = pre_train_info.get("loss_type", "onstate").lower()
-        self.dtype = dtype
         if not self.loss_type in self.LOSS_TYPE:
             raise ValueError(f"Loss function type{self.loss_type} not in {self.LOSS_TYPE}, ")
 
@@ -164,8 +164,8 @@ class CITrain:
                 onstate = self.onstate
             elif self.loss_type == "sample":
                 loss, ovlp, model_CI, ovlp_onstate = self.qgt_loss(sampler)
-                onstate = self.onstate
-                # onstate = ovlp_onstate
+                # onstate = self.onstate
+                onstate = ovlp_onstate
 
             if epoch < self.pre_max_iter:
                 loss.backward()
@@ -176,24 +176,22 @@ class CITrain:
             self.ovlp_list.append(ovlp.detach().to("cpu").item())
             self.loss_list.append((1 - ovlp.norm()**2).detach().to("cpu").item())
 
-            # for para in self.model.parameters():
-            #     print(para.grad.data)
-            # breakpoint()
             self.opt.zero_grad()
             # calculate energy from CI coefficient.
             if epoch == 0:
                 if flag_energy:
                     eCI_0 = get_energy(model_CI, onstate)
-                    eCI_ref = get_energy(self.pre_ci, onstate)
+                    eCI_ref = get_energy(self.pre_ci, self.onstate)
             elif epoch == self.pre_max_iter:
                 if flag_energy:
                     eCI_1 = get_energy(model_CI, onstate)
             if (epoch % self.nprt) == 0:
                 delta = (time.time_ns() - t0) / 1.E06
                 print(
-                    f"The {epoch:<5d} training, loss = {(1-ovlp.norm()**2).item():.4E}, ovlp = {ovlp.item():.4E}, delta = {delta:.3f} ms"
+                    f"The {epoch:<5d} training, loss = {(1-ovlp.norm()**2).item():.4E}, " +
+                    f"ovlp = {ovlp.item():.4E}, delta = {delta:.3f} ms"
                 )
-        if True:
+        if False:
             full_space = onv_to_tensor(electron_info.ci_space, self.sorb)
             psi = self.model(full_space)
             psi /= psi.norm()
@@ -232,7 +230,7 @@ class CITrain:
             initial_state = self.onstate[random.randrange(dim)].clone().detach()
             sampler.prepare_sample(initial_state)
             if self.exact:
-                sample_unique = self.mc.ele_info.ci_space.clone()
+                sample_unique = self.mc.ele_info.ci_space.clone() # full ci-space not pre-ci space
                 psi_unique = self.model(onv_to_tensor(sample_unique, self.sorb)).to(self.dtype)
                 state_prob = (psi_unique * psi_unique.conj() / psi_unique.norm()**2)
             else:
@@ -254,17 +252,15 @@ class CITrain:
         loss1 = torch.einsum("i, i, i ->", oloc, log_psi.conj(), state_prob[idx_sample])
         loss2 = ovlp * torch.einsum("i, i->", log_psi.conj(), state_prob[idx_sample])
         loss = 2 * (loss1 - loss2).real
-        # loss1 = torch.einsum("i, i, i, i ->", log_psi.conj(), state_prob, log_psi, state_prob)
-        # loss2 = torch.einsum("i, i ->", log_psi.conj(), state_prob) * torch.einsum("i, i->", log_psi, state_prob)
-        # loss = loss1 - loss2
 
-        return (loss, ovlp.real, state_prob[idx_sample], sample_unique)
+        model_CI = (state_prob[idx_sample]/state_prob[idx_sample].sum()).sqrt()
+        return (loss, ovlp.real, model_CI, sample_unique[idx_sample])
 
     def get_local_ovlp(self, prob, psi_sample: Tensor, idx_sample: Tensor, idx_ci: Tensor, sample_unique):
         """
         local_ovlp = <n|psi_ci><psi_ci|psi>/<n|psi>
         """
-        model_ci = self.model(self.state)
+        model_ci = self.model(self.state).to(self.dtype)
         psi0 = torch.dot(self.pre_ci.conj(), model_ci)
         e_lst = -1 * self.pre_ci[idx_ci] * psi0 / psi_sample[idx_sample]
         e = torch.dot(e_lst, prob[idx_sample])
