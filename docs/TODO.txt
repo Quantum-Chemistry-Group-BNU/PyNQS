@@ -39,3 +39,4 @@ BUG: pre_train failure
 1. Add tutorial using "Read the Docs"
 2. Support spin_multiplicity == 1
 3. Support mpi4py
+4. Support SR from RNN, vmap doesn't 'torch.nn.functions.one_hot' functions
