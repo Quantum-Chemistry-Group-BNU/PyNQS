@@ -22,24 +22,23 @@ class RNNWavefunction(nn.Module):
                           num_layers=num_layers,
                           batch_first=True,
                           **self.factory_kwargs)
-        self.fc = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
+        self.fc_amp = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
+        self.fc_phase = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
 
     def rnn(self, x: Tensor, hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
         output, hidden_state = self.GRU(x, hidden_state)
-        output = self.fc(output)  #output: (nbatch, 1, sorb)
+        # output: (nbatch, 1, sorb)
         return output.squeeze(1), hidden_state
 
-    @staticmethod
-    def softmax(x: Tensor) -> Tensor:
+    def amp_impl(self, x: Tensor) -> Tensor:
         # x: (nbatch, 2)
-        return torch.softmax(x, dim=1)
+        return self.fc_amp(x).softmax(dim=1)
 
-    @staticmethod
-    def pi_softsign(x: Tensor) -> Tensor:
+    def phase_impl(self,x: Tensor) -> Tensor:
         # x: (nbatch, 2)
-        return torch.pi * (F.softsign(x))
+        return torch.pi * (F.softsign(self.fc_phase(x)))
 
-    def forward(self, x: Tensor, compute_phase: bool = True) -> Tensor:
+    def forward(self, x: Tensor, compute_phase: bool = False) -> Tensor:
 
         assert (x.dim()
                 in (1, 2)), f"GRU: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
@@ -68,9 +67,9 @@ class RNNWavefunction(nn.Module):
             # x0: (nbatch, 1, 2)
             x0 = F.one_hot(x[..., i], num_classes=2).to(self.factory_kwargs["dtype"])
             y0, hidden_state = self.rnn(x0, hidden_state)  # (nbatch, 2)
-            y0_amp = self.softmax(y0)  # (nbatch, 2)
+            y0_amp = self.amp_impl(y0)  # (nbatch, 2)
             if compute_phase:
-                y0_phase = self.pi_softsign(y0)  # (nbatch, 2)
+                y0_phase = self.phase_impl(y0)  # (nbatch, 2)
 
             prob_i = (y0_amp * x0.squeeze(1)).sum(dim=1)  # (nbatch)
             prob.append(prob_i)

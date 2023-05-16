@@ -157,6 +157,7 @@ class CITrain:
                                  nele=electron_info.nele)
 
         # TODO: how to calculate the energy from CI or VMC
+        self.opt.zero_grad()
         for epoch in range(self.pre_max_iter + 1):
             t0 = time.time_ns()
             if self.loss_type == "onstate":
@@ -164,7 +165,7 @@ class CITrain:
                 onstate = self.onstate
             elif self.loss_type == "sample":
                 loss, ovlp, model_CI, ovlp_onstate = self.qgt_loss(sampler)
-                # onstate = self.onstate
+                # onstate.shape = model_CI.shape if sample.
                 onstate = ovlp_onstate
 
             if epoch < self.pre_max_iter:
@@ -175,9 +176,10 @@ class CITrain:
                     self.lr_scheduler.step()
             self.ovlp_list.append(ovlp.detach().to("cpu").item())
             self.loss_list.append((1 - ovlp.norm()**2).detach().to("cpu").item())
-
             self.opt.zero_grad()
-            # calculate energy from CI coefficient.
+
+            # calculate energy from CI coefficient
+            # notice, the shape of model_CI maybe not equal of self.pre_ci
             if epoch == 0:
                 if flag_energy:
                     eCI_0 = get_energy(model_CI, onstate)
@@ -295,7 +297,7 @@ class CITrain:
         ax2.plot(x, np.abs(self.ovlp_list), color='tomato', label="Ovlp")
         ax2.legend(loc="best")
         fig.subplots_adjust(wspace=0, hspace=0.5)
-        fig.savefig(prefix + "-pre_train.png", format="png", dpi=1000, bbox_inches='tight')
+        fig.savefig(prefix + "-pre-train.png", format="png", dpi=1000, bbox_inches='tight')
 
     def __repr__(self) -> str:
         return (f"{type(self).__name__}" + "(\n"

@@ -25,6 +25,7 @@ from libs.C_extension import onv_to_tensor
 
 print = partial(print, flush=True)
 
+
 class VMCOptimizer():
 
     sys_name = platform.node()
@@ -38,7 +39,10 @@ class VMCOptimizer():
         sampler_param: dict,
         electron_info: ElectronInfo,
         opt_type: Optimizer = torch.optim.Adam,
-        opt_params: dict = {"lr": 0.005, "weight_decay": 0.001},
+        opt_params: dict = {
+            "lr": 0.005,
+            "weight_decay": 0.001
+        },
         lr_scheduler=None,
         lr_sch_params: dict = None,
         max_iter: int = 2000,
@@ -100,7 +104,9 @@ class VMCOptimizer():
         self.stats_lst: List[dict] = []
         self.time_sample: List[float] = []
         self.time_iter: List[float] = []
+
         print(f"NQS model:\n{self.model}")
+        print(f"The number param of NQS model: {sum(map(torch.numel, self.model.parameters()))}")
         print(f"Optimizer:\n{self.opt}")
         print(f"Sampler:\n{self.sampler}")
         print(f"Grad method: {self.method_grad}")
@@ -162,7 +168,7 @@ class VMCOptimizer():
                 print(f"{p} only Sampling finished, cost time {delta:.3f} ms")
                 continue
 
-            sample_state = onv_to_tensor(state, self.sorb) # -1:unoccupied, 1: occupied
+            sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
 
             delta = (time.time_ns() - t0) / 1.00E06
             self.time_sample.append(delta)
@@ -180,7 +186,10 @@ class VMCOptimizer():
 
             # save the energy grad
             for i, param in enumerate(self.model.parameters()):
-                self.grad_e_lst[i].append(param.grad.reshape(-1).detach().to("cpu").numpy())
+                if param.grad is not None:
+                    self.grad_e_lst[i].append(param.grad.reshape(-1).detach().to("cpu").numpy())
+                else:
+                    self.grad_e_lst[i].append(np.zeros(param.numel()))
 
             if p < self.max_iter - 1:
                 self.opt.step()
@@ -201,9 +210,9 @@ class VMCOptimizer():
         t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
         del t
 
-    def summary(self, e_ref: float = None, prefix: str = "VMC"):
+    def summary(self, e_ref: float = None, e_lst: List[float] = None, prefix: str = "VMC"):
         self.save(prefix)
-        self.plot_figure(e_ref, prefix)
+        self.plot_figure(e_ref, e_lst, prefix)
 
     def save(self, prefix: str = "VMC", nqs: bool = True, sample: bool = True):
         sample_file, model_file = [prefix + i for i in (".csv", ".pth")]
@@ -223,7 +232,7 @@ class VMCOptimizer():
                     "h2e": self.h2e
                 }, model_file)
 
-    def plot_figure(self, e_ref: float = None, prefix: str = "VMC"):
+    def plot_figure(self, e_ref: float = None, e_lst: List[float] = None, prefix: str = "VMC"):
         fig = plt.figure()
         ax = fig.add_subplot(2, 1, 1)
         e = np.array(self.e_lst)
@@ -234,6 +243,10 @@ class VMCOptimizer():
         ax.set_ylabel("Energy")
         if e_ref is not None:
             ax.axhline(e_ref, color='coral', ls='--')
+            if e_lst is not None:
+                for i in range(len(e_lst)):
+                    ax.axhline(e_lst[i], color=plt.get_cmap("Accent")(i), ls='--')
+            # plot partial enlarged view
             axins = inset_axes(ax,
                                width="50%",
                                height="45%",
@@ -242,6 +255,9 @@ class VMCOptimizer():
                                bbox_transform=ax.transAxes)
             axins.plot(e[idx:])
             axins.axhline(e_ref, color='coral', ls='--')
+            if e_lst is not None:
+                for i in range(len(e_lst)):
+                    axins.axhline(e_lst[i], color=plt.get_cmap("Accent")(i), ls='--')
             zone_left = len(e) - len(e) // 10
             zone_right = len(e) - 1
             x_ratio = 0

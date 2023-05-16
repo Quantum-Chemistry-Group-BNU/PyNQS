@@ -69,7 +69,7 @@ def sr_grad(nqs: nn.Module,
     if exact:
         state_prob = psi * psi.conj() / psi.norm()**2
 
-    dp = _calculate_sr(per_sample_grad, comb_F_p, state_prob, diag_shift=diag_shift)
+    dp = _calculate_sr(per_sample_grad, comb_F_p, state_prob, dtype=dtype, diag_shift=diag_shift)
     if torch.any(torch.isnan(dp)):
         raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
 
@@ -87,6 +87,7 @@ def _calculate_sr(grad_total: Tensor,
                   F_p: Tensor,
                   state_prob: Tensor,
                   diag_shift: float = 0.02,
+                  dtype = torch.double,
                   p: int = None) -> Tensor:
     """
     S_ij(k) = <Oi* . Oj> − <Oi*><Oj>
@@ -98,6 +99,8 @@ def _calculate_sr(grad_total: Tensor,
     if grad_total.shape[0] != len(state_prob):
         raise ValueError(f"The shape of grad_total {grad_total.shape} maybe error")
 
+    state_prob = state_prob.to(dtype)
+    grad_total = grad_total.to(dtype)
     # avg_grad = torch.sum(grad_total, axis=0, keepdim=True)/N
     # grad_p: (n_sample, n_param), F_p: (n_param), state_prob: (n_sample)
     avg_grad = torch.mm(state_prob.reshape(1, -1), grad_total) # (1, n_param)
@@ -108,7 +111,8 @@ def _calculate_sr(grad_total: Tensor,
     S_kk2 = torch.eye(S_kk.shape[0], dtype=S_kk.dtype, device=S_kk.device) * diag_shift
     #  _lambda_regular(p) * torch.diag(S_kk)
     S_reg = S_kk + S_kk2
-    update = torch.matmul(torch.linalg.inv(S_reg), F_p).reshape(-1)
+    # TODO: S-1 is complex or real
+    update = torch.matmul(torch.linalg.inv(S_reg).real, F_p.real).reshape(-1)
     return update
 
 

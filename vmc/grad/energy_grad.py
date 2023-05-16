@@ -75,7 +75,7 @@ def _analytical_grad(nqs: nn.Module,
         if method == "analytic":
             dlnPsi_lst, psi = nqs(states.detach(), dlnPsi=True)
         elif method == "num_diff":
-            dlnPsi_lst, psi = _numerical_differentiation(nqs, states)
+            dlnPsi_lst, psi = _numerical_differentiation(nqs, states, dtype=dtype)
     # tuple, length: n_para, shape: (n_sample, param.shape)
 
     # nqs model grad is None, so the Optimizer base maybe be error, and set the gradient
@@ -85,7 +85,7 @@ def _analytical_grad(nqs: nn.Module,
     with torch.no_grad():
         if exact:
             state_prob = psi * psi.conj() / psi.norm()**2
-    state_prob = state_prob.to(dtype)
+    state_prob = state_prob.real.to(dtype)
     eloc = eloc.to(dtype)
 
     grad_update_lst: List[Tensor] = []
@@ -119,7 +119,7 @@ def _ad_grad(nqs: nn.Module,
     with torch.no_grad():
         if exact:
             state_prob = psi * psi.conj() / psi.norm()**2
-    state_prob = state_prob.to(dtype)
+    state_prob = state_prob.real.to(dtype)
     eloc = eloc.to(dtype)
 
     # F_p = 2R(<O* * eloc> - <O*><eloc>)
