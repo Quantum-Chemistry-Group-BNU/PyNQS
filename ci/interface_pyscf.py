@@ -6,23 +6,26 @@ from typing import Tuple, List
 from numpy import ndarray
 
 from ci.wavefunction import CIWavefunction
-from utils import state_to_string, ONV, convert_onv
+from utils import ONV, convert_onv
+from libs.C_extension import onv_to_tensor
 
-def unpack_ucisd(cisd_amp: ndarray[np.float64],
-                 sorb: int,
-                 nele: int,
-                 device=None,
-                 ) -> CIWavefunction:
+
+def unpack_ucisd(
+    cisd_amp: ndarray[np.float64],
+    sorb: int,
+    nele: int,
+    device=None,
+) -> CIWavefunction:
     """
     unpack UCISD coeff and onstate from pyscf output
     """
-    noa = nele//2
+    noa = nele // 2
     nob = nele - noa
-    nva = (sorb - nele)//2
+    nva = (sorb - nele) // 2
     nvb = (sorb - nele) - nva
 
     # TODO: O2 is error;
-    hf_state = np.array(nele * [1] + (sorb-nele) * [0], dtype=np.uint8)
+    hf_state = np.array(nele * [1] + (sorb - nele) * [0], dtype=np.uint8)
     cisd_sign = np.ones(len(cisd_amp))
 
     cisd_state = np.repeat(hf_state.reshape(1, -1).copy(), len(cisd_amp), axis=0)
@@ -34,8 +37,8 @@ def unpack_ucisd(cisd_amp: ndarray[np.float64],
             idx += 1
             idI = i * 2
             idA = a * 2 + nele
-            cisd_state[idx, idI] = 0 # annihilation 
-            cisd_state[idx, idA] = 1 # creation
+            cisd_state[idx, idI] = 0  # annihilation
+            cisd_state[idx, idA] = 1  # creation
 
     "Singlets b->b, I->A"
     for i in range(nob):
@@ -52,7 +55,7 @@ def unpack_ucisd(cisd_amp: ndarray[np.float64],
             for a in range(nva):
                 for b in range(nvb):
                     idx += 1
-                    idI = i * 2 
+                    idI = i * 2
                     idJ = j * 2 + 1
                     idA = a * 2 + nele
                     idB = b * 2 + 1 + nele
@@ -91,13 +94,14 @@ def unpack_ucisd(cisd_amp: ndarray[np.float64],
                     cisd_state[idx, idA] = 1
                     cisd_state[idx, idB] = 1
 
-    assert (idx + 1== len(cisd_amp))
+    assert (idx + 1 == len(cisd_amp))
 
     # UCISD -> FCI vector
     sa_sign = ci.cisd.tn_addrs_signs(noa + nva, noa, 1)[1]
     sb_sign = ci.cisd.tn_addrs_signs(nob + nvb, nob, 1)[1]
     # why reshape and transpose, I also want to known
-    dab_sign = np.einsum("i, j -> ji", sa_sign, sb_sign).reshape(noa, nva, nob, nvb).transpose(0, 2, 1, 3).reshape(-1)
+    dab_sign = np.einsum("i, j -> ji", sa_sign, sb_sign)
+    dab_sign = dab_sign.reshape(noa, nva, nob, nvb).transpose(0, 2, 1, 3).reshape(-1)
     daa_sign = ci.cisd.tn_addrs_signs(noa + nva, noa, 2)[1]
     dbb_sign = ci.cisd.tn_addrs_signs(nob + nvb, nob, 2)[1]
     cisd_sign = np.concatenate(([1], sa_sign, sb_sign, dab_sign, daa_sign, dbb_sign))
@@ -110,24 +114,35 @@ def unpack_ucisd(cisd_amp: ndarray[np.float64],
     coeff = torch.from_numpy(cisd_amp_correct).to(dtype=torch.double)
     return CIWavefunction(coeff, cisd_state, device=device)
 
-def ucisd_to_fci(cisd_amp: ndarray[np.float64], 
-                sorb: int, nele: int, 
-                onstate: Tensor, 
-                device= None) -> CIWavefunction:
-    raise ImportError(f"'ucisd_to_fci'is error, Please using 'unpack_ucisd'")
-    # TODO: the onstate may be is errors
-    fci_amp = ci.ucisd.to_fcivec(cisd_amp, sorb//2, nele)
+
+def ucisd_to_fci(cisd_amp: ndarray[np.float64],
+                 full_space: Tensor,
+                 sorb: int,
+                 nele: int,
+                 device=None) -> CIWavefunction:
+    """
+    Convert UCISD coeff coming from pyscf output to CIWavefunction Class
+    """
+    fci_amp = ci.ucisd.to_fcivec(cisd_amp, sorb // 2, nele)
+    return fci_revise(fci_amp, full_space, sorb, device)
+
+def fci_revise(fci_amp: ndarray[np.float64],
+               full_space: Tensor,
+               sorb: int,
+               device=None) -> CIWavefunction:
+    """
+    Convert FCI coeff coming from pyscf output to CIWavefunction Class.
+    """
     dim = fci_amp.shape[0]
-    state_numpy = lambda x: np.array(list(map(int, x[::-1])))
     for i in range(dim):
         for j in range(dim):
-            # breakpoint()
-            s = state_to_string(onstate[i*dim+j], sorb)[0]
-            # (1 - uint8_to_bit(onstate[i*dim+j], sorb).to("cpu").numpy())//2 # 1 occ, 0
-            fci_amp[i, j] *= ONV(onv=state_numpy(s)).phase()
+            s = onv_to_tensor(full_space[i * dim + j], sorb).flatten().to("cpu").numpy()
+            s = (1 + s)/2 # 1: occupied, 0: unoccupied
+            # sign IaIb -> onv
+            fci_amp[i, j] *= ONV(onv=s).phase()
 
-    coeff = torch.from_numpy(fci_amp.reshape(-1)).to(device)
-    return CIWavefunction(coeff, onstate, device=device)
+    coeff = torch.from_numpy(fci_amp).reshape(-1).to(dtype=torch.double)
+    return CIWavefunction(coeff, full_space, device=device)
 
 
 if __name__ == "__main__":
@@ -135,12 +150,7 @@ if __name__ == "__main__":
     bond = 1.00
     for k in range(4):
         atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
-    mol = gto.Mole(
-    atom = atom,
-    verbose = 3,
-    basis = "STO-3G",
-    symmetry = False
-    )
+    mol = gto.Mole(atom=atom, verbose=3, basis="STO-3G", symmetry=False)
     mol.build()
     sorb = mol.nao * 2
     nele = mol.nelectron
@@ -148,7 +158,7 @@ if __name__ == "__main__":
     mf.init_guess = 'atom'
     mf.level_shift = 0.0
     mf.max_cycle = 100
-    mf.conv_tol=1.e-14
+    mf.conv_tol = 1.e-14
     mf.scf()
     myuci = ci.UCISD(mf)
     cisd_amp = myuci.kernel()[1]

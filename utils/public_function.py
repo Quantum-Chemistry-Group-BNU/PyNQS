@@ -124,24 +124,26 @@ def get_nbatch(sorb: int, n_sample_unique: int, n_comb_sd: int,
 def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
     assert(x%2==0 and x <= sorb and x >=(noa + nob))
 
-    # NOTICE: the oder is different from pyscf.fci.cistring._gen_occslst(iterable, r)
-    # if x == sorb:
-    #     from pyscf import fci 
-    #     noA_lst = fci.cistring._gen_occslst([i for i in range(0, x, 2)], noa)
-    #     noB_lst = fci.cistring._gen_occslst([i for i in range(1, x, 2)], nob)
-    # else:
-    noA_lst = list(itertools.combinations([i for i in range(0, x, 2)], noa))
-    noB_lst = list(itertools.combinations([i for i in range(1, x, 2)], nob))
+    # the order is different from pyscf.fci.cistring._gen_occslst(iterable, r)
+    # the '_gen_occslst' is pretty slow than 'combinations', and only is used exact optimization testing.
+    if x == sorb:
+        from pyscf import fci 
+        noA_lst = fci.cistring._gen_occslst([i for i in range(0, x, 2)], noa)
+        noB_lst = fci.cistring._gen_occslst([i for i in range(1, x, 2)], nob)
+    else:
+        noA_lst = list(itertools.combinations([i for i in range(0, x, 2)], noa))
+        noB_lst = list(itertools.combinations([i for i in range(1, x, 2)], nob))
 
     m = len(noA_lst)
     n = len(noB_lst)
-    spins = np.zeros((m, n, sorb), dtype=np.uint8)
+    spins = np.zeros((m * n, sorb), dtype=np.uint8)
     for i, lstA in enumerate(noA_lst):
         for j, lstB in enumerate(noB_lst):
-            spins[i, j, lstA] = 1
-            spins[i, j, lstB] = 1
+            idx = i * m + j
+            spins[idx, lstA] = 1
+            spins[idx, lstB] = 1
 
-    return convert_onv(spins.reshape(-1, sorb), sorb=sorb, device=device)
+    return convert_onv(spins, sorb=sorb, device=device)
 
 def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Tensor]:
     """

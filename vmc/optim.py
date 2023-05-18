@@ -289,6 +289,7 @@ class VMCOptimizer():
         ax.set_xlabel("Iteration Time")
         ax.set_yscale("log")
         ax.set_ylabel("Gradients")
+        plt.title(prefix)
         plt.legend(loc="best")
 
         plt.subplots_adjust(wspace=0, hspace=0.5)

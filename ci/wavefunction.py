@@ -174,12 +174,12 @@ class CITrain:
                 # self.opt.zero_grad()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
-            self.ovlp_list.append(ovlp.detach().to("cpu").item())
+            self.ovlp_list.append(ovlp.norm().detach().to("cpu").item())
             self.loss_list.append((1 - ovlp.norm()**2).detach().to("cpu").item())
             self.opt.zero_grad()
 
             # calculate energy from CI coefficient
-            # notice, the shape of model_CI maybe not equal of self.pre_ci
+            # notice, the shape of model_CI maybe not equal of self.pre_ci if using "sample"
             if epoch == 0:
                 if flag_energy:
                     eCI_0 = get_energy(model_CI, onstate)
@@ -191,7 +191,7 @@ class CITrain:
                 delta = (time.time_ns() - t0) / 1.E06
                 print(
                     f"The {epoch:<5d} training, loss = {(1-ovlp.norm()**2).item():.4E}, " +
-                    f"ovlp = {ovlp.item():.4E}, delta = {delta:.3f} ms"
+                    f"ovlp = {ovlp.norm().item():.4E}, delta = {delta:.3f} ms"
                 )
         if False:
             full_space = onv_to_tensor(electron_info.ci_space, self.sorb)
@@ -214,7 +214,7 @@ class CITrain:
         """
         psi = self.model(state.requires_grad_())
         # TODO: if psi is complex and self.pre_ci is real?
-        model_CI = psi / torch.norm(psi).reshape(-1)
+        model_CI = psi / torch.norm(psi).flatten().to(self.dtype)
         # breakpoint()
         ovlp = torch.einsum("i, i", model_CI, self.pre_ci)
         loss = 1 - ovlp.norm()**2
@@ -232,7 +232,7 @@ class CITrain:
             initial_state = self.onstate[random.randrange(dim)].clone().detach()
             sampler.prepare_sample(initial_state)
             if self.exact:
-                sample_unique = self.mc.ele_info.ci_space.clone() # full ci-space not pre-ci space
+                sample_unique = self.mc.ele_info.ci_space.clone() # full ci-space isn't pre-ci space
                 psi_unique = self.model(onv_to_tensor(sample_unique, self.sorb)).to(self.dtype)
                 state_prob = (psi_unique * psi_unique.conj() / psi_unique.norm()**2)
             else:

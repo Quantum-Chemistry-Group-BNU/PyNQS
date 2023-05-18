@@ -60,6 +60,8 @@ class RNNWavefunction(nn.Module):
 
         # Initialize the RNN hidden state
         hidden_state = torch.zeros(self.num_layers, nbatch, self.num_hiddens, **self.factory_kwargs)
+        x0 = torch.zeros(nbatch,1 , 2, **self.factory_kwargs)
+        y0, hidden_state = self.rnn(x0, hidden_state)
 
         phase: List[Tensor] = []
         prob: List[Tensor] = []

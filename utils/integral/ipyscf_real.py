@@ -141,7 +141,7 @@ class Iface:
 def integral_pyscf(atom: str,
                    basis="sto-3g",
                    integral_file: str = "integral.info",
-                   ci_coeff: bool = False,
+                   fci_coeff: bool = False,
                    cisd_coeff: bool = False) -> Tuple[int, int, List[float], Union[ndarray, None]]:
     mol = gto.Mole(atom=atom, verbose=3, basis=basis, symmetry=False)
     mol.build()
@@ -181,7 +181,7 @@ def integral_pyscf(atom: str,
         return (sorb, nele, e_lst, cisd_amp)
 
     e_lst = [e_ref, e_hf]
-    if not ci_coeff:
+    if not fci_coeff:
         return (sorb, nele, e_lst)
     else:
         return (sorb, nele, e_lst, coeff)
