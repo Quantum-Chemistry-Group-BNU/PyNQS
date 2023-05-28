@@ -123,6 +123,10 @@ class CITrain:
         self.loss_type: str = pre_train_info.get("loss_type", "onstate").lower()
         if not self.loss_type in self.LOSS_TYPE:
             raise ValueError(f"Loss function type{self.loss_type} not in {self.LOSS_TYPE}, ")
+        
+        # record optim
+        self.n_para = len(list(self.model.parameters()))
+        self.grad_lst: List[Tensor] = [ [] for _ in range(self.n_para)]
 
     def train(self, prefix: str = None, electron_info: ElectronInfo = None, sampler: MCMCSampler = None):
         """
@@ -168,14 +172,23 @@ class CITrain:
                 # onstate.shape = model_CI.shape if sample.
                 onstate = ovlp_onstate
 
-            if epoch < self.pre_max_iter:
+            if epoch <= self.pre_max_iter:
                 loss.backward()
                 self.opt.step()
                 # self.opt.zero_grad()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
+
+            # save the energy grad
+            for i, param in enumerate(self.model.parameters()):
+                if param.grad is not None:
+                    self.grad_lst[i].append(param.grad.reshape(-1).detach().to("cpu").numpy())
+                else:
+                    self.grad_lst[i].append(np.zeros(param.numel()))
+
+            # save ovlp and loss-functions
             self.ovlp_list.append(ovlp.norm().detach().to("cpu").item())
-            self.loss_list.append((1 - ovlp.norm()**2).detach().to("cpu").item())
+            self.loss_list.append(loss.detach().to("cpu").item())
             self.opt.zero_grad()
 
             # calculate energy from CI coefficient
@@ -203,6 +216,7 @@ class CITrain:
             print(f"<psi|psi_CI>: {ovlp_end.detach().item():.8f}")
 
         print(f"Pre-train finished, cost time: {(time.time_ns() - begin)/1.E09:.3f}s")
+        print(f"Max ovlp: {np.max(self.ovlp_list):.4E}")
         if flag_energy:
             print(f"Energy ref, before/after pre_training: {eCI_ref:.8f} {eCI_0:.8f}, {eCI_1:.8f}")
 
@@ -288,14 +302,40 @@ class CITrain:
     def plot_figure(self, prefix: str = None):
         prefix = prefix if prefix is not None else "CI"
         fig = plt.figure()
-        ax1 = fig.add_subplot(2, 1, 1)
         x = np.arange(self.pre_max_iter + 1)
+        ax1 = fig.add_subplot(2, 1, 1)
         ax1.plot(x, np.array(self.loss_list), color='cadetblue', label="Loss")
-        # ax1.set_yscale("log")
+        ax1.plot(x, np.abs(self.ovlp_list), color='tomato', label="Ovlp")
         ax1.legend(loc="best")
+        ax1.set_xlabel("Iteration Time")
+        ax1.set_ylabel("Loss/Ovlp")
+        # ax2 = fig.add_subplot(3, 1, 2)
+        # ax2.plot(x, np.abs(self.ovlp_list), color='tomato', label="Ovlp")
+        # ax2.legend(loc="best")
+        # ax2.set_xlabel("Iteration Time")
+        # ax2.set_ylabel("Ovlp")
+
+        # plot the L2-norm and max-abs of the gradients
+        param_L2: List[np.ndarray] = []
+        param_max: List[np.ndarray] = []
+        for i in range(self.n_para):
+            x = np.linalg.norm(np.array(self.grad_lst[i]), axis=1)  # ||g||
+            param_L2.append(x)
+            x1 = np.abs(np.array(self.grad_lst[i])).max(axis=1)  # max
+            param_max.append(x1)
+        param_L2 = np.stack(param_L2, axis=1).sum(axis=1)
+        param_max = np.stack(param_max, axis=1).max(axis=1)
+        
         ax2 = fig.add_subplot(2, 1, 2)
-        ax2.plot(x, np.abs(self.ovlp_list), color='tomato', label="Ovlp")
-        ax2.legend(loc="best")
+        ax2.plot(np.arange(len(param_L2)), param_L2, label="||g||")
+        ax2.plot(np.arange(len(param_max)), param_max, label="max|g|")
+        ax2.set_xlabel("Iteration Time")
+        ax2.set_yscale("log")
+        ax2.set_ylabel("Gradients")
+        plt.title(prefix)
+        plt.legend(loc="best")
+
+
         fig.subplots_adjust(wspace=0, hspace=0.5)
         fig.savefig(prefix + "-pre-train.png", format="png", dpi=1000, bbox_inches='tight')
 

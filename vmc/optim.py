@@ -20,7 +20,7 @@ from vmc.energy import total_energy
 from vmc.grad import energy_grad, sr_grad
 from ci import CITrain, CIWavefunction
 
-from utils import ElectronInfo, Dtype
+from utils import ElectronInfo, Dtype, state_to_string
 from libs.C_extension import onv_to_tensor
 
 print = partial(print, flush=True)
@@ -66,6 +66,8 @@ class VMCOptimizer():
         # whether read nqs/h1e-h2e from external file
         if self.external_model is not None:
             self.read_model(self.external_model)
+            electron_info.h1e = self.h1e
+            electron_info.h2e = self.h2e
         else:
             self.model_raw = nqs
         self.model = torch.compile(self.model_raw) if self.using_compile else self.model_raw
@@ -99,7 +101,6 @@ class VMCOptimizer():
         # record optim
         self.n_para = len(list(self.model.parameters()))
         self.grad_e_lst: List[Tensor] = [[] for _ in range(self.n_para)]
-        self.grad_param_lst: List[Tensor] = [[] for _ in range(self.n_para)]
         self.e_lst: List[float] = []
         self.stats_lst: List[dict] = []
         self.time_sample: List[float] = []
@@ -137,8 +138,8 @@ class VMCOptimizer():
         state = torch.load(external_model, map_location=self.device)
         self.model_raw = state["model"]
         # notice h1e, he2 may be different even if the coordinate and basis are the same.
-        self.h1e = state["h1e"]
-        self.h2e = state["h2e"]
+        self.h1e: Tensor = state["h1e"]
+        self.h2e: Tensor = state["h2e"]
 
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self):
@@ -200,6 +201,13 @@ class VMCOptimizer():
             delta = (time.time_ns() - t0) / 1.00E09
             print(f"{p} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3E} s")
             self.time_iter.append(delta)
+
+            # psi /= psi.norm()
+            # dim = self.onstate.shape[0]
+            # for i in range(dim):
+            #     s = state_to_string(self.onstate[i], self.sorb)
+            #     print(f"{s[0]}  {psi[i].norm()**2:.6f}")
+            # print(eloc)
 
             del sample_state, eloc, state, psi
 

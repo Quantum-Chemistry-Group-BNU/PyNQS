@@ -263,11 +263,19 @@ class ElectronInfo:
     @property
     def h1e(self) -> Tensor:
         return self._h1e
-    
+
+    @h1e.setter
+    def h1e(self, value) -> None:
+        self._h1e = value
+
     @property
     def h2e(self) -> Tensor:
         return self._h2e
-    
+
+    @h2e.setter
+    def h2e(self, value) -> None:
+        self._h2e = value
+
     @property
     def sorb(self) -> int:
         return self._sorb
