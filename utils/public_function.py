@@ -114,6 +114,9 @@ def get_nbatch(sorb: int, n_sample_unique: int, n_comb_sd: int,
         x2 = n_comb_sd * ((sorb-1)//64 + 1) * 8 / (1<<30) # SD, uint8, GiB
         return x1 + x2
     m = comb_memory() * n_sample_unique
+    if torch.cuda.is_available():
+        mem_available = torch.cuda.mem_get_info()[0]/ (1<<30) # GiB
+        Max_memory = min(mem_available, Max_memory)
     if m / Max_memory >= alpha:
         batch = int(Max_memory/(comb_memory()) * alpha)
     else:

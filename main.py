@@ -40,7 +40,7 @@ if __name__ == "__main__":
                 # electronic structure information
                 atom: str = ""
                 bond = bond_i
-                for k in range(4):
+                for k in range(8):
                     atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
                 # atom = "Li 0.00 0.00 0.00; H 0.0 0.0 3.00"
                 filename = tempfile.mkstemp()[1]
@@ -66,19 +66,21 @@ if __name__ == "__main__":
                 # cisd_wf = unpack_ucisd(cisd_amp, sorb, nele, device=device)
                 # fci_wf_0 = ucisd_to_fci(cisd_amp, ci_space, sorb, nele, device=device)
                 fci_wf_1 = fci_revise(fci_amp, ci_space, sorb, device=device)
-                print(fci_wf_1.energy(electron_info))
+                # print(fci_wf_1.energy(electron_info))
                 pre_train_info = {"pre_max_iter": 200, "interval": 20, "loss_type": "sample"}
 
                 # model
-                nqs_rnn = RNNWavefunction(sorb, nele, num_hiddens=16, num_labels=2, rnn_type="complex",
-                                    num_layers=1, device=device).to(device)
+                nqs_rnn = RNNWavefunction(sorb, nele, num_hiddens=20, num_labels=2, rnn_type="complex",
+                                    num_layers=2, device=device).to(device)
                 nqs_rbm = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
                                     rbm_type='cos', verbose=False).to(device)
                 model = nqs_rnn
+                for params in model.parameters():
+                    print(params.shape)
                 sampler_param = {"n_sample": 10000, "verbose": True,
                                 "debug_exact": True, "therm_step": 10000,
                                 "seed": seed, "record_sample": True,
-                                "max_memory": 4, "alpha": 0.15, "method_sample": "AR"}
+                                "max_memory": 4, "alpha": 0.025, "method_sample": "AR"}
                 opt_type = optim.Adam
                 # opt_params = {"lr": 0.005, "weight_decay": 0.001}
                 opt_params = {"lr": 0.005}

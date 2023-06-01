@@ -50,10 +50,18 @@ def local_energy(x: Tensor,
     t1 = time.time_ns()
     comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)  # shape (1, comb)/(batch, comb)
 
+    # breakpoint()
+    print(torch.cuda.mem_get_info())
+    print(x1.shape)
     t2 = time.time_ns()
-    # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
-    with torch.no_grad():
-        psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
+    # breakpoint()
+    with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
+        with torch.no_grad():
+            psi_x1 = ansatz.forward(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
+    print(torch.cuda.mem_get_info())
+    print(prof.table())
+    prof.export_chrome_trace("profiles")
+    exit()
 
     if x1.is_cuda:
         torch.cuda.synchronize()

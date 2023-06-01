@@ -110,7 +110,7 @@ class Sampler():
             dim = len(self.full_space)
             e_total, eloc, stats_dict = self.calculate_energy(self.full_space)
 
-            # TODO: placeholders only
+            # placeholders only
             sample_prob = torch.empty(dim, dtype=torch.float64, device=self.device)
             return self.full_space.detach(), sample_prob, eloc, e_total, stats_dict
 
