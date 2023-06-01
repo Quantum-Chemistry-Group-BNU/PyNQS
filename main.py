@@ -12,7 +12,7 @@ from pyscf import fci
 
 from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string
 from utils.integral import read_integral, integral_pyscf
-from utils import convert_onv
+from utils import convert_onv, get_fock_space
 from vmc.ansatz import RBMWavefunction, RNNWavefunction
 from vmc.optim import VMCOptimizer, GD
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise
@@ -29,7 +29,7 @@ if __name__ == "__main__":
         for pre_time_i in [2000]:
             for i in range(5):
                 seed = int(time.time_ns()%2**31)
-                # seed = 73733883
+                seed = 73733883
                 setup_seed(seed)
                 # output = "H4-1.00-random-opt" + str(alpha) + "-" + str(i)
                 output = f"H2/H2-{bond_i:.1f}-hidden-4-RNN-lr-0.001-{pre_time_i}-{i}"
@@ -67,7 +67,7 @@ if __name__ == "__main__":
                 # fci_wf_0 = ucisd_to_fci(cisd_amp, ci_space, sorb, nele, device=device)
                 fci_wf_1 = fci_revise(fci_amp, ci_space, sorb, device=device)
                 print(fci_wf_1.energy(electron_info))
-                pre_train_info = {"pre_max_iter": 5000, "interval": 20, "loss_type": "onstate"}
+                pre_train_info = {"pre_max_iter": 200, "interval": 20, "loss_type": "sample"}
 
                 # model
                 nqs_rnn = RNNWavefunction(sorb, nele, num_hiddens=16, num_labels=2, rnn_type="complex",
@@ -78,7 +78,7 @@ if __name__ == "__main__":
                 sampler_param = {"n_sample": 10000, "verbose": True,
                                 "debug_exact": True, "therm_step": 10000,
                                 "seed": seed, "record_sample": True,
-                                "max_memory": 4, "alpha": 0.15}
+                                "max_memory": 4, "alpha": 0.15, "method_sample": "AR"}
                 opt_type = optim.Adam
                 # opt_params = {"lr": 0.005, "weight_decay": 0.001}
                 opt_params = {"lr": 0.005}
@@ -108,9 +108,13 @@ if __name__ == "__main__":
                                     method_grad="AD",
                                     method_jacobian="vector",
                                     )
-                opt_vmc.pre_train("Adam")
+                # fock_space = get_fock_space(sorb, device=device)
+                # print(onv_to_tensor(ci_space, sorb))
+                # psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
                 # breakpoint()
-                # opt_vmc.run()
+                # opt_vmc.pre_train("Adam")
+                # breakpoint()
+                opt_vmc.run()
                 print(e_lst, seed)
                 psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
                 psi /= psi.norm()
@@ -120,7 +124,7 @@ if __name__ == "__main__":
                     s = state_to_string(ci_space[i], sorb)
                     print(f"{s[0]} {fci_wf_1.coeff[i]**2:.6f} {psi[i].norm()**2:.6f}")
                 
-                a = opt_vmc.model.sampling(100000)
+                a = opt_vmc.model.ar_sampling(100000)
                 sample_unique, sample_counts = torch.unique(a, dim=0, return_counts=True)
                 print(sample_counts,"\n", sample_unique)
                 # opt_vmc.summary(e_ref = e_lst[0], e_lst = e_lst[1:], prefix="1111")
