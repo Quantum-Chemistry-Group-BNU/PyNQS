@@ -12,7 +12,7 @@ from torch.optim.optimizer import Optimizer
 import matplotlib.pyplot as plt
 
 from libs.C_extension import onv_to_tensor, get_hij_torch
-from vmc.sample import MCMCSampler
+from vmc.sample import Sampler
 from utils import check_para, ElectronInfo, find_common_state, state_to_string
 
 print = partial(print, flush=True)
@@ -128,7 +128,7 @@ class CITrain:
         self.n_para = len(list(self.model.parameters()))
         self.grad_lst: List[Tensor] = [ [] for _ in range(self.n_para)]
 
-    def train(self, prefix: str = None, electron_info: ElectronInfo = None, sampler: MCMCSampler = None):
+    def train(self, prefix: str = None, electron_info: ElectronInfo = None, sampler: Sampler = None):
         """
         the train process
         
@@ -224,40 +224,43 @@ class CITrain:
 
     def onstate_loss(self, state: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
-        state is CISD
+        using least sqaure method to fits CI-space coefficient
         """
         psi = self.model(state.requires_grad_())
-        # TODO: if psi is complex and self.pre_ci is real?
         model_CI = psi / torch.norm(psi).flatten().to(self.dtype)
-        # breakpoint()
         ovlp = torch.einsum("i, i", model_CI, self.pre_ci)
         loss = 1 - ovlp.norm()**2
         return (loss, ovlp.detach(), model_CI.detach())
 
-    def qgt_loss(self, sampler: MCMCSampler):
+    def qgt_loss(self, sampler: Sampler):
         """
         Loss Function: <psi|CI><CI|psi>/(<CI|CI><psi|psi>), psi comes from sampling
-         E[<n|CI>/<n|psi> * <CI|psi>] Similar to vmc 
+         E[<n|CI>/<n|psi> * <CI|psi>] Similar to vmc
         """
         with torch.no_grad():
             # notice onstate[0] is HF state
             dim = self.onstate.shape[0]
-            self.mc = sampler
+            self.sampler = sampler
             initial_state = self.onstate[random.randrange(dim)].clone().detach()
-            sampler.prepare_sample(initial_state)
             if self.exact:
-                sample_unique = self.mc.ele_info.ci_space.clone() # full ci-space isn't pre-ci space
-                psi_unique = self.model(onv_to_tensor(sample_unique, self.sorb)).to(self.dtype)
-                state_prob = (psi_unique * psi_unique.conj() / psi_unique.norm()**2)
+                sample_unique = self.sampler.ele_info.ci_space.clone() # fci-space isn't pre-ci space
             else:
-                sample_unique, sample_counts, state_prob, psi_unique = sampler.MCMC()
+                sample_unique, sample_counts, state_prob = self.sampler.sampling(initial_state)
+
+            psi_unique = self.model(onv_to_tensor(sample_unique, self.sorb)).to(self.dtype)
+            if self.exact:
+                state_prob = (psi_unique * psi_unique.conj() / psi_unique.norm()**2)
+
+            # find ovlp onv in pre-ci onv and sampling onv
             x, idx_ci, idx_sample = find_common_state(self.onstate, sample_unique)
             state_prob = state_prob.to(self.dtype)
+
+            # calculate local ovlp
             ovlp, oloc = self.get_local_ovlp(state_prob, psi_unique, idx_sample, idx_ci, sample_unique)
             state_sample = onv_to_tensor(sample_unique[idx_sample], self.sorb)
 
         if len(idx_ci) == 0:
-            raise ValueError(f"There is no common states between in CISD and sample-states")
+            raise ValueError(f"There is no common states between in pre-ci states and sample-states")
 
         psi = self.model(state_sample.requires_grad_()).to(self.dtype)
         log_psi = psi.log()

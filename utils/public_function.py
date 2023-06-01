@@ -145,6 +145,17 @@ def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
 
     return convert_onv(spins, sorb=sorb, device=device)
 
+def get_fock_space(sorb: int, device=None) -> Tensor:
+    """
+    Generate fock space(2^n) for given the spin orbital.
+    """
+    space = list(itertools.product([0, 1], repeat=sorb))
+    space = np.array(space, dtype=np.uint8)
+
+    return convert_onv(space, sorb=sorb, device=device)
+
+
+
 def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Tensor]:
     """
      find the common onv in the two different onstate

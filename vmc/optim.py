@@ -15,7 +15,7 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from typing import List, Tuple
 
-from vmc.sample import MCMCSampler
+from vmc.sample import Sampler
 from vmc.energy import total_energy
 from vmc.grad import energy_grad, sr_grad
 from ci import CITrain, CIWavefunction
@@ -89,7 +89,7 @@ class VMCOptimizer():
         # Sample
         self.sampler_param = sampler_param
         self.exact = self.sampler_param.get("debug_exact", False)
-        self.sampler = MCMCSampler(self.model, electron_info, dtype=self.dtype, **self.sampler_param)
+        self.sampler = Sampler(self.model, electron_info, dtype=self.dtype, **self.sampler_param)
         self.n_sample = 0
         self.record_sample = self.sampler_param.get("record_sample", False)
         self.only_sample = only_sample

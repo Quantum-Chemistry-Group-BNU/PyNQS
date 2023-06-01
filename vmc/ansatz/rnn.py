@@ -1,4 +1,3 @@
-# implementation of the 1D pRNN wave function without a parity symmetry
 import torch
 import numpy as np
 import math
@@ -67,7 +66,7 @@ class RNNWavefunction(nn.Module):
         sign = torch.sign(torch.sign(x) + 0.1)
         return 0.5 * (sign + 1.0)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, symmetry: bool = True) -> Tensor:
 
         assert (x.dim()
                 in (1, 2)), f"GRU: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
@@ -96,19 +95,20 @@ class RNNWavefunction(nn.Module):
 
         for i in range(dim):
             # x0: (nbatch, 1, 2)
-            # breakpoint()
             y0, hidden_state = self.rnn(x0, hidden_state)  # (nbatch, 2)
-            y0_amp = self.amp_impl(y0)  # (nbatch, 2)
+            if symmetry and i >= dim - 2:
+                # placeholders only
+                y0_amp = torch.empty(nbatch, 2, **self.factory_kwargs) # (nbatch, 2)
+            else:
+                y0_amp = self.amp_impl(y0)  # (nbatch, 2)
             # breakpoint()
             if self.compute_phase:
                 y0_phase = self.phase_impl(y0)  # (nbatch, 2)
 
-            # Constraints
-            lower_up = baseline_up + i // 2
-            lower_down = baseline_down + i // 2
-            # if i >=3:
-            #     breakpoint()
-            if i >= self.nele // 2:
+            # Constraints Fock space -> FCI space, and the prob of the last two orbital must be is 1.0
+            if symmetry and self.nele // 2 <= i < dim - 2:
+                lower_up = baseline_up + i // 2
+                lower_down = baseline_down + i // 2
                 if i % 2 == 0:
                     activations_occ = torch.logical_and(alpha > num_up, activations).long()
                     activations_unocc = torch.logical_and(lower_up < num_up, activations).long()
@@ -125,35 +125,43 @@ class RNNWavefunction(nn.Module):
                 num_down.add_(x[..., i].squeeze(1))
 
             x0 = F.one_hot(x[..., i], num_classes=2).to(self.factory_kwargs["dtype"])
-            amp_i = (y0_amp * x0.squeeze(1)).sum(dim=1)  # (nbatch)
+
+            # if using Constraints, the the prob of the last two orbital must be is 1.0
+            if symmetry and i >= dim -2:
+                amp_i = torch.ones(nbatch, **self.factory_kwargs)  # (nbatch)
+            else:
+                amp_i = (y0_amp * x0.squeeze(1)).sum(dim=1)  # (nbatch)
+
             amp.append(amp_i)
             if self.compute_phase:
                 phase_i = (y0_phase * x0.squeeze(1)).sum(dim=1)  # (nbatch)
                 phase.append(phase_i)
 
-        torch.set_printoptions(linewidth=200)
         # breakpoint()
+        # torch.set_printoptions(linewidth=200)
         # print(f"prob.sqrt():\n {torch.stack(amp, dim=1)}")
         # print(x.squeeze(1))
-        # exit()
+
+        # Complex |psi> = \exp(i phase) * \sqrt(prob)
+        # Real positive |psi> = \sqrt(prob)
         amp = torch.stack(amp, dim=1).prod(dim=1)  # (nbatch)
         if self.compute_phase:
-            # Complex |psi> = \exp(i phase) * \sqrt(prob)
             phase = torch.stack(phase, dim=1).sum(dim=1)  # (nbatch)
             wf = torch.complex(torch.zeros_like(phase), phase).exp() * amp
         else:
-            # Real positive |psi> = \sqrt(prob)
             wf = amp
+
         return wf
 
     @torch.no_grad()
-    def sampling(self, n_sample: int) -> Tensor:
+    def ar_sampling(self, n_sample: int) -> Tensor:
         # auto-regressive samples
         hidden_state = torch.zeros(self.num_layers, n_sample, self.num_hiddens, **self.factory_kwargs)
         x0 = torch.zeros(n_sample, 1, 2, **self.factory_kwargs)
         # x0, hidden_state is constant values
 
-        # ref: https://doi.org/10.48550/arXiv.2208.05637
+        # Constraints Fock space -> FCI space
+        # ref: https://doi.org/10.48550/arXiv.2208.05637, 
         alpha = self.nele // 2
         beta = self.nele // 2
         baseline_up = (alpha - self.sorb // 2)
