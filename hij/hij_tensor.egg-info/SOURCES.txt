@@ -1,7 +1,0 @@
-hij.cpp
-setup.py
-utils_hij.cpp
-hij_tensor.egg-info/PKG-INFO
-hij_tensor.egg-info/SOURCES.txt
-hij_tensor.egg-info/dependency_links.txt
-hij_tensor.egg-info/top_level.txt
