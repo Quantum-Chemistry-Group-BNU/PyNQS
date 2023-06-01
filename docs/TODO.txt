@@ -32,8 +32,12 @@
 3. record log events using "Loguru" package
 
 #----------2023-5-08---------- zbwu1996@gmail.com
-1. Using Separate Compilation in CUDA
-BUG: pre_train failure
+1. Using Separate Compilation in CUDA (Y)
+BUG: pre_train failure (Y)
+
+#----------2023-6-01---------- zbwu1996@gmail.com
+1. How to calculate batch when calculating local energy using RNN model
+2. How to Multiple GPU
 
 #---------------feature's------------------
 1. Add tutorial using "Read the Docs"
