@@ -96,6 +96,8 @@ def get_hij_torch(bra: Tensor, ket: Tensor,
     r"""Compute the matrix element <i|H|j> using Slater-Condon Rules
         see: Szabo A, Ostlund N S. Modern quantum chemistry and
          http://vergil.chemistry.gatech.edu/notes/permsymm/permsymm.pdf
+         and https://doi.org/10.48550/arXiv.1311.6244
+
     
     Notes: 
         the dim of bra: 2(n, onv), ket: 2 or 3(m, onv) or (n, ncomb, onv)
