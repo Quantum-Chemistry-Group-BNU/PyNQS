@@ -115,8 +115,8 @@ class Sampler():
             return self.full_space.detach(), sample_prob, eloc, e_total, stats_dict
 
         sample_unique, sample_counts, sample_prob = self.sampling(initial_state, n_sweep)
-        delta = time.time() - t0
-        print(f"Completed {self.method_sample} Sampling {delta/1.0E09:.3f} s")
+        delta = time.time_ns() - t0
+        print(f"Completed {self.method_sample} Sampling {delta/1.0E09:.3E} s")
         if self.method_sample == "MCMC":
             print(f"acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
