@@ -80,5 +80,4 @@ def total_energy(x: Tensor,
         print(f"total energy cost time: {(t1-t0)/1.0E06:.3E} ms")
 
     del psi_lst, idx_lst
-    print(f"total energy: {e_total.real.item():.8f}")
     return e_total.real.item(), eloc_lst, statistics

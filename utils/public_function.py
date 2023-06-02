@@ -246,7 +246,7 @@ class Logger():
     """
     def __init__(self, filename: str, stream=sys.stdout):
         self.terminal = stream
-        self.log = open(filename, "w")
+        self.log = open(filename, "w", encoding='utf-8')
 
     def write(self, message):
         self.terminal.write(message)

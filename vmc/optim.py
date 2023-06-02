@@ -31,7 +31,8 @@ class VMCOptimizer():
     sys_name = platform.node()
     TORCH_VERSION: str = torch.__version__
     # torch.compile is lower in GTX 1650, but faster in A100
-    using_compile: bool = True if sys_name != "myarch" and TORCH_VERSION >= '2.0.0' else False
+    # using_compile: bool = True if sys_name != "myarch" and TORCH_VERSION >= '2.0.0' else False
+    using_compile = False
 
     def __init__(
         self,

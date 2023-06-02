@@ -203,8 +203,8 @@ class CITrain:
             if (epoch % self.nprt) == 0:
                 delta = (time.time_ns() - t0) / 1.E06
                 print(
-                    f"The {epoch:<5d} training, loss = {(1-ovlp.norm()**2).item():.4E}, " +
-                    f"ovlp = {ovlp.norm().item():.4E}, delta = {delta:.3f} ms"
+                    f"The {epoch:<5d} training, loss = {(1-ovlp.detach().norm()**2).item():.4E}, " +
+                    f"ovlp = {ovlp.detach().norm().item():.4E}, delta = {delta:.3E} ms"
                 )
         if False:
             full_space = onv_to_tensor(electron_info.ci_space, self.sorb)

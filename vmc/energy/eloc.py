@@ -59,7 +59,7 @@ def local_energy(x: Tensor,
     # exit()
 
     if x1.is_cuda:
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(h1e.device)
     t3 = time.time_ns()
 
     if dim == 2 and batch == 1:

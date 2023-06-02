@@ -125,11 +125,7 @@ class Sampler():
                                                           state_counts=sample_counts)
 
         # print local energy statistics information
-        self._statistics(stats_dict)
-
-        if self.verbose:
-            print(f"sampling: {len(sample_counts)}/{sample_counts.sum().item()}")
-            print(f"total energy: {e_total:.10f}")
+        self._statistics(stats_dict, sample_counts)
 
         if self.record_sample:
             # TODO: if given sorb(not full space), this is error.
@@ -145,6 +141,10 @@ class Sampler():
         self.time_sample += 1
         delta = time.time_ns() - t0
         print(f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s")
+
+        if self.is_cuda:
+            torch.cuda.empty_cache()
+
         return sample_unique.detach(), sample_prob, eloc, e_total, stats_dict
 
     def sampling(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, Tensor]:
@@ -248,6 +248,7 @@ class Sampler():
         # convert to onv
         sample_unique = tensor_to_onv(sample_unique.to(torch.uint8), self.sorb)
 
+        del sample
         return sample_unique, sample_counts, sample_prob
 
     # TODO: how to calculate batch_size;
@@ -281,6 +282,7 @@ class Sampler():
                 f"    Singles + Doubles: {self.n_SinglesDoubles}\n" + 
                 f"    Random seed: {self.seed}\n" + ")")
 
-    def _statistics(self, data: dict):
-        s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}]"
+    def _statistics(self, data: dict, sample_counts: Tensor):
+        s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}] "
+        s += f"sampling: {len(sample_counts)}/{sample_counts.sum().item()}"
         print(s)
