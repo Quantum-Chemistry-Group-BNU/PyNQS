@@ -1,4 +1,5 @@
 #include "cuda_tensor.h"
+#include "ATen/ops/empty.h"
 
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
@@ -32,7 +33,7 @@ Tensor onv_to_tensor_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
                      .layout(bra_tensor.layout())
                      .device(bra_tensor.device())
                      .requires_grad(false);
-  comb_bit = torch::zeros({nbatch, sorb}, options);
+  comb_bit = torch::empty({nbatch, sorb}, options);
 
   const unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());

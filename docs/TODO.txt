@@ -44,3 +44,7 @@ BUG: pre_train failure (Y)
 2. Support spin_multiplicity == 1
 3. Support mpi4py
 4. Support SR from RNN, vmap doesn't 'torch.nn.functions.one_hot' functions
+
+#---------------question about pytorch------------------
+1. torch.compile doesn't speedups GRU, RNN, see: https://github.com/pytorch/pytorch/issues/91439
+2. vmap doesn't 'torch.nn.functions.one_hot' functions
