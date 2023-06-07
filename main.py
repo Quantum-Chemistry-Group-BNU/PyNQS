@@ -24,16 +24,17 @@ print = partial(print, flush=True)
 
 if __name__ == "__main__":
     device = "cuda"
-    # device = "cpu"
-    for bond_i in [1.20]:
+    device = "cpu"
+    for bond_i in [1.80]:
         for pre_time_i in [2000]:
             for i in range(5):
                 seed = int(time.time_ns()%2**31)
                 # seed = 73733883
                 setup_seed(seed)
+                # output = "H4-1.80-exact"
                 output = "1111"
-                sys.stdout = Logger("/dev/null", sys.stdout)
-                sys.stderr = Logger("/dev/null", sys.stderr)
+                sys.stdout = Logger(output + ".log", sys.stdout)
+                sys.stderr = Logger(output + ".log", sys.stderr)
 
                 # electronic structure information
                 atom: str = ""
@@ -63,21 +64,21 @@ if __name__ == "__main__":
                 # fci_wf_0 = ucisd_to_fci(cisd_amp, ci_space, sorb, nele, device=device)
                 # fci_wf_1 = fci_revise(fci_amp, ci_space, sorb, device=device)
                 # print(fci_wf_1.energy(electron_info))
-                pre_train_info = {"pre_max_iter": 2000, "interval": 20, "loss_type": "sample"}
+                pre_train_info = {"pre_max_iter": 2000, "interval": 20, "loss_type": "onstate"}
 
                 # model
-                nqs_rnn = RNNWavefunction(sorb, nele, num_hiddens=24, num_labels=2, rnn_type="complex",
+                nqs_rnn = RNNWavefunction(sorb, nele, num_hiddens=4, num_labels=2, rnn_type="complex",
                                     num_layers=1, device=device).to(device)
                 nqs_rbm = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
                                     rbm_type='cos', verbose=False).to(device)
                 model = nqs_rnn
-                sampler_param = {"n_sample": 10000, "verbose": True,
-                                "debug_exact": False, "therm_step": 10000,
-                                "seed": seed, "record_sample": True,
+                sampler_param = {"n_sample": 20000, "verbose": True,
+                                "debug_exact": True, "therm_step": 10000,
+                                "seed": seed, "record_sample": False,
                                 "max_memory": 4, "alpha": 0.07, "method_sample": "AR"}
                 opt_type = optim.Adam
-                opt_params = {"lr": 0.005, "weight_decay": 0.001}
-                # opt_params = {"lr": 0.005}
+                # opt_params = {"lr": 0.005, "weight_decay": 0.001, "betas": (0.9, 0.99)}
+                opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
                 # lr_scheduler = optim.lr_scheduler.MultiStepLR
                 # lr_sch_params = {"milestones": [3000, 4500, 5500], "gamma": 0.20}
                 lr_scheduler = optim.lr_scheduler.LambdaLR
@@ -90,12 +91,13 @@ if __name__ == "__main__":
                                     opt_params=opt_params,
                                     lr_scheduler=lr_scheduler,
                                     lr_sch_params=lr_sch_params,
-                                    # external_model="1111.pth",
+                                    # external_model="H4-1.60-sample.pth",
                                     dtype=dtype,
                                     sampler_param=sampler_param,
                                     only_sample=False,
                                     electron_info=electron_info,
-                                    max_iter=10000,
+                                    max_iter=1000,
+                                    interval=10,
                                     HF_init=0,
                                     verbose=False,
                                     sr=False,
@@ -104,17 +106,16 @@ if __name__ == "__main__":
                                     method_grad="AD",
                                     method_jacobian="vector",
                                     )
-                opt_vmc.pre_train(output)
+                # opt_vmc.pre_train(output)
                 opt_vmc.run()
                 print(e_lst, seed)
-                psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
-                psi /= psi.norm()
-                dim = ci_space.size(0)
+                # psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
+                # psi /= psi.norm()
+                # dim = ci_space.size(0)
                 # print(f"ONV pyscf model")
                 # for i in range(dim):
                 #     s = state_to_string(ci_space[i], sorb)
-                #     print(f"{s[0]} {fci_wf_1.coeff[i]**2:.6f} {psi[i].norm()**2:.6f}")
-                
+                #     print(f"{s[0]} {fci_wf_1.coeff[i]**2:.6f} {psi[i].norm()**2:.6f}")                
                 a = opt_vmc.model.ar_sampling(100000)
                 sample_unique, sample_counts = torch.unique(a, dim=0, return_counts=True)
                 print(sample_counts,"\n", sample_unique)

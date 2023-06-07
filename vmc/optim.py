@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from typing import List, Tuple
+from copy import deepcopy
 
 from vmc.sample import Sampler
 from vmc.energy import total_energy
@@ -57,6 +58,7 @@ class VMCOptimizer():
         method_grad: str = "AD",
         sr: bool = False,
         method_jacobian: str = "vector",
+        interval: int = 100,
     ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -119,6 +121,14 @@ class VMCOptimizer():
         self.pre_CI = pre_CI
         self.pre_train_info = pre_train_info
 
+        # save model
+        if int(interval) != 1:
+            self.nprt = int(self.max_iter / interval)
+        else:
+            self.nprt = 1
+        self.model_dict_lst: List[nn.Module] = []
+        print(f"Save model interval: {self.nprt}")
+
     def read_electron_info(self, ele_info: ElectronInfo):
         print(ele_info)
         self.sorb = ele_info.sorb
@@ -144,9 +154,9 @@ class VMCOptimizer():
 
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self):
-        for p in range(self.max_iter):
+        for epoch in range(self.max_iter):
             t0 = time.time_ns()
-            if self.HF_init is None or p < self.HF_init:
+            if self.HF_init is None or epoch < self.HF_init:
                 initial_state = self.onstate[random.randrange(self.dim)].clone().detach()
             else:
                 initial_state = self.onstate[0].clone().detach()
@@ -159,7 +169,6 @@ class VMCOptimizer():
             # exit()
 
             state, state_prob, eloc, e_total, stats = self.sampler.run(initial_state)
-            # breakpoint()
 
             self.n_sample = len(state)
             self.e_lst.append(e_total)
@@ -167,7 +176,7 @@ class VMCOptimizer():
 
             if self.only_sample:
                 delta = (time.time_ns() - t0) / 1.00E06
-                print(f"{p} only Sampling finished, cost time {delta:.3f} ms")
+                print(f"{epoch} only Sampling finished, cost time {delta:.3f} ms")
                 continue
 
             sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
@@ -193,16 +202,19 @@ class VMCOptimizer():
                 else:
                     self.grad_e_lst[i].append(np.zeros(param.numel()))
 
-            if p < self.max_iter - 1:
+            if epoch < self.max_iter - 1:
                 self.opt.step()
                 self.opt.zero_grad()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
 
-            delta = (time.time_ns() - t0) / 1.00E09
-            print(f"{p} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3E} s")
-            self.time_iter.append(delta)
+            if epoch % self.nprt == 0 or epoch == self.max_iter -1:
+                print("Save model state dict")
+                self.model_dict_lst.append(deepcopy(self.model_raw.state_dict()))
 
+            delta = (time.time_ns() - t0) / 1.00E09
+            print(f"{epoch} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3E} s")
+            self.time_iter.append(delta)
             # psi /= psi.norm()
             # dim = self.onstate.shape[0]
             # for i in range(dim):
@@ -238,7 +250,8 @@ class VMCOptimizer():
                     "sr": self.sr,
                     "sampler_param": self.sampler_param,
                     "h1e": self.h1e,
-                    "h2e": self.h2e
+                    "h2e": self.h2e,
+                    "model_dict": self.model_dict_lst
                 }, model_file)
 
     def plot_figure(self, e_ref: float = None, e_lst: List[float] = None, prefix: str = "VMC"):
@@ -278,8 +291,8 @@ class VMCOptimizer():
             ylim1 = np.max(y) + (np.min(y) - e_ref) * y_ratio
             axins.set_xlim(xlim0, xlim1)
             axins.set_ylim(ylim0, ylim1)
-            print(f"Last energy: {e[-1]:.9f}")
-            print(f"Reference energy: {e_ref:.9f}, error: {abs((e[-1]-e_ref)/e_ref) * 100:.6f} %")
+            print(f"Last 100th energy: {np.average(e[-100]):.9f}")
+            print(f"Reference energy: {e_ref:.9f}, error: {abs((np.average(e[-100])-e_ref)/e_ref) * 100:.6f} %")
 
         # plot the L2-norm and max-abs of the gradients
         param_L2: List[np.ndarray] = []
@@ -304,6 +317,9 @@ class VMCOptimizer():
         plt.subplots_adjust(wspace=0, hspace=0.5)
         plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches='tight')
         plt.close()
+
+        # save energy, ||g||, max_|g|
+        np.savez(prefix, energy=e, grad_L2=param_L2, grad_max=param_max)
 
 
 class GD(Optimizer):
