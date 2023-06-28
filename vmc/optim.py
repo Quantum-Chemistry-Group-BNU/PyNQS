@@ -1,6 +1,9 @@
 import time
 import random
 import platform
+import os
+import sys
+import __main__
 import torch
 import numpy as np
 
@@ -109,6 +112,7 @@ class VMCOptimizer():
         self.time_sample: List[float] = []
         self.time_iter: List[float] = []
 
+        self.dump_input()
         print(f"NQS model:\n{self.model}")
         print(f"The number param of NQS model: {sum(map(torch.numel, self.model.parameters()))}")
         print(f"Optimizer:\n{self.opt}")
@@ -152,8 +156,21 @@ class VMCOptimizer():
         self.h1e: Tensor = state["h1e"]
         self.h2e: Tensor = state["h2e"]
 
+    def dump_input(self):
+        s = "System:\n"
+        if hasattr(__main__, '__file__'):
+            filename = os.path.abspath(__main__.__file__)
+            s += f"Input file: {filename}\n"
+        s += f"System {str(platform.uname())}\n"
+        s += f"Python {sys.version}\n"
+        s += f"numpy {np.__version__} torch {torch.__version__}\n"
+        s += f"Date: {time.ctime()}\n"
+        sys.stdout.write(s)
+
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self):
+        begin_vmc = time.time_ns()
+        sys.stdout.write(f"Begin VMC iteration: {time.ctime()}\n")
         for epoch in range(self.max_iter):
             t0 = time.time_ns()
             if self.HF_init is None or epoch < self.HF_init:
@@ -185,12 +202,14 @@ class VMCOptimizer():
             self.time_sample.append(delta)
 
             # calculate model grad
+            t1 = time.time_ns()
             if self.sr:
                 psi = sr_grad(self.model, sample_state, state_prob, eloc, self.exact, self.dtype,
                               self.method_grad, self.method_jacobian)
             else:
                 psi = energy_grad(self.model, sample_state, state_prob, eloc, self.exact, self.dtype,
                                   self.method_grad)
+            delta_grad = (time.time_ns() - t1) / 1.00E09
 
             # for param in self.model.parameters():
             #     print(param.grad)
@@ -202,18 +221,23 @@ class VMCOptimizer():
                 else:
                     self.grad_e_lst[i].append(np.zeros(param.numel()))
 
+            t2 = time.time_ns()
             if epoch < self.max_iter - 1:
                 self.opt.step()
                 self.opt.zero_grad()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
+            delta_update = (time.time_ns() - t2) / 1.00E09
 
             if epoch % self.nprt == 0 or epoch == self.max_iter -1:
                 print("Save model state dict")
                 self.model_dict_lst.append(deepcopy(self.model_raw.state_dict()))
 
             delta = (time.time_ns() - t0) / 1.00E09
-            print(f"{epoch} iteration total energy is {e_total:.9f} a.u., cost time {delta:.3E} s")
+            print(f"Calculating grad: {delta_grad:.3E} s, update param: {delta_update:.3E} s")
+            print(f"Total energy is {e_total:.9f} a.u., cost time {delta:.3E} s")
+            print(f"{epoch} iteration end {time.ctime()}")
+            print("="*100)
             self.time_iter.append(delta)
             # psi /= psi.norm()
             # dim = self.onstate.shape[0]
@@ -223,6 +247,11 @@ class VMCOptimizer():
             # print(eloc)
 
             del sample_state, eloc, state, psi
+
+        # end vmc iterations
+        total_vmc_time = (time.time_ns() - begin_vmc)/1.0E09
+        sys.stdout.write(f"End VMC iteration: {time.ctime()}\n") 
+        sys.stdout.write(f"total cost time: {total_vmc_time:.3E} s, {total_vmc_time/60:.3E} min {total_vmc_time/3600:.3E} h\n")
 
     def pre_train(self, prefix: str = None):
         t = CITrain(self.model, self.opt, self.pre_CI, self.pre_train_info, self.sorb, self.dtype,
@@ -241,6 +270,7 @@ class VMCOptimizer():
             self.sampler.frame_sample.to_csv(sample_file)
 
         if nqs:
+            # TODO: using self.model_raw.state_dict()
             torch.save(
                 {
                     "model": self.model_raw,

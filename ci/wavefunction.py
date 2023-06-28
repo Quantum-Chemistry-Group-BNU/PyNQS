@@ -63,6 +63,7 @@ def energy_CI(coeff: Tensor, onstate: Tensor, h1e: Tensor, h2e: Tensor, ecore: f
     if abs(coeff.norm().to("cpu").item() - 1.00) >= 1.0E-06:
         raise ValueError(f"Normalization CI coefficient")
 
+    # TODO:how block calculate energy, matrix block
     hij = get_hij_torch(onstate, onstate, h1e, h2e, sorb, nele).type_as(coeff)
     e = torch.einsum("i, ij, j", coeff.flatten(), hij, coeff.flatten().conj()) + ecore
 

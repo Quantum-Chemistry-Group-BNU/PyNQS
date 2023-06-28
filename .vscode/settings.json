@@ -81,13 +81,14 @@
     "-std=c++17",
     "-I${workspaceFolder}",
     // "-I${workspaceFolder}/cpp_src/include/",
-    "-I/home/zbwu/soft/anaconda3/include/python3.9",
+    "-I/home/zbwu/soft/anaconda3/include/python3.10",
     "-I/home/zbwu/soft/anaconda3/include/",
-    "-I/home/zbwu/soft/anaconda3/lib/python3.9/site-packages/torch/include",
-    "-I/home/zbwu/soft/anaconda3/lib/python3.9/site-packages/torch/include/torch/csrc/api/include",
-    //"-nocudainc",
+    "-I/home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch/include",
+    "-I/home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch/include/torch/csrc/api/include",
+    //"-nocudainc", // check kernel functions <<< >>>
+    "-DGPU=1",
     "-nocudalib",
-    "--cuda-path=/opt/cuda",
+    //"--cuda-path=/opt/cuda",
     // "-L/opt/cuda/lib64",
     "--cuda-path=/home/zbwu/soft/anaconda3",
     "-L/home/zbwu/soft/anaconda3/lib",
@@ -98,5 +99,6 @@
     // clang does not discover both the cpp and cuda header files.
     // "-xcuda",
     "-fsyntax-only",
-]
+],
+"python.analysis.typeCheckingMode": "off"
 }

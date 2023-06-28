@@ -25,7 +25,7 @@ print = partial(print, flush=True)
 if __name__ == "__main__":
     device = "cuda"
     device = "cpu"
-    for bond_i in [1.80]:
+    for bond_i in [4.0]:
         for pre_time_i in [2000]:
             for i in range(5):
                 seed = int(time.time_ns()%2**31)
@@ -43,10 +43,23 @@ if __name__ == "__main__":
                     atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
                 # atom = "Li 0.00 0.00 0.00; H 0.0 0.0 3.00"
                 filename = tempfile.mkstemp()[1]
-                # sorb, nele, e_lst, fci_amp = integral_pyscf(
-                #     atom, integral_file=filename, cisd_coeff=False, fci_coeff=True)
-                sorb, nele, e_lst, cisd_amp = integral_pyscf(
-                    atom, integral_file=filename, cisd_coeff=True, fci_coeff=False)
+                sorb, nele, e_lst, fci_amp = integral_pyscf(
+                    atom, integral_file=filename, cisd_coeff=False, fci_coeff=True)
+                # sorb, nele, e_lst, cisd_amp = integral_pyscf(
+                #     atom, integral_file=filename, cisd_coeff=True, fci_coeff=False, basis="STO-6G")
+                h1e, h2e, ci_space, ecore, sorb = read_integral(filename, nele,
+                                                                # save_onstate=True,
+                                                                # external_onstate="profiler/H12-1.50",
+                                                                # given_sorb= (sorb + 2),
+                                                                device=device,
+                                                                # prefix="test-onstate",
+                                                                )
+                fci_wf_1 = fci_revise(fci_amp, ci_space, sorb, device=device)
+                dim = ci_space.size(0)
+                print(f"ONV pyscf model")
+                for i in range(dim):
+                    s = state_to_string(ci_space[i], sorb)
+                    print(f"{s[0]} {fci_wf_1.coeff[i]**2:.6f}")
                 h1e, h2e, ci_space, ecore, sorb = read_integral(filename, nele,
                                                                 # save_onstate=True,
                                                                 # external_onstate="profiler/H12-1.50",
@@ -58,11 +71,10 @@ if __name__ == "__main__":
                         "ecore": ecore, "sorb": sorb, "nele": nele,
                         "nob": nele//2, "noa": nele - nele//2, "nva": (sorb-nele)//2}
                 electron_info = ElectronInfo(info)
-
                 # pre-train information
-                cisd_wf = unpack_ucisd(cisd_amp, sorb, nele, device=device)
+                # cisd_wf = unpack_ucisd(cisd_amp, sorb, nele, device=device) 
                 # fci_wf_0 = ucisd_to_fci(cisd_amp, ci_space, sorb, nele, device=device)
-                # fci_wf_1 = fci_revise(fci_amp, ci_space, sorb, device=device)
+                fci_wf_1 = fci_revise(fci_amp, ci_space, sorb, device=device)
                 # print(fci_wf_1.energy(electron_info))
                 pre_train_info = {"pre_max_iter": 2000, "interval": 20, "loss_type": "onstate"}
 
@@ -72,6 +84,11 @@ if __name__ == "__main__":
                 nqs_rbm = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
                                     rbm_type='cos', verbose=False).to(device)
                 model = nqs_rnn
+                torch.save({
+                    "model": model.state_dict(), 
+                    "h1e":h1e,
+                    "h2e": h2e
+                }, "test.pth")
                 sampler_param = {"n_sample": 20000, "verbose": True,
                                 "debug_exact": True, "therm_step": 10000,
                                 "seed": seed, "record_sample": False,
@@ -96,12 +113,12 @@ if __name__ == "__main__":
                                     sampler_param=sampler_param,
                                     only_sample=False,
                                     electron_info=electron_info,
-                                    max_iter=1000,
+                                    max_iter=200,
                                     interval=10,
                                     HF_init=0,
                                     verbose=False,
                                     sr=False,
-                                    pre_CI=cisd_wf,
+                                    pre_CI=fci_wf_1,
                                     pre_train_info=pre_train_info,
                                     method_grad="AD",
                                     method_jacobian="vector",

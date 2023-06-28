@@ -76,13 +76,13 @@ class Sampler():
         # save sampler
         n1 = special.comb(self.noa + self.nva, self.noa, exact=True)
         n2 = special.comb(self.nob + self.nvb, self.nvb, exact=True)
-        fci_size = n1 * n2
+        self.fci_size = n1 * n2
         self.record_sample = record_sample
         if self.record_sample:
-            self.str_full = state_to_string(self.full_space, self.sorb)
+            self.str_full = state_to_string(self.ci_space, self.sorb)
             self.frame_sample = pd.DataFrame({"full_space": self.str_full})
-            if self.full_space.size(0) != fci_size:
-                raise ValueError(f"The dim of full space is {self.full_space.size(0)} != {fci_size}")
+            if self.ci_space.size(0) != self.fci_size:
+                raise ValueError(f"The dim of full space is {self.ci_space.size(0)} != {self.fci_size}")
         self.time_sample = 0
 
         # memory control and nbatch
@@ -90,7 +90,7 @@ class Sampler():
         self.alpha = alpha
 
         # unique sample, apply to AR sample
-        self.max_unique_sample = min(max_unique_sample, fci_size) if max_unique_sample is not None else fci_size
+        self.max_unique_sample = min(max_unique_sample, self.fci_size) if max_unique_sample is not None else self.fci_size
         self.max_n_sample = max_n_sample if max_n_sample is not None else n_sample
         self.min_n_sample = n_sample
 
@@ -108,25 +108,25 @@ class Sampler():
         self.h2e: Tensor = ele_info.h2e
         self.ecore = ele_info.ecore
         self.n_SinglesDoubles = ele_info.n_SinglesDoubles
-        self.full_space = ele_info.ci_space
+        self.ci_space = ele_info.ci_space
 
     # @profile(precision=4, stream=open('MCMC_memory_profiler.log','w+'))
     def run(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, Tensor, float, dict]:
         t0 = time.time_ns()
         check_para(initial_state)
         if self.debug_exact:
-            dim = len(self.full_space)
-            e_total, eloc, stats_dict = self.calculate_energy(self.full_space)
+            dim = len(self.ci_space)
+            e_total, eloc, stats_dict = self.calculate_energy(self.ci_space)
 
             # placeholders only
             sample_prob = torch.empty(dim, dtype=torch.float64, device=self.device)
-            return self.full_space.detach(), sample_prob, eloc, e_total, stats_dict
+            return self.ci_space.detach(), sample_prob, eloc, e_total, stats_dict
 
         sample_unique, sample_counts, sample_prob = self.sampling(initial_state, n_sweep)
         delta = time.time_ns() - t0
-        print(f"Completed {self.method_sample} Sampling {delta/1.0E09:.3E} s")
+        print(f"Completed {self.method_sample} Sampling: {delta/1.0E09:.3E} s")
         if self.method_sample == "MCMC":
-            print(f"acceptance ratio = {self.n_accept/self.n_sample:.3E}")
+            print(f"Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
         e_total, eloc, stats_dict = self.calculate_energy(sample_unique,
                                                           state_prob=sample_prob,
@@ -300,14 +300,17 @@ class Sampler():
     def __repr__(self) -> str:
         return (f"{type(self).__name__}:" + " (\n"
                 f"    the number of sample: {self.n_sample}\n" + 
-                f"    therm step: {self.therm_step}\n" +
-                f"    exact sampling: {self.debug_exact}\n"
-                f"    the given full space shape: {self.full_space.shape}\n" +
+                f"    Therm step: {self.therm_step}\n" +
+                f"    Exact sampling: {self.debug_exact}\n"
+                f"    Given CI: {self.ci_space.size(0):.3E}\n" +
+                f"    FCI space: {self.fci_size:.3E}\n" +
                 f"    Record the sample: {self.record_sample}\n" +
-                f"    Singles + Doubles: {self.n_SinglesDoubles}\n" + 
+                f"    Singles + Doubles: {self.n_SinglesDoubles}\n" +
+                f"    Max unique sample: {self.max_unique_sample}\n"+
+                f"    Max sample: {self.max_n_sample}\n" +
                 f"    Random seed: {self.seed}\n" + ")")
 
     def _statistics(self, data: dict, sample_counts: Tensor):
-        s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}] "
-        s += f"sampling: {len(sample_counts)}/{sample_counts.sum().item()}"
+        s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}], "
+        s += f"unique sample: {sample_counts.sum().item()} -> {len(sample_counts)}"
         print(s)

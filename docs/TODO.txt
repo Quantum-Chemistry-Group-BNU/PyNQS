@@ -45,6 +45,7 @@ BUG: pre_train failure (Y)
 3. Support mpi4py
 4. Support SR from RNN, vmap doesn't 'torch.nn.functions.one_hot' functions
 5. Support different cuda stream. ref: https://zhuanlan.zhihu.com/p/51402722
+6. Support block calculation energy in CIWavefunction. ref:https://zhuanlan.zhihu.com/p/422710424
 
 #---------------question about pytorch------------------
 1. torch.compile doesn't speedups GRU, RNN, see: https://github.com/pytorch/pytorch/issues/91439
@@ -54,3 +55,5 @@ BUG: pre_train failure (Y)
 1. cpp_src C_extension functions doesn't support different cuda stream,
   so, it is better to set environ "CUDA_VISIBLE_DEVICES", not using cuda:1 or others.
   this bug would be fixed in later version.
+2. RNNWavefunction does not 1.00E7 sample,
+   "Trying to create tensor with negative dimension -2483944428352"
