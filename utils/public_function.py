@@ -1,5 +1,6 @@
 import random
 import sys
+import os
 import torch
 import itertools
 import numpy as np
@@ -344,6 +345,19 @@ class ElectronInfo:
             f")"
         )
 
+class EnterDir:
+    def __init__(self, c) -> None:
+        self.before_path = os.getcwd()
+        self.dir = c
+
+    def __enter__(self) -> None:
+        try:
+            os.chdir(self.dir)
+        except FileNotFoundError:
+            exit()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        os.chdir(self.before_path)
 
 if __name__ == "__main__":
     # print(given_onstate(12, 12, 3, 3)) # H20
