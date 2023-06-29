@@ -1,3 +1,5 @@
+#ifdef GPU
+
 #pragma once
 
 #include "../cuda/kernel.h"
@@ -22,3 +24,4 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
 Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
                            const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                            const int sorb, const int nele);
+#endif

@@ -1,5 +1,7 @@
 import time
 import torch
+import numpy as np
+
 from typing import Tuple, Callable
 from torch import Tensor
 
@@ -27,6 +29,7 @@ def total_energy(x: Tensor,
     eloc_lst = torch.zeros(dim, device=device).to(dtype)
     psi_lst = torch.zeros_like(eloc_lst)
     idx_lst = torch.arange(dim).to(device)
+    time_lst = []
     statistics = {}
 
     # calculate the total energy using splits
@@ -38,7 +41,7 @@ def total_energy(x: Tensor,
     # for step, (ons, idx) in enumerate(loader):
     # for ons, idx in loader: # why is slower than using split?
     for ons, idx in zip(x.split(nbatch), idx_lst.split(nbatch)):
-        eloc_lst[idx], psi_lst[idx] = local_energy(ons,
+        eloc_lst[idx], psi_lst[idx], x_time = local_energy(ons,
                                                    h1e,
                                                    h2e,
                                                    ansatz,
@@ -48,6 +51,7 @@ def total_energy(x: Tensor,
                                                    nob,
                                                    verbose=verbose,
                                                    dtype=dtype)
+        time_lst.append(x_time)
 
     # check local energy
     if torch.any(torch.isnan(eloc_lst)):
@@ -77,8 +81,13 @@ def total_energy(x: Tensor,
 
     t1 = time.time_ns()
     if verbose:
-        print(f"total energy cost time: {(t1-t0)/1.0E06:.3E} ms")
+        time_lst = np.stack(time_lst, axis=0)
+        delta0 = time_lst[:, 0].sum()
+        delta1 = time_lst[:, 1].sum()
+        delta2 = time_lst[:, 2].sum()
+        print(f"Total energy cost time: {(t1-t0)/1.0E06:.3E} ms, " +
+              f"Detail time: {delta0:.3E} ms {delta1:.3E} ms {delta2:.3E} ms"
+        )
 
     del psi_lst, idx_lst
-    print(f"total energy: {e_total.real.item():.8f}")
     return e_total.real.item(), eloc_lst, statistics

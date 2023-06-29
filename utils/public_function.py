@@ -1,5 +1,6 @@
 import random
 import sys
+import os
 import torch
 import itertools
 import numpy as np
@@ -114,6 +115,9 @@ def get_nbatch(sorb: int, n_sample_unique: int, n_comb_sd: int,
         x2 = n_comb_sd * ((sorb-1)//64 + 1) * 8 / (1<<30) # SD, uint8, GiB
         return x1 + x2
     m = comb_memory() * n_sample_unique
+    if torch.cuda.is_available():
+        mem_available = torch.cuda.mem_get_info()[0]/ (1<<30) # GiB
+        Max_memory = min(mem_available, Max_memory)
     if m / Max_memory >= alpha:
         batch = int(Max_memory/(comb_memory()) * alpha)
     else:
@@ -243,7 +247,7 @@ class Logger():
     """
     def __init__(self, filename: str, stream=sys.stdout):
         self.terminal = stream
-        self.log = open(filename, "w")
+        self.log = open(filename, "w", encoding='utf-8')
 
     def write(self, message):
         self.terminal.write(message)
@@ -341,6 +345,19 @@ class ElectronInfo:
             f")"
         )
 
+class EnterDir:
+    def __init__(self, c) -> None:
+        self.before_path = os.getcwd()
+        self.dir = c
+
+    def __enter__(self) -> None:
+        try:
+            os.chdir(self.dir)
+        except FileNotFoundError:
+            exit()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        os.chdir(self.before_path)
 
 if __name__ == "__main__":
     # print(given_onstate(12, 12, 3, 3)) # H20

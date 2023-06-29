@@ -17,6 +17,14 @@ from vmc.ansatz import RBMWavefunction, RNNWavefunction
 from vmc.optim import VMCOptimizer, GD
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise
 from libs.C_extension import onv_to_tensor
+from qubic import MPS, mps_CIcoeff, mps_sample
+
+mps1 = MPS()
+mps1.nphysical = 6
+mps1.image2 = [1, 2, 3]
+print(mps1.nphysical)
+print(mps1.image2)
+exit()
 
 torch.set_default_dtype(torch.double)
 torch.set_printoptions(precision=6)
@@ -24,18 +32,17 @@ print = partial(print, flush=True)
 
 if __name__ == "__main__":
     device = "cuda"
-    # device = "cpu"
-    for bond_i in [1.20]:
+    device = "cpu"
+    for bond_i in [4.0]:
         for pre_time_i in [2000]:
             for i in range(5):
                 seed = int(time.time_ns()%2**31)
-                seed = 73733883
+                # seed = 73733883
                 setup_seed(seed)
-                # output = "H4-1.00-random-opt" + str(alpha) + "-" + str(i)
-                output = f"H2/H2-{bond_i:.1f}-hidden-4-RNN-lr-0.001-{pre_time_i}-{i}"
-                # sys.stdout = Logger(output + ".log", sys.stdout)
-                sys.stdout = Logger("/dev/null", sys.stdout)
-                sys.stderr = Logger("/dev/null", sys.stderr)
+                # output = "H4-1.80-exact"
+                output = "1111"
+                sys.stdout = Logger(output + ".log", sys.stdout)
+                sys.stderr = Logger(output + ".log", sys.stderr)
 
                 # electronic structure information
                 atom: str = ""
@@ -47,7 +54,20 @@ if __name__ == "__main__":
                 sorb, nele, e_lst, fci_amp = integral_pyscf(
                     atom, integral_file=filename, cisd_coeff=False, fci_coeff=True)
                 # sorb, nele, e_lst, cisd_amp = integral_pyscf(
-                #     atom, integral_file=filename, cisd_coeff=True, fci_coeff=False)
+                #     atom, integral_file=filename, cisd_coeff=True, fci_coeff=False, basis="STO-6G")
+                h1e, h2e, ci_space, ecore, sorb = read_integral(filename, nele,
+                                                                # save_onstate=True,
+                                                                # external_onstate="profiler/H12-1.50",
+                                                                # given_sorb= (sorb + 2),
+                                                                device=device,
+                                                                # prefix="test-onstate",
+                                                                )
+                fci_wf_1 = fci_revise(fci_amp, ci_space, sorb, device=device)
+                dim = ci_space.size(0)
+                print(f"ONV pyscf model")
+                for i in range(dim):
+                    s = state_to_string(ci_space[i], sorb)
+                    print(f"{s[0]} {fci_wf_1.coeff[i]**2:.6f}")
                 h1e, h2e, ci_space, ecore, sorb = read_integral(filename, nele,
                                                                 # save_onstate=True,
                                                                 # external_onstate="profiler/H12-1.50",
@@ -59,29 +79,31 @@ if __name__ == "__main__":
                         "ecore": ecore, "sorb": sorb, "nele": nele,
                         "nob": nele//2, "noa": nele - nele//2, "nva": (sorb-nele)//2}
                 electron_info = ElectronInfo(info)
-                occslstA = fci.cistring._gen_occslst(range(sorb//2), nele//2)
-                occslstB = fci.cistring._gen_occslst(range(sorb//2), nele//2)
-
                 # pre-train information
-                # cisd_wf = unpack_ucisd(cisd_amp, sorb, nele, device=device)
+                # cisd_wf = unpack_ucisd(cisd_amp, sorb, nele, device=device) 
                 # fci_wf_0 = ucisd_to_fci(cisd_amp, ci_space, sorb, nele, device=device)
                 fci_wf_1 = fci_revise(fci_amp, ci_space, sorb, device=device)
-                print(fci_wf_1.energy(electron_info))
-                pre_train_info = {"pre_max_iter": 200, "interval": 20, "loss_type": "sample"}
+                # print(fci_wf_1.energy(electron_info))
+                pre_train_info = {"pre_max_iter": 2000, "interval": 20, "loss_type": "onstate"}
 
                 # model
-                nqs_rnn = RNNWavefunction(sorb, nele, num_hiddens=16, num_labels=2, rnn_type="complex",
+                nqs_rnn = RNNWavefunction(sorb, nele, num_hiddens=4, num_labels=2, rnn_type="complex",
                                     num_layers=1, device=device).to(device)
                 nqs_rbm = RBMWavefunction(sorb, alpha=2, init_weight=0.001,
                                     rbm_type='cos', verbose=False).to(device)
                 model = nqs_rnn
-                sampler_param = {"n_sample": 10000, "verbose": True,
+                torch.save({
+                    "model": model.state_dict(), 
+                    "h1e":h1e,
+                    "h2e": h2e
+                }, "test.pth")
+                sampler_param = {"n_sample": 20000, "verbose": True,
                                 "debug_exact": True, "therm_step": 10000,
-                                "seed": seed, "record_sample": True,
-                                "max_memory": 4, "alpha": 0.15, "method_sample": "AR"}
+                                "seed": seed, "record_sample": False,
+                                "max_memory": 4, "alpha": 0.07, "method_sample": "AR"}
                 opt_type = optim.Adam
-                # opt_params = {"lr": 0.005, "weight_decay": 0.001}
-                opt_params = {"lr": 0.005}
+                # opt_params = {"lr": 0.005, "weight_decay": 0.001, "betas": (0.9, 0.99)}
+                opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
                 # lr_scheduler = optim.lr_scheduler.MultiStepLR
                 # lr_sch_params = {"milestones": [3000, 4500, 5500], "gamma": 0.20}
                 lr_scheduler = optim.lr_scheduler.LambdaLR
@@ -94,12 +116,13 @@ if __name__ == "__main__":
                                     opt_params=opt_params,
                                     lr_scheduler=lr_scheduler,
                                     lr_sch_params=lr_sch_params,
-                                    # external_model="1111.pth",
+                                    # external_model="H4-1.60-sample.pth",
                                     dtype=dtype,
                                     sampler_param=sampler_param,
                                     only_sample=False,
                                     electron_info=electron_info,
-                                    max_iter=5000,
+                                    max_iter=200,
+                                    interval=10,
                                     HF_init=0,
                                     verbose=False,
                                     sr=False,
@@ -108,26 +131,20 @@ if __name__ == "__main__":
                                     method_grad="AD",
                                     method_jacobian="vector",
                                     )
-                # fock_space = get_fock_space(sorb, device=device)
-                # print(onv_to_tensor(ci_space, sorb))
-                # psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
-                # breakpoint()
-                # opt_vmc.pre_train("Adam")
-                # breakpoint()
+                # opt_vmc.pre_train(output)
                 opt_vmc.run()
                 print(e_lst, seed)
-                psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
-                psi /= psi.norm()
-                dim = ci_space.size(0)
-                print(f"ONV pyscf model")
-                for i in range(dim):
-                    s = state_to_string(ci_space[i], sorb)
-                    print(f"{s[0]} {fci_wf_1.coeff[i]**2:.6f} {psi[i].norm()**2:.6f}")
-                
+                # psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
+                # psi /= psi.norm()
+                # dim = ci_space.size(0)
+                # print(f"ONV pyscf model")
+                # for i in range(dim):
+                #     s = state_to_string(ci_space[i], sorb)
+                #     print(f"{s[0]} {fci_wf_1.coeff[i]**2:.6f} {psi[i].norm()**2:.6f}")                
                 a = opt_vmc.model.ar_sampling(100000)
                 sample_unique, sample_counts = torch.unique(a, dim=0, return_counts=True)
                 print(sample_counts,"\n", sample_unique)
-                # opt_vmc.summary(e_ref = e_lst[0], e_lst = e_lst[1:], prefix="1111")
+                opt_vmc.summary(e_ref = e_lst[0], e_lst = e_lst[1:], prefix=output)
                 exit()
                 os.remove(filename)
                 sys.stdout.log.close()

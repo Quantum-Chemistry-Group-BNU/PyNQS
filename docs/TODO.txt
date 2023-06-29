@@ -29,14 +29,31 @@
 #----------2023-4-20---------- zbwu1996@gmail.com
 1. refactor code referring to https://github.com/twesterhout/nqs-playground
 2. modify the module of calculating local energy and SR (Y)
-3. record log events using "Loguru" package
+3. record log events using "Loguru" package. (TODO)
 
 #----------2023-5-08---------- zbwu1996@gmail.com
-1. Using Separate Compilation in CUDA
-BUG: pre_train failure
+1. Using Separate Compilation in CUDA (Y)
+BUG: pre_train failure (Y)
+
+#----------2023-6-01---------- zbwu1996@gmail.com
+1. How to calculate batch when calculating local energy using RNN model
+2. How to use Multiple GPU
 
 #---------------feature's------------------
 1. Add tutorial using "Read the Docs"
 2. Support spin_multiplicity == 1
 3. Support mpi4py
 4. Support SR from RNN, vmap doesn't 'torch.nn.functions.one_hot' functions
+5. Support different cuda stream. ref: https://zhuanlan.zhihu.com/p/51402722
+6. Support block calculation energy in CIWavefunction. ref:https://zhuanlan.zhihu.com/p/422710424
+
+#---------------question about pytorch------------------
+1. torch.compile doesn't speedups GRU, RNN, see: https://github.com/pytorch/pytorch/issues/91439
+2. vmap doesn't support 'torch.nn.functions.one_hot' functions
+
+#----------------Bug--------------------
+1. cpp_src C_extension functions doesn't support different cuda stream,
+  so, it is better to set environ "CUDA_VISIBLE_DEVICES", not using cuda:1 or others.
+  this bug would be fixed in later version.
+2. RNNWavefunction does not 1.00E7 sample,
+   "Trying to create tensor with negative dimension -2483944428352"

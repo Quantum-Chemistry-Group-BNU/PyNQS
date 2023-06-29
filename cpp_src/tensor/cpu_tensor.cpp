@@ -50,7 +50,7 @@ torch::Tensor onv_to_tensor_tensor_cpu(const torch::Tensor &bra_tensor,
 
   // [nbatch, sorb]
   auto nbatch = bra_tensor.size(0);
-  Tensor comb_bit = torch::zeros({nbatch, sorb}, options);
+  Tensor comb_bit = torch::empty({nbatch, sorb}, options);
 
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());

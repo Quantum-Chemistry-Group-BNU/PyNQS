@@ -63,6 +63,7 @@ def energy_CI(coeff: Tensor, onstate: Tensor, h1e: Tensor, h2e: Tensor, ecore: f
     if abs(coeff.norm().to("cpu").item() - 1.00) >= 1.0E-06:
         raise ValueError(f"Normalization CI coefficient")
 
+    # TODO:how block calculate energy, matrix block
     hij = get_hij_torch(onstate, onstate, h1e, h2e, sorb, nele).type_as(coeff)
     e = torch.einsum("i, ij, j", coeff.flatten(), hij, coeff.flatten().conj()) + ecore
 
@@ -203,8 +204,8 @@ class CITrain:
             if (epoch % self.nprt) == 0:
                 delta = (time.time_ns() - t0) / 1.E06
                 print(
-                    f"The {epoch:<5d} training, loss = {(1-ovlp.norm()**2).item():.4E}, " +
-                    f"ovlp = {ovlp.norm().item():.4E}, delta = {delta:.3f} ms"
+                    f"The {epoch:<5d} training, loss = {(1-ovlp.detach().norm()**2).item():.4E}, " +
+                    f"ovlp = {ovlp.detach().norm().item():.4E}, delta = {delta:.3E} ms"
                 )
         if False:
             full_space = onv_to_tensor(electron_info.ci_space, self.sorb)

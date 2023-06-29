@@ -23,7 +23,7 @@ def local_energy(x: Tensor,
                  noa: int,
                  nob: int,
                  verbose: bool = False,
-                 dtype=torch.double) -> Tuple[Tensor, Tensor]:
+                 dtype=torch.double) -> Tuple[Tensor, Tensor, Tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'> 
@@ -54,9 +54,12 @@ def local_energy(x: Tensor,
     # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
     with torch.no_grad():
         psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
+    # print(torch.cuda.mem_get_info())
+    # print(prof.table())
+    # exit()
 
     if x1.is_cuda:
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(h1e.device)
     t3 = time.time_ns()
 
     if dim == 2 and batch == 1:
@@ -64,9 +67,12 @@ def local_energy(x: Tensor,
     elif dim == 2 and batch > 1:
         eloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * comb_hij, -1)  # (batch)
 
+    delta0 = (t1 - t0) / 1.0E06
+    delta1 = (t2 - t1) / 1.0E06
+    delta2 = (t3 - t2) / 1.0E06
     if verbose:
-        print(f"comb_x/uint8_to_bit time: {(t1-t0)/1.0E06:.3E} ms, <i|H|j> time: {(t2-t1)/1.0E06:.3E} ms, " +
-              f"nqs time: {(t3-t2)/1.0E06:.3E} ms")
+        print(f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " +
+              f"nqs time: {delta2:.3E} ms")
     del x1, comb_hij, comb_x
 
-    return eloc.to(dtype), psi_x1[..., 0].to(dtype)
+    return eloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
