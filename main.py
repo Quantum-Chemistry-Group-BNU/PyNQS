@@ -17,6 +17,14 @@ from vmc.ansatz import RBMWavefunction, RNNWavefunction
 from vmc.optim import VMCOptimizer, GD
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise
 from libs.C_extension import onv_to_tensor
+from qubic import MPS, mps_CIcoeff, mps_sample
+
+mps1 = MPS()
+mps1.nphysical = 6
+mps1.image2 = [1, 2, 3]
+print(mps1.nphysical)
+print(mps1.image2)
+exit()
 
 torch.set_default_dtype(torch.double)
 torch.set_printoptions(precision=6)
