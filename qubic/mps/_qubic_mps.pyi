@@ -1,7 +1,10 @@
 from typing import List, NewType, Tuple
 from torch import Tensor
 
+from ..qtensor import Stensor2
 onstate = NewType("onstate", Tensor)
+site = NewType("site", List[Stensor2, Stensor2, Stensor2, Stensor2])
+
 class MPS:
     """
     post module after CTNS
@@ -60,6 +63,12 @@ class MPS:
 
     @nphysical.getter
     def nphysical(self) -> int:
+        ...
+
+    def convert(self) ->List[site]:
+        """
+        convert MPS coeff
+        """
         ...
 
 def mps_CIcoeff(imps: MPS, iroot: int, bra: onstate, sorb: int) -> Tensor:
