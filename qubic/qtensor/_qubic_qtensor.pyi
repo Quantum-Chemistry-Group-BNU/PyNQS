@@ -77,7 +77,6 @@ class Qinfo2:
     @qrow.getter
     def qrow(self)->Qbond:...
 
-    
     @property
     def qcol(self)->Qbond:...
 
@@ -85,13 +84,13 @@ class Qinfo2:
     def qcol(self)->Qbond:...
 
     @property
-    def nnz(self)->ndarray[np.int64]:...
+    def nnzaddr(self)->ndarray[np.int64]:"the address of nonzero block, C oder"
 
-    @nnz.getter
-    def nzz(self)->ndarray[np.int64]:...
+    @nnzaddr.getter
+    def nnzaddr(self)->ndarray[np.int64]:...
 
     @property
-    def size(self)->int:...
+    def size(self)->int:"""the number of nonzero data size """
 
     @size.getter
     def size(self)->int:...
@@ -110,10 +109,10 @@ class Stensor2:
 
     def data(self)->ndarray[np.double]: """ 2D Sparse tensor nonzero data stored by a 1D array """
     
-    def size(self)->int: """ size """
+    def size(self)->int: """the number of nonzero data size """
 
     def info(self)->Qinfo2: """block structural information """
 
-    def shape(self)->Tuple[int, int]:"""sparse shape"""
+    def shape(self)->Tuple[int, int]:"""sparse matrix block shape"""
 
 

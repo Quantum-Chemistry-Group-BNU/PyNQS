@@ -46,6 +46,9 @@ BUG: pre_train failure (Y)
 4. Support SR from RNN, vmap doesn't 'torch.nn.functions.one_hot' functions
 5. Support different cuda stream. ref: https://zhuanlan.zhihu.com/p/51402722
 6. Support block calculation energy in CIWavefunction. ref:https://zhuanlan.zhihu.com/p/422710424
+7. Support Multiprocessing or Multiprocessing
+8. mpi4py: the seed of the different rank
+
 
 #---------------question about pytorch------------------
 1. torch.compile doesn't speedups GRU, RNN, see: https://github.com/pytorch/pytorch/issues/91439

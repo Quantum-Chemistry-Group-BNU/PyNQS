@@ -77,6 +77,8 @@
         "source_location": "cpp"
     },
     "C_Cpp.errorSquiggles": "disabled",
+    "python.formatting.provider": "yapf",
+    "python.formatting.yapfArgs": ["--style", "{column_limit: 110, based_on_style: google, indent_width: 4}"],
 "clangd.fallbackFlags": [
     "-std=c++17",
     "-I${workspaceFolder}",
