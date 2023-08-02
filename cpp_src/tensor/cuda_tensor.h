@@ -5,6 +5,7 @@
 #include "../cuda/kernel.h"
 #include "../cuda/excitation_cuda.h"
 #include "utils_tensor.h"
+#include "magma_v2.h"
 
 Tensor tensor_to_onv_tensor_cuda(const Tensor &bra_tensor, const int sorb);
 
@@ -24,4 +25,8 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
 Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
                            const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                            const int sorb, const int nele);
+
+// data: 1dim, data_index(nbatch, nphysical, 3)
+Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
+                         const int nphysical, int64_t batch);
 #endif

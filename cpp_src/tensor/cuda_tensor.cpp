@@ -1,10 +1,11 @@
 #include "cuda_tensor.h"
-#include "ATen/ops/empty.h"
+#include "interface_magma.h"
 
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
 
 #include <cassert>
+#include <cstdint>
 #include <tuple>
 
 Tensor tensor_to_onv_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
@@ -134,4 +135,32 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
                           ncomb);
   }
   return std::make_tuple(comb, comb_bit);
+}
+
+Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
+                         const int nphysical, int64_t batch = 5000) {
+  // data_index: (nbatch, nphysical, 3)
+  const int64_t data_len = data_index.size(0);
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kFloat64)
+                     .layout(mps_data.layout())
+                     .device(mps_data.device());
+  Tensor result = torch::empty({data_len}, options);
+  const int64_t n = data_len / batch + 1;
+  int64_t start = 0;
+  int64_t end = 0;
+  Tensor index_tensor = data_index.slice(2,0, 1); //(nbatch, nphysical)
+  Tensor dr_tensor = data_index.slice(2, 1, 2); //(nbatch, nphysical)
+  Tensor dc_tensor = data_index.slice(2, 2, 3); //(nbatch, nphysical)
+  for (int i = 0; i < n; i++) {
+    end = std::min(start + batch, data_len);
+    batch = std::min(batch, end - start);
+    std::cout << start << " " << end << " " << batch << " " << std::endl;
+    dgemv_vbatch_tensor(
+        mps_data, index_tensor.slice(0, start, end),
+        dr_tensor.slice(0, start, end), dc_tensor.slice(0, start, end),
+        nphysical, batch, result.slice(0, start, end));
+    start = end;
+  }
+  return result;
 }

@@ -81,10 +81,9 @@
     "python.formatting.yapfArgs": ["--style", "{column_limit: 110, based_on_style: google, indent_width: 4}"],
 "clangd.fallbackFlags": [
     "-std=c++17",
-    "-I${workspaceFolder}",
-    // "-I${workspaceFolder}/cpp_src/include/",
+    "-I${workspaceFolder}/cpp_src",
     "-I/home/zbwu/soft/anaconda3/include/python3.10",
-    "-I/home/zbwu/soft/anaconda3/include/",
+    "-I/home/zbwu/soft/anaconda3/include",
     "-I/home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch/include",
     "-I/home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch/include/torch/csrc/api/include",
     //"-nocudainc", // check kernel functions <<< >>>
@@ -97,9 +96,11 @@
     "--cuda-host-only",
     "-lcudart_static",
     "--cuda-gpu-arch=sm_75",
+    "-lmagma",
     "-pthread",
     // clang does not discover both the cpp and cuda header files.
     // "-xcuda",
     "-fsyntax-only",
+    "MAGMA_ILP64", // 
 ]
 }

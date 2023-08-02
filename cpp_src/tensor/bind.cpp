@@ -2,8 +2,6 @@
 #include "cuda_tensor.h"
 #include "utils_tensor.h"
 
-// #define GPU 1
-
 Tensor tensor_to_onv(const Tensor &bra_tensor, const int sorb) {
   const auto dim = bra_tensor.dim();
   CHECK_CONTIGUOUS(bra_tensor);
@@ -120,6 +118,18 @@ auto MCMC_sample(const std::string model_file, Tensor &initial_state,
   return n_accept;
 }
 
+Tensor mps_vbatch(const Tensor mps_data, const Tensor data_index,
+                const int nphysical, const int64_t batch) {
+  if (mps_data.is_cpu() || data_index.is_cpu()) {
+    std::cout << "RunTime Error, mps_vbatch dose not support CPU" << std::endl;
+    return torch::zeros({1}, torch::TensorOptions().dtype(torch::kDouble));
+#ifdef GPU
+  } else {
+    return mps_vbatch_tensor(mps_data, data_index, nphysical, batch);
+#endif
+  }
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij,
         "Calculate the matrix <x|H|x'> using CPU or GPU");
@@ -134,4 +144,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Flip the spin randomly in MCMC using CPU");
   m.def("tensor_to_onv", &tensor_to_onv,
         "convert states (0:unoccupied, 1: occupied) to onv uint8");
+  m.def("mps_vbatch", &mps_vbatch, py::arg("mps_data"), py::arg("data_index"),
+        py::arg("nphysical"), py::arg("batch") = 5000,
+        "variable batch matrix and vector product using magma_dgemv_vbatch, default: batch: 5000");
 }

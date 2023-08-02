@@ -52,7 +52,7 @@ do
                 echo -e "\033[36mComplie CPU code\033[0m"
                 sed -i '17a from torch.utils.cpp_extension import CppExtension' setup.py
                 sed -i '24a\
-sources = [i for i in glob.glob("*/*.cpp") if "cuda" not in i]\
+sources = [i for i in glob.glob("*/*.cpp") if "cuda" not in i or "magma" not in i ]\
 print(sources)\
 CPU_VERSION = CppExtension(\
 name=s,\
@@ -68,16 +68,26 @@ extra_compile_args={"cxx": ["-O3", "-std=c++17", "-UGPU"]}\
                 sed -i '17a from torch.utils.cpp_extension import CUDAExtension' setup.py
                 sed -i '24a\
 sources = glob.glob("*/*.cpp") + glob.glob("*/*.cu")\
+magma_DIR = "/home/zbwu/soft/magma-2.6.1"\
+magma_INCLUDE = magma_DIR +"/include"\
+magma_LIB = magma_DIR + "/lib"\
+include_dirs = [osp.join(ROOT_DIR), magma_INCLUDE]\
 print(sources)\
 CUDA_VERSION = CUDAExtension(\
     name=s,\
     sources=sources,\
-    library_dirs=["/home/zbwu/soft/anaconda3/lib"],\
+    library_dirs=["/home/zbwu/soft/anaconda3/lib", "/home/zbwu/soft/magma-2.6.1/lib"],\
     dlink=True,\
     # dlink_libraries=["cuda_link"],\
     include_dirs=include_dirs,\
-    extra_compile_args={ "cxx": ["-O3", "-std=c++17", "-DGPU=1"],\
-                    "nvcc": ["-O3", "-MMD", "-lcudart", "-dc", "--expt-relaxed-constexpr", "-lcudadevrt"]}\
+    extra_compile_args={ "cxx": ["-O3", "-std=c++17", "-DGPU=1","-lcudadevrt", "-lmagma", "-lmagma_sparse","-DMAGMA_ILP64"],\
+                    "nvcc": ["-O3", "-MMD", "-lcudart", "-dc", "--expt-relaxed-constexpr"]},\
+    extra_link_args= {# "-Wl,-rpath-link,"+magma_LIB,\
+                      "-Wl,-rpath,"+magma_LIB,\
+                      "-L"+magma_LIB,\
+                      "-lmagma",\
+                      "-Wl,-rpath,/home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch/lib"\
+                     }\
 )\
 ' setup.py
             sed -i "s/Compile_mode/CUDA_VERSION/" setup.py

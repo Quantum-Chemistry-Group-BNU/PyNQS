@@ -50,3 +50,20 @@ __host__ void get_comb_cuda(unsigned long *comb, const int *merged_ovlst,
                             const int noB, const int nbatch, const int ncomb);
 
 }  // namespace squant
+
+__host__ void array_index_cuda(double *data_ptr, int64_t *index, int64_t length,
+                               int64_t offset, double **ptr_array);
+
+__host__ void get_array_cuda(double *data_ptr, int64_t *index, int64_t length,
+                             int64_t offset, double *array);
+
+__host__ void ones_array_cuda(double *data_ptr, int64_t length, int64_t stride,
+                              int64_t offset = 0);
+
+__host__ void print_ptr_ptr_cuda(double *data_ptr, double **ptr_array,
+                                 int64_t *dr, int64_t *dc, size_t nbatch);
+
+__host__ void print_ptr_ptr_cuda(double *data_ptr, double **ptr_array,
+                                 int64_t *dr, size_t nbatch);
+
+__host__ void swap_pointers_cuda(double **ptr_ptr, double **ptr_ptr_1);
