@@ -1,5 +1,6 @@
 #include "onstate_cuda.h"
 #include <cstddef>
+#include <cstdio>
 
 namespace squant {
 
@@ -150,26 +151,27 @@ __device__ void get_zvec_cuda(const unsigned long *bra, double *lst,
 }
 
 __device__ int64_t permute_sgn_cuda(const int64_t *image2,
-                                    const int64_t *onstate, 
-                                    int64_t *index,
+                                    const int64_t *onstate, int64_t *index,
                                     const int size) {
   int64_t sgn = 0;
-  for (size_t i = 0; i < size; i++) {
+  for (int i = 0; i < size; i++) {
     if (image2[i] == index[i]) {
       continue;
     }
-    size_t k = 0;
-    for (size_t j = i + 1; j < size; j++) {
+    // find the position of target image2[i] in index
+    int k = 0;
+    for (int j = i + 1; j < size; j++) {
       if (index[j] == image2[i]) {
         k = j;
         break;
       }
     }
-    int64_t kf = onstate[index[k]];
-    for (size_t j = k - 1; j >= i; j--) {
+    // shift data
+    bool fk = onstate[index[k]];
+    for (int j = k - 1; j >= i; j--) {
       index[j + 1] = index[j];
-      if (kf && onstate[index[j]]) {
-        sgn &= 1;
+      if (fk && onstate[index[j]]) {
+        sgn ^= 1;
       }
     }
     index[i] = image2[i];
