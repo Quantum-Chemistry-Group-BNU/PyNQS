@@ -87,11 +87,14 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
   ones_array_cuda(dX_array_data, nbatch, max_dr_dc);
   array_index_cuda(dX_array_data, index_v_ptr, nbatch, 0, dX_array);
 
-  std::cout << "dgemv-vbatch-cycle: " << std::endl;
+  if(debug){
+    std::cout << "dgemv-vbatch-cycle: " << std::endl;
+  }
   magma_init();
   for (int i = nphysical - 1; i >= 0; i--) {
-    std::cout << "i-cycle: " << i << std::endl;
-
+    if (debug){
+      std::cout << "i-cycle: " << i << std::endl;
+    }
     // memory must be is contiguous, and convert CPU to GPU
     Tensor dr_site = dr.slice(1, i, i + 1).reshape(-1).contiguous();  //(nbatch)
     Tensor dc_site = dc.slice(1, i, i + 1).reshape(-1).contiguous();  //(nbatch)
@@ -113,16 +116,15 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
     cudaMemcpy(dev_ldd_A, dr_site_ptr, sizeof(magma_int_t) * nbatch,
                cudaMemcpyDeviceToDevice);
 
-    print_tensor<int64_t>(torch::from_blob(dev_ldd_A, nbatch, options_int64_t),
-                          nbatch, "ldd-A");
-    print_tensor<int64_t>(torch::from_blob(dev_m, nbatch, options_int64_t),
-                          nbatch, "dev-M");
-    print_tensor<int64_t>(torch::from_blob(dev_n, nbatch, options_int64_t),
-                          nbatch, "dev-N");
-
     if (debug) {
-        std::cout << "Postion1: " << std::endl;
-        print_tensor<int64_t>(data_index_site, nbatch, "index");
+      print_tensor<int64_t>(
+          torch::from_blob(dev_ldd_A, nbatch, options_int64_t), nbatch,
+          "ldd-A");
+      print_tensor<int64_t>(torch::from_blob(dev_m, nbatch, options_int64_t),
+                            nbatch, "dev-M");
+      print_tensor<int64_t>(torch::from_blob(dev_n, nbatch, options_int64_t),
+                            nbatch, "dev-N");
+      print_tensor<int64_t>(data_index_site, nbatch, "index");
     }
 
     // dA_array double-ptr

@@ -1,4 +1,5 @@
 #include "onstate_cuda.h"
+#include <cstddef>
 
 namespace squant {
 
@@ -146,6 +147,34 @@ __device__ void get_zvec_cuda(const unsigned long *bra, double *lst,
   const int idx_bit = idx % block;
   lst[idx] = num_parity_cuda(bra[idx_bra], idx_bit + 1);
   ///
+}
+
+__device__ int64_t permute_sgn_cuda(const int64_t *image2,
+                                    const int64_t *onstate, 
+                                    int64_t *index,
+                                    const int size) {
+  int64_t sgn = 0;
+  for (size_t i = 0; i < size; i++) {
+    if (image2[i] == index[i]) {
+      continue;
+    }
+    size_t k = 0;
+    for (size_t j = i + 1; j < size; j++) {
+      if (index[j] == image2[i]) {
+        k = j;
+        break;
+      }
+    }
+    int64_t kf = onstate[index[k]];
+    for (size_t j = k - 1; j >= i; j--) {
+      index[j + 1] = index[j];
+      if (kf && onstate[index[j]]) {
+        sgn &= 1;
+      }
+    }
+    index[i] = image2[i];
+  }
+  return -2 * sgn + 1;
 }
 
 } // namespace squant

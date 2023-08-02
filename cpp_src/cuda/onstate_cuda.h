@@ -1,5 +1,7 @@
 #pragma once
 #include "utils_cuda.h"
+#include <cstddef>
+#include <cstdint>
 
 namespace squant {
 
@@ -61,5 +63,10 @@ __device__ void get_ovlst_cuda(const unsigned long *bra, int *merged,
 // 0: unoccupied 1: occupied
 __device__ void get_zvec_cuda(const unsigned long *bra, double *lst,
                               const int sorb, const int bra_len, const int idx);
+
+__device__ int64_t permute_sgn_cuda(const int64_t *image2,
+                                    const int64_t *onstate, 
+                                    int64_t *index,
+                                    const int size);
 
 }  // namespace squant

@@ -1,5 +1,12 @@
 #include "cuda_tensor.h"
+#include "ATen/core/Formatting.h"
+#include "ATen/ops/arange.h"
+#include "ATen/ops/empty.h"
+#include "c10/core/ScalarType.h"
+#include "cuda/kernel.h"
 #include "interface_magma.h"
+#include "tensor/utils_tensor.h"
+#include "torch/types.h"
 
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
@@ -155,7 +162,6 @@ Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
   for (int i = 0; i < n; i++) {
     end = std::min(start + batch, data_len);
     batch = std::min(batch, end - start);
-    std::cout << start << " " << end << " " << batch << " " << std::endl;
     dgemv_vbatch_tensor(
         mps_data, index_tensor.slice(0, start, end),
         dr_tensor.slice(0, start, end), dc_tensor.slice(0, start, end),
@@ -163,4 +169,43 @@ Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
     start = end;
   }
   return result;
+}
+
+Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor bra_tensor,
+                               const int sorb) {
+  /**
+  image2: [0, 1, 2, ....], (sorb)\
+  onstate: (nbatch, sorb): uint8
+  **/
+
+  const int64_t nbatch = bra_tensor.size(0);
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kInt64)
+                     .layout(bra_tensor.layout())
+                     .device(bra_tensor.device());
+  const Tensor index_tensor =
+      torch::arange(sorb, options).unsqueeze(0).repeat({nbatch, 1});
+
+  int64_t *index_ptr = index_tensor.data_ptr<int64_t>();  // tmp index
+  Tensor sgn_tensor = torch::empty(nbatch, options);      // Int64
+  int64_t *sgn_ptr = sgn_tensor.data_ptr<int64_t>();
+
+
+  if(true){
+    std::cout << "image2:" << std::endl;
+    torch::print(image2);
+    std::cout << "bra_tensor:" << std::endl;
+    torch::print(bra_tensor);
+    std::cout <<"sorb: " << sorb << std::endl;
+  }
+
+  auto onstate = onv_to_tensor_tensor_cuda(bra_tensor, sorb)
+                     .to(torch::kInt64);  // Uint8 -> KInt64
+  const int64_t *image2_ptr = image2.to(torch::kInt64).to(bra_tensor.device()).data_ptr<int64_t>();
+  const int64_t *onstate_ptr = onstate.data_ptr<int64_t>();
+  squant::permute_sng_batch_cuda(image2_ptr, onstate_ptr, index_ptr, sgn_ptr,
+                                 sorb, nbatch);
+  
+  return sgn_tensor.to(torch::kDouble);
+
 }

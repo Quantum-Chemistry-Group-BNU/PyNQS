@@ -130,6 +130,18 @@ Tensor mps_vbatch(const Tensor mps_data, const Tensor data_index,
   }
 }
 
+Tensor permute_sgn(const Tensor image2, const Tensor bra_tensor,
+                               const int sorb){
+  if(bra_tensor.is_cpu()){
+    std::cout << "CPU Version has not been finished" << std::endl;
+    return torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
+#ifdef GPU
+  } else {
+    return permute_sgn_tensor_cuda(image2, bra_tensor, sorb);
+#endif
+  }
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij,
         "Calculate the matrix <x|H|x'> using CPU or GPU");
@@ -147,4 +159,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("mps_vbatch", &mps_vbatch, py::arg("mps_data"), py::arg("data_index"),
         py::arg("nphysical"), py::arg("batch") = 5000,
         "variable batch matrix and vector product using magma_dgemv_vbatch, default: batch: 5000");
+
+  m.def("permute_sgn", &permute_sgn, "permute_sgn");
 }

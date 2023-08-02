@@ -188,6 +188,30 @@ __host__ void squant::get_comb_cuda(double *comb_bit, unsigned long *comb,
                                             bra_len, noA, noB, nbatch, ncomb);
 }
 
+__global__ void permuate_sgn_kernel(const int64_t *image2,
+                                    const int64_t *onstate, 
+                                    int64_t *index,
+                                    int64_t *sgn,
+                                    const int size,
+                                    const size_t nbatch) {
+  int idm = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idm >= nbatch)
+    return;
+  sgn[idm] = squant::permute_sgn_cuda(image2, &onstate[idm * size], &index[idm * size], size);
+}
+
+__host__ void squant::permute_sng_batch_cuda(const int64_t *image2,
+                                             const int64_t *onstate,
+                                             int64_t *index,
+                                             int64_t *sgn,
+                                             const int size,
+                                             const int64_t nbatch) {
+  dim3 blockDim(1024);
+  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
+  permuate_sgn_kernel<<<gridDim, blockDim>>>(image2, onstate, index, sgn, size, nbatch);
+
+}
+
 __global__ void array_index_kernel(double *data_ptr, int64_t *index,
                                    int64_t length, int64_t offset,
                                    double **ptr_array) {
