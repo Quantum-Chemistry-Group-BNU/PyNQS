@@ -1,4 +1,6 @@
 #include "onstate.h"
+#include <algorithm>
+#include <cstdint>
 
 // #include "utils.h"
 
@@ -144,6 +146,36 @@ void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
     lst[idx] = num_parity_cpu(bra[bra_len - 1], j);
     idx++;
   }
+}
+
+int64_t permute_sgn_cpu(const int64_t *image2, const int64_t *onstate,
+                        const int size) {
+  std::vector<int64_t> index(size);
+  std::iota(index.begin(), index.end(), 0);
+  int64_t sgn = 0;
+  for (int i = 0; i < size; i++) {
+    if (image2[i] == index[i]) {
+      continue;
+    }
+    // find the position of target image2[i] in index
+    int k = 0;
+    for (int j = i + 1; j < size; j++) {
+      if (index[j] == image2[i]) {
+        k = j;
+        break;
+      }
+    }
+    // shift data
+    bool fk = onstate[index[k]];
+    for (int j = k - 1; j >= i; j--) {
+      index[j + 1] = index[j];
+      if (fk && onstate[index[j]]) {
+        sgn ^= 1;
+      }
+    }
+    index[i] = image2[i];
+  }
+  return -2 * sgn + 1;
 }
 
 }  // namespace squant

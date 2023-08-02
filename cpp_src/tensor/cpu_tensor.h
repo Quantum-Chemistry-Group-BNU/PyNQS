@@ -21,3 +21,6 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
 Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
                        const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                        const int sorb, const int nele);
+
+Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor onstate,
+                               const int sorb);

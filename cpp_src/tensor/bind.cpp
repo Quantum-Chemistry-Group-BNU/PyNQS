@@ -130,14 +130,13 @@ Tensor mps_vbatch(const Tensor mps_data, const Tensor data_index,
   }
 }
 
-Tensor permute_sgn(const Tensor image2, const Tensor bra_tensor,
+Tensor permute_sgn(const Tensor image2, const Tensor onstate,
                                const int sorb){
-  if(bra_tensor.is_cpu()){
-    std::cout << "CPU Version has not been finished" << std::endl;
-    return torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
+  if(onstate.is_cpu()){
+    return permute_sgn_tensor_cpu(image2, onstate, sorb);
 #ifdef GPU
   } else {
-    return permute_sgn_tensor_cuda(image2, bra_tensor, sorb);
+    return permute_sgn_tensor_cuda(image2, onstate, sorb);
 #endif
   }
 }

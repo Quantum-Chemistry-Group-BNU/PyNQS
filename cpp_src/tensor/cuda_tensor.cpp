@@ -1,12 +1,4 @@
 #include "cuda_tensor.h"
-#include "ATen/core/Formatting.h"
-#include "ATen/ops/arange.h"
-#include "ATen/ops/empty.h"
-#include "c10/core/ScalarType.h"
-#include "cuda/kernel.h"
-#include "interface_magma.h"
-#include "tensor/utils_tensor.h"
-#include "torch/types.h"
 
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
@@ -14,6 +6,11 @@
 #include <cassert>
 #include <cstdint>
 #include <tuple>
+
+#include "cuda/kernel.h"
+#include "interface_magma.h"
+#include "torch/types.h"
+#include "utils_tensor.h"
 
 Tensor tensor_to_onv_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
   const int bra_len = (sorb - 1) / 64 + 1;
@@ -161,6 +158,7 @@ Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
   Tensor dc_tensor = data_index.slice(2, 2, 3); //(nbatch, nphysical)
   for (int i = 0; i < n; i++) {
     end = std::min(start + batch, data_len);
+    if(start == end) break; // slice may be is empty tensor
     batch = std::min(batch, end - start);
     dgemv_vbatch_tensor(
         mps_data, index_tensor.slice(0, start, end),

@@ -38,4 +38,6 @@ void get_olst_ab_cpu(const unsigned long *bra, int *olst, const int _len);
 void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
                   const int bra_len);
 
+int64_t permute_sgn_cpu(const int64_t *image2, const int64_t *onstate,
+                         const int size);
 }  // namespace squant

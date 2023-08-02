@@ -207,3 +207,25 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
 
   return Hmat;
 }
+
+Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor onstate,
+                              const int sorb) {
+  const int64_t nbatch = onstate.size(0);
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kInt64)
+                     .layout(onstate.layout())
+                     .device(onstate.device());
+
+  Tensor sgn_tensor = torch::empty(nbatch, options);  // Int64
+  int64_t *sgn_ptr = sgn_tensor.data_ptr<int64_t>();
+
+  const int64_t *image2_ptr = image2.to(torch::kInt64).data_ptr<int64_t>();
+  const int64_t *onstate_ptr = onstate.data_ptr<int64_t>();
+
+  for (int i = 0; i < nbatch; i++) {
+    sgn_ptr[i] = squant::permute_sgn_cpu(image2_ptr,
+                                         &onstate_ptr[i * sorb], sorb);
+  }
+
+  return sgn_tensor.to(torch::kDouble);
+}
