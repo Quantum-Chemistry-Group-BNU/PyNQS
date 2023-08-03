@@ -165,7 +165,9 @@ class VMCOptimizer():
         s += f"Python {sys.version}\n"
         s += f"numpy {np.__version__} torch {torch.__version__}\n"
         s += f"Date: {time.ctime()}\n"
+        s += f"Device: {self.device}\n"
         sys.stdout.write(s)
+        sys.stdout.flush()
 
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self):

@@ -60,3 +60,4 @@ BUG: pre_train failure (Y)
   this bug would be fixed in later version.
 2. RNNWavefunction does not 1.00E7 sample,
    "Trying to create tensor with negative dimension -2483944428352"
+3. cpp_src: size_t, int64_t and int usage confusion

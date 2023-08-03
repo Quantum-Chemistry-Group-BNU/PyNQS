@@ -170,6 +170,7 @@ def integral_pyscf(atom: str,
     else:
         mycc = cc.CCSD(mf)
         _ = mycc.kernel()
+        coeff = numpy.zeros(1)
         e_ref = mycc.e_tot
         # return (sorb, nele, mycc.e_tot)
 

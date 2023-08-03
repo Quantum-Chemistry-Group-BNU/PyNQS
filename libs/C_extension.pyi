@@ -36,9 +36,9 @@ def onv_to_tensor(bra: Tensor, sorb: int) -> Tensor:
          -1: unoccupied, 1:occupied
 
     Example:
-    >>> bra = torch.tensor([0b1111, 0, 0, 0, 0, 0, 0, 0] dtype=torch.uin8)
+    >>> bra = torch.tensor([0b1111, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8)
     >>> sorb = 8
-    >>> output = tensor_to_onv(bra, sorb)
+    >>> output = onv_to_tensor(bra, sorb)
     >>> output
     tensor([[1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0]], dtype=torch.double)
 
@@ -166,3 +166,25 @@ def spin_flip_rand(bra: Tensor, sorb: int, nele: int,
     tensor([51, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8) # bin(51): 0b00110011
     """
     ...
+
+def mps_vbatch(data: Tensor, index: Tensor, nphysical: int, batch: int = 5000) -> Tensor:
+    r"""
+    variable batch matrix and vector product using magma_dgemv_vbatch, default: batch: 5000
+
+    Args:
+        data(Tensor):
+        index(Tensor): shape: (nbatch, nphysical, 3) ->[ptr_begin, dr, dc]
+    """
+
+def permute_sgn(image2: Tensor, onstate: Tensor, sorb: int) -> Tensor:
+    r"""
+    permute sgn.
+   
+    Args:
+        image2(Tensor): [0, 1, 3, ...], shape: (sorb)
+        onstate(Tensor): [0, 1, 0, 1, ...], shape: (nbatch, sorb)
+        sorb(int):
+    
+    Returns:
+        (Tensor)
+    """

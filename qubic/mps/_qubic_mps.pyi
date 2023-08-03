@@ -5,7 +5,7 @@ from ..qtensor import Stensor2
 onstate = NewType("onstate", Tensor)
 site = NewType("site", List[Stensor2, Stensor2, Stensor2, Stensor2])
 
-class MPS:
+class MPS_c:
     """
     post module after CTNS
     """
@@ -71,8 +71,8 @@ class MPS:
         """
         ...
 
-def mps_CIcoeff(imps: MPS, iroot: int, bra: onstate, sorb: int) -> Tensor:
+def mps_CIcoeff(imps: MPS_c, iroot: int, bra: onstate, sorb: int) -> Tensor:
     ...
 
-def mps_sample(imps: MPS, iroot: int, nbatch: int, sorb: int, debug: bool = False, device=None) -> Tuple[Tensor, Tensor]:
+def mps_sample(imps: MPS_c, iroot: int, nbatch: int, sorb: int, debug: bool = False, device=None) -> Tuple[Tensor, Tensor]:
     ...

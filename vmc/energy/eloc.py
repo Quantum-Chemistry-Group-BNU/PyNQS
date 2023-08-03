@@ -53,7 +53,10 @@ def local_energy(x: Tensor,
     t2 = time.time_ns()
     # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
     with torch.no_grad():
-        psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
+        # TODO: unique comb-x, faster than unique x1
+        unique, index = torch.unique(x1.reshape(-1, sorb), dim=0, return_inverse=True)
+        psi_x1 = torch.index_select(ansatz(unique), 0, index).reshape(batch, -1) 
+        # psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
     # print(torch.cuda.mem_get_info())
     # print(prof.table())
     # exit()
