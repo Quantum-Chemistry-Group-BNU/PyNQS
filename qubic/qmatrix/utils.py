@@ -128,7 +128,7 @@ def convert_sites(onstate: ndarray, nphysical: int, data_ptr: ndarray, sites: MP
     convert sites:
 
     Args:
-        onstate(ndarray)
+        onstate(ndarray): [0, 1, 1, 0, ...]
         nphysical(int): spin orbital // 2
         data_ptr(ndarray)
         sites(MPS_py): List[List[QMatrix]], shape: (nphysical, 4)
@@ -191,12 +191,12 @@ def nbatch_convert_sites(space: ndarray | Tensor, nphysical: int, data_ptr: ndar
     Args:
         onstate(ndarray|Tensor): shape: (nbatch, sorb)
         nphysical(int): spin orbital // 2
-        data_ptr(ndarray)
+        data_ptr(ndarray): (nbatch)
         sites(MPS_py): List[List[QMatrix]], shape: (nphysical, 4)
         image2: MPS topo list, length: sorb
     
     Returns:
-        data_info(Tensor): (sorb, nphysical, 4)
+        data_info(Tensor): (sorb, nphysical, 3), last dim: (ptr, dr, dc)
         sym_break(ndarray[np.bool_]): bool array, if True, symmetry break, shape: (nbatch)
     """
     
@@ -221,11 +221,12 @@ def mps_value(onstate: Tensor,
               remove_duplicate: bool = True) -> Tensor:
 
     # TODO:
-    # 1. onstate is uint8 or int64/
+    # 1. onstate is [1, -1, -1, 1, ...], double.
     # 2. how to use mpi4py from function 'nbatch-convert'
     # 3.data_ptr: ndarray [ 0, 1, 2, 3, 4, 13, 22, 31, 40, 140]
 
-    device = onstate.device()
+    device = onstate.device
+    onstate = ((onstate + 1)//2).to(dtype=torch.int64) # convert [-1, 1] -> [0, 1]
 
     # remove duplicate, may be time consuming, uint8 maybe faster than int64
     if remove_duplicate:
@@ -238,20 +239,15 @@ def mps_value(onstate: Tensor,
     # numpy faster than torch, ~8 times, for H6 FCI-space test in CPU
     data_index, sym_break = nbatch_convert_sites(onstate, nphysical, data_ptr, sites, image2)
 
-    # numpy -> torch
-    data_index = torch.from_numpy(data_index, dtype=torch.int64).to(device)
-    sym_break = torch.from_numpy(sym_break, dtype=torch.bool).to(device)
-
-    # record symmetry conservation
-    unique_sym = unique_state[torch.logical_not(sym_break)]
-    unique_sym_break = unique_state[sym_break]
+    # record symmetry conservation, numpy -> torch
+    data_index = torch.from_numpy(data_index).to(dtype=torch.int64, device=device)
+    sym_break = torch.from_numpy(sym_break).to(dtype=torch.bool, device=device)
 
     # mps-vbatch
     unique_batch = unique_state.shape[0]
-    result = torch.empty(unique_batch, dtype=torch.double)
+    result = torch.empty(unique_batch, dtype=torch.double, device=device)
 
     # run mps_vbatch in GPU or CPU
-    data_index = torch.from_numpy(data_index).to(device=device)
     if data.is_cuda:
         # use magma dgemv-vbatch
         a = mps_vbatch(data, data_index, nphysical)
@@ -259,12 +255,12 @@ def mps_value(onstate: Tensor,
         # cpu version may be pretty slower(torch), numpy be faster.
         a = mps_vbatch_cpu(data, data_index, nphysical)
 
-    # calculate permute sgn, if image2 != range(nphysical * 2)
-    sgn = permute_sgn(torch.from_numpy(image2), unique_state, nphysical * 2)
+    # calculate permute sgn, if image2 != list(range(nphysical * 2))
+    sgn = permute_sgn(torch.tensor(image2), unique_state, nphysical * 2)
 
     # index
-    result[unique_sym] = a
-    result[unique_sym_break] = 0.0
+    result[torch.logical_not(sym_break)] = a
+    result[sym_break] = 0.0
 
     return torch.index_select(result, 0, index) * torch.index_select(sgn, 0, index)
 
@@ -316,21 +312,23 @@ def convert_mps(nphysical: int,
     data_ptr = np.empty(nphysical * 4, dtype=np.int64)
     ptr_begin = 0
 
-    for begin in range(nphysical):
-        print(f"{begin}-th site:")
+    for i in range(nphysical):
+        print(f"{i}-th site:")
         site: List[QMatrix] = []
         for j in range(4):  #00 11 01, 10
-            qmatrix = Stensor2_to_QMatrix(s[begin][j], device=device, data_type="numpy")
+            qmatrix = Stensor2_to_QMatrix(s[i][j], device=device, data_type="numpy")
             site.append(qmatrix)
             mps_raw_data.append(qmatrix.data)
-            data_ptr[begin * 4 + j] = ptr_begin
+            data_ptr[i * 4 + j] = ptr_begin
             ptr_begin += qmatrix.data.size
 
         sites.append(site)
     mps_raw_data = np.concatenate(mps_raw_data)
     image2 = mps.image2
 
-    # only mps_raw_data is Tensor
+    assert(data_type in ("torch", "numpy"))
     if data_type == "torch":
-        mps_raw_data = torch.from_numpy(mps_raw_data, device=device)
+        mps_raw_data = torch.from_numpy(mps_raw_data).to(device=device)
+        data_ptr = torch.from_numpy(data_ptr).to(device=device)
+
     return mps_raw_data, data_ptr, sites, image2

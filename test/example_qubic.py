@@ -13,9 +13,9 @@ from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string, Ente
 from utils.integral import read_integral, integral_pyscf
 
 from qubic import RunQubic
-from qubic.mps import MPS, mps_CIcoeff, mps_sample
+from qubic.mps import MPS_c, mps_CIcoeff, mps_sample
 from qubic.qtensor import Qsym, Qbond, Qinfo2, Stensor2
-from qubic.qmatrix import Qbond_to_dict, Qbond_to_qrow, Stensor2_to_QMatrix, QMatrix, permute_sgn
+from qubic.qmatrix import Qbond_to_dict, Qbond_to_qrow, Stensor2_to_QMatrix, QMatrix_torch, permute_sgn_py
 
 from libs.C_extension import onv_to_tensor
 
@@ -39,7 +39,7 @@ input_path = "/home/zbwu/Desktop/notes/cpp-python/qubic/bin/0_h6_tns/"
 
 
 with EnterDir(input_path):
-    mps = MPS()
+    mps = MPS_c()
     mps.nphysical = 6
     info ="./scratch/rcanon_isweep1.info"
     topo = "./topology/topo4"
@@ -65,11 +65,11 @@ with EnterDir(input_path):
 
 device = "cpu"
 nphysical = 6
-sites: List[List[QMatrix]] = []
+sites: List[List[QMatrix_torch]] = []
 s = mps.convert()
 for i in range(nphysical):
     print(f"{i}-th site:")
-    site: List[QMatrix] = []
+    site: List[QMatrix_torch] = []
     for j in range(4):  #00 11 01, 10
         site.append(Stensor2_to_QMatrix(s[i][j], device=device, data_type="numpy"))
         if j == 0:
@@ -81,7 +81,7 @@ image2 = mps.image2
 print(f"image2: {image2}")
 onstate = np.array([1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0])
 
-def CIcoeff(sites: List[List[QMatrix]], image2: ndarray, onstate: ndarray):
+def CIcoeff(sites: List[List[QMatrix_torch]], image2: ndarray, onstate: ndarray):
     qsym_out = np.array([0, 0])  # (N, Sz)
     vec0 = np.array([1])
     for i in reversed(range(nphysical)):
@@ -107,7 +107,7 @@ def CIcoeff(sites: List[List[QMatrix]], image2: ndarray, onstate: ndarray):
         #       qsym_in/qsym_out<-x<-qsym_i/qsym_out
         blk = sites[i][idx].sym_block(qsym_out, qsym_in)
         vec0 = blk.dot(vec0) # (out, x) * (x, in) -> (out, in)
-    sgn = permute_sgn(image2, onstate)
+    sgn = permute_sgn_py(image2, onstate)
     return vec0[0] * sgn
 # print(permute_sgn(onstate))
 
