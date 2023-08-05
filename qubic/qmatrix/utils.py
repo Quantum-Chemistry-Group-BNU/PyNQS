@@ -201,8 +201,10 @@ def nbatch_convert_sites(space: ndarray | Tensor, nphysical: int, data_ptr: ndar
     """
     
     if isinstance(space, Tensor):
-        space = space.to("cpu").numpy()
+        space: ndarray = space.to("cpu").numpy()
     data_index: List[np.ndarray] = []
+    if space.ndim == 1:
+        space = space[np.newaxis, :]
     nbatch = space.shape[0]
     sym_break = np.zeros(nbatch, dtype=np.bool_())
     for i in range(nbatch):
@@ -226,6 +228,8 @@ def mps_value(onstate: Tensor,
     # 3.data_ptr: ndarray [ 0, 1, 2, 3, 4, 13, 22, 31, 40, 140]
 
     device = onstate.device
+    if onstate.dim() == 1:
+        onstate.unsqueeze_(0) # dim = 2
     onstate = ((onstate + 1)//2).to(dtype=torch.int64) # convert [-1, 1] -> [0, 1]
 
     # remove duplicate, may be time consuming, uint8 maybe faster than int64
@@ -237,7 +241,7 @@ def mps_value(onstate: Tensor,
 
     # onstate, data_ptr, imag2: ndarray
     # numpy faster than torch, ~8 times, for H6 FCI-space test in CPU
-    data_index, sym_break = nbatch_convert_sites(onstate, nphysical, data_ptr, sites, image2)
+    data_index, sym_break = nbatch_convert_sites(unique_state, nphysical, data_ptr, sites, image2)
 
     # record symmetry conservation, numpy -> torch
     data_index = torch.from_numpy(data_index).to(dtype=torch.int64, device=device)
@@ -247,14 +251,9 @@ def mps_value(onstate: Tensor,
     unique_batch = unique_state.shape[0]
     result = torch.empty(unique_batch, dtype=torch.double, device=device)
 
-    # run mps_vbatch in GPU or CPU
-    if data.is_cuda:
-        # use magma dgemv-vbatch
-        a = mps_vbatch(data, data_index, nphysical)
-    else:
-        # cpu version may be pretty slower(torch), numpy be faster.
-        a = mps_vbatch_cpu(data, data_index, nphysical)
-
+    # run mps_vbatch in CUDA and CPU, implement use CPP.
+    # CUDA version: using magma dgemv-vbatch, CPU version is similar to mps_vbatch_cpu
+    a = mps_vbatch(data, data_index, nphysical)
     # calculate permute sgn, if image2 != list(range(nphysical * 2))
     sgn = permute_sgn(torch.tensor(image2), unique_state, nphysical * 2)
 

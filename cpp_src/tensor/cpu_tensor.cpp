@@ -208,6 +208,32 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
   return Hmat;
 }
 
+Tensor mps_vbatch_tensor_cpu(const Tensor &mps_data, const Tensor &data_index,
+                             const int nphysical) {
+  const int64_t nbatch = data_index.size(0);
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kDouble)
+                     .layout(mps_data.layout())
+                     .device(mps_data.device());
+  auto result = torch::empty(nbatch, options);
+  for (int i = 0; i < nbatch; i++) {
+    auto vec0 = torch::tensor({1.0}, options);
+    for (int j = nphysical - 1; j >= 0; j--) {
+      auto dr = data_index[i][j][1].item<int64_t>();
+      auto dc = data_index[i][j][2].item<int64_t>();
+      auto istat = data_index[i][j][0].item<int64_t>();
+      auto blk = mps_data.slice(0, istat, istat + dr * dc).reshape({dr, dc});
+      if (blk.numel() == 0) {
+        result[i] = 0.0;
+        break;
+      }
+      vec0 = blk.reshape({dc, dr}).t().matmul(vec0);  // F order
+    }
+    result[i] = vec0[0].item<double>();
+  }
+  return result;
+}
+
 Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor onstate,
                               const int sorb) {
   const int64_t nbatch = onstate.size(0);

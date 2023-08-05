@@ -61,3 +61,7 @@ BUG: pre_train failure (Y)
 2. RNNWavefunction does not 1.00E7 sample,
    "Trying to create tensor with negative dimension -2483944428352"
 3. cpp_src: size_t, int64_t and int usage confusion
+
+#---------------Notice------------------
+1. h1e and h2e may be different even though the molecular structure is the same. 
+    The phase of h1e/h2e is different (+-).

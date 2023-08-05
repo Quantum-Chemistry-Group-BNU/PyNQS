@@ -24,3 +24,6 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
 
 Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor onstate,
                                const int sorb);
+
+Tensor mps_vbatch_tensor_cpu(const Tensor &mps_data, const Tensor &data_index,
+                             const int nphysical);

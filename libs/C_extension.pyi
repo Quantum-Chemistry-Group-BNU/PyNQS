@@ -169,7 +169,8 @@ def spin_flip_rand(bra: Tensor, sorb: int, nele: int,
 
 def mps_vbatch(data: Tensor, index: Tensor, nphysical: int, batch: int = 5000) -> Tensor:
     r"""
-    variable batch matrix and vector product using magma_dgemv_vbatch, default: batch: 5000
+    variable batch matrix and vector product using magma_dgemv_vbatch or cycle, 
+            default: batch: 5000, if using cpu, batch is placeholder"
 
     Args:
         data(Tensor):
