@@ -182,7 +182,7 @@ class Sampler():
             self.psi_sample = self.psi_sample.to("cpu")
 
         # Implement MCMC-Sample in CPP functions
-        if True:
+        if False:
             example_inputs = onv_to_tensor(self.current_state, self.sorb)  # -1:unoccupied, 1: occupied
             serialized_model = torch.jit.trace(self.nqs, example_inputs)
             model_file = tempfile.mkstemp()[1]
@@ -196,14 +196,11 @@ class Sampler():
             # print(f"CPP model time: {(time.time_ns() - t0)/1.E06:.3f} ms")
         else:
             with torch.no_grad():
-                psi_current = self.nqs(uint8_to_bit(self.current_state, self.sorb))
+                psi_current = self.nqs(onv_to_tensor(self.current_state, self.sorb))
                 prob_current = psi_current.norm()**2
             for i in range(self.n_sweep):
                 psi, self.next_state = spin_flip_rand(self.current_state, self.sorb, self.nele, self.noa,
                                                       self.nob, self.seed)
-                s1 = state_to_string(self.current_state, self.sorb)
-                s2 = state_to_string(self.next_state, self.sorb)
-                # print(s1[0], s2[0], state_to_string(psi)[0])
                 with torch.no_grad():
                     psi_next = self.nqs(psi)
                     prob_next = psi_next.norm()**2
