@@ -132,8 +132,8 @@ def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
     # the '_gen_occslst' is pretty slow than 'combinations', and only is used exact optimization testing.
     if x == sorb:
         from pyscf import fci 
-        noA_lst = fci.cistring._gen_occslst([i for i in range(0, x, 2)], noa)
-        noB_lst = fci.cistring._gen_occslst([i for i in range(1, x, 2)], nob)
+        noA_lst = fci.cistring.gen_occslst([i for i in range(0, x, 2)], noa)
+        noB_lst = fci.cistring.gen_occslst([i for i in range(1, x, 2)], nob)
     else:
         noA_lst = list(itertools.combinations([i for i in range(0, x, 2)], noa))
         noB_lst = list(itertools.combinations([i for i in range(1, x, 2)], nob))
