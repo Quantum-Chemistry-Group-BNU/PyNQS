@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from typing import List, Tuple, NewType
+from typing import List, Tuple, NewType, Union
 from torch import nn, Tensor
 from numpy import ndarray
 
@@ -12,8 +12,8 @@ from qubic.qmatrix import MPS_py, nbatch_convert_sites, mps_value
 class MPSWavefunction(nn.Module):
 
     def __init__(self,
-                 data: Tensor|ndarray,
-                 data_ptr: Tensor|ndarray,
+                 data: Union[Tensor, ndarray],
+                 data_ptr: Union[Tensor, ndarray],
                  image2: List[int],
                  sites: MPS_py,
                  nphysical: int,
@@ -41,7 +41,7 @@ class MPSWavefunction(nn.Module):
         # void getting an empty parameter list, no meaning
         self.data_tmp = nn.Parameter(torch.rand(self.nphysical, device=device))
 
-    def convert_sites(self, onstate: Tensor, dtype="numpy") -> Tuple[ndarray | Tensor, ndarray | Tensor]:
+    def convert_sites(self, onstate: Tensor, dtype="numpy") -> Tuple[Union[Tensor, ndarray], Union[Tensor, ndarray]]:
         assert (dtype in ("numpy", "torch"))
         data_info, sym_break = nbatch_convert_sites(onstate, self.nphysical, self.data_ptr, self.sites,
                                                     self.image2)

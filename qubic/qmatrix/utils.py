@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from typing import List, Tuple, NewType, TypeVar
+from typing import List, Tuple, NewType, TypeVar, Union
 from numpy import ndarray
 from torch import Tensor
 
@@ -182,7 +182,8 @@ def convert_sites(onstate: ndarray, nphysical: int, data_ptr: ndarray, sites: MP
     return data_info, sym_break
 
 
-def nbatch_convert_sites(space: ndarray | Tensor, nphysical: int, data_ptr: ndarray, sites: MPS_py,
+# FIXME: python 3.10 new feature "|"
+def nbatch_convert_sites(space: Union[ndarray, Tensor], nphysical: int, data_ptr: ndarray, sites: MPS_py,
                          image2: List[int]) -> Tuple[ndarray, ndarray[np.bool_]]:
     r"""
     
@@ -290,7 +291,7 @@ def convert_mps(nphysical: int,
                 info: str = None,
                 topo: str = None,
                 data_type="numpy",
-                device="cpu") -> Tuple[ndarray | Tensor, ndarray, MPS_py, List[int]]:
+                device="cpu") -> Tuple[Union[ndarray, Tensor], ndarray, MPS_py, List[int]]:
 
     # info and topo file is relative path
     if info is None:
