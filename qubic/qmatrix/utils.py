@@ -312,7 +312,6 @@ def convert_mps(nphysical: int,
     ptr_begin = 0
 
     for i in range(nphysical):
-        print(f"{i}-th site:")
         site: List[QMatrix] = []
         for j in range(4):  #00 11 01, 10
             qmatrix = Stensor2_to_QMatrix(s[i][j], device=device, data_type="numpy")

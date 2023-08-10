@@ -8,7 +8,7 @@ from torch import Tensor, nn
 from memory_profiler import profile
 from line_profiler import LineProfiler
 
-from libs.C_extension import get_hij_torch, get_comb_tensor
+from libs.C_extension import get_hij_torch, get_comb_tensor, onv_to_tensor
 from utils import check_para
 
 print = partial(print, flush=True)
@@ -44,7 +44,8 @@ def local_energy(x: Tensor,
     t0 = time.time_ns()
 
     # x1: [batch, comb, sorb], comb_x: [batch, comb, bra_len]
-    comb_x, x1 = get_comb_tensor(x, sorb, nele, noa, nob, True)
+    comb_x, _ = get_comb_tensor(x, sorb, nele, noa, nob, False)
+    bra_len: int = comb_x.shape[2]
 
     # calculate matrix <x|H|x'>
     t1 = time.time_ns()
@@ -53,15 +54,16 @@ def local_energy(x: Tensor,
     t2 = time.time_ns()
     # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
     with torch.no_grad():
-        # TODO: unique comb-x, faster than unique x1
-        unique, index = torch.unique(x1.reshape(-1, sorb), dim=0, return_inverse=True)
-        psi_x1 = torch.index_select(ansatz(unique), 0, index).reshape(batch, -1) 
+        # XXX: unique comb-x, faster than unique x1
+        unique, index = torch.unique(comb_x.reshape(-1, bra_len), dim=0, return_inverse=True)
+        unique_x1 = onv_to_tensor(unique, sorb)
+        psi_x1 = torch.index_select(ansatz(unique_x1), 0, index).reshape(batch, -1) 
         # psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
     # print(torch.cuda.mem_get_info())
     # print(prof.table())
     # exit()
 
-    if x1.is_cuda:
+    if x.is_cuda:
         torch.cuda.synchronize(h1e.device)
     t3 = time.time_ns()
 
@@ -76,6 +78,6 @@ def local_energy(x: Tensor,
     if verbose:
         print(f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " +
               f"nqs time: {delta2:.3E} ms")
-    del x1, comb_hij, comb_x
+    del comb_hij, comb_x, index, unique_x1, unique
 
     return eloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
