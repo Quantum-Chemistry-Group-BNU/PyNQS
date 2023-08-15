@@ -231,6 +231,7 @@ def mps_value(onstate: Tensor,
         onstate.unsqueeze_(0) # dim = 2
     onstate = ((onstate + 1)//2).to(dtype=torch.int64) # convert [-1, 1] -> [0, 1]
 
+    print(onstate.shape)
     # remove duplicate, may be time consuming, uint8 maybe faster than int64
     # duplicated states have been removed in calculating local energy, so default False
     if remove_duplicate:
@@ -248,7 +249,7 @@ def mps_value(onstate: Tensor,
     sym_break = torch.from_numpy(sym_break).to(dtype=torch.bool, device=device)
 
     # remove symmetry break index, memory may be discontinuous
-    data_index = data_index[torch.logical_not[sym_break]]
+    data_index = data_index[torch.logical_not(sym_break)]
 
     # mps-vbatch
     unique_batch = unique_state.shape[0]
