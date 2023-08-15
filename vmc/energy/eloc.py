@@ -53,8 +53,8 @@ def local_energy(x: Tensor,
 
     t2 = time.time_ns()
     # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
+    # FIXME: What time remove duplicate onstate, memory consuming.
     with torch.no_grad():
-        # XXX: unique comb-x, faster than unique x1
         unique, index = torch.unique(comb_x.reshape(-1, bra_len), dim=0, return_inverse=True)
         unique_x1 = onv_to_tensor(unique, sorb)
         psi_x1 = torch.index_select(ansatz(unique_x1), 0, index).reshape(batch, -1) 

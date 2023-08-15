@@ -338,7 +338,7 @@ class ElectronInfo:
             f"    h2e shape: {self.h2e.shape[0]}\n" +
             f"    ci shape:{tuple(self.ci_space.shape)}\n" +
             f"    ecore: {self.ecore:.8f}\n" +
-            f"    sorb: {self.sorb}, nele: {self.sorb}\n" +
+            f"    sorb: {self.sorb}, nele: {self.nele}\n" +
             f"    noa: {self.noa}, nob: {self.nob}\n" +
             f"    nva: {self.nva}, nvb: {self.nvb}\n" +
             f"    Singles + Doubles: {self.n_SinglesDoubles}\n" +

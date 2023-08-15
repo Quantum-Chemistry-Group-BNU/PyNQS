@@ -130,12 +130,12 @@ def convert_sites(onstate: ndarray, nphysical: int, data_ptr: ndarray, sites: MP
     Args:
         onstate(ndarray): [0, 1, 1, 0, ...]
         nphysical(int): spin orbital // 2
-        data_ptr(ndarray)
+        data_ptr(ndarray): the start pointer of the very site data, shape: (nphysical * 4).
         sites(MPS_py): List[List[QMatrix]], shape: (nphysical, 4)
         image2: MPS topo list, length: sorb
     
     Returns:
-        data_info(Tensor): (nphysical, 4)
+        data_info(Tensor): (nphysical, 3)
         sym_break(bool): True, symmetry break.
     """
     # (data_ptr, dr, rc)
@@ -182,7 +182,6 @@ def convert_sites(onstate: ndarray, nphysical: int, data_ptr: ndarray, sites: MP
     return data_info, sym_break
 
 
-# FIXME: python 3.10 new feature "|"
 def nbatch_convert_sites(space: Union[ndarray, Tensor], nphysical: int, data_ptr: ndarray, sites: MPS_py,
                          image2: List[int]) -> Tuple[ndarray, ndarray[np.bool_]]:
     r"""
@@ -192,7 +191,7 @@ def nbatch_convert_sites(space: Union[ndarray, Tensor], nphysical: int, data_ptr
     Args:
         onstate(ndarray|Tensor): shape: (nbatch, sorb)
         nphysical(int): spin orbital // 2
-        data_ptr(ndarray): (nbatch)
+        data_ptr(ndarray): the start pointer of the very site data, shape: (nphysical * 4).
         sites(MPS_py): List[List[QMatrix]], shape: (nphysical, 4)
         image2: MPS topo list, length: sorb
     
@@ -221,9 +220,8 @@ def mps_value(onstate: Tensor,
               data_ptr: ndarray,
               sites: MPS_py,
               image2: List[int],
-              remove_duplicate: bool = True) -> Tensor:
+              remove_duplicate: bool = False) -> Tensor:
 
-    # TODO:
     # 1. onstate is [1, -1, -1, 1, ...], double.
     # 2. how to use mpi4py from function 'nbatch-convert'
     # 3.data_ptr: ndarray [ 0, 1, 2, 3, 4, 13, 22, 31, 40, 140]
@@ -234,6 +232,7 @@ def mps_value(onstate: Tensor,
     onstate = ((onstate + 1)//2).to(dtype=torch.int64) # convert [-1, 1] -> [0, 1]
 
     # remove duplicate, may be time consuming, uint8 maybe faster than int64
+    # duplicated states have been removed in calculating local energy, so default False
     if remove_duplicate:
         unique_state, index = torch.unique(onstate, dim=0, return_inverse=True)
     else:
@@ -248,13 +247,20 @@ def mps_value(onstate: Tensor,
     data_index = torch.from_numpy(data_index).to(dtype=torch.int64, device=device)
     sym_break = torch.from_numpy(sym_break).to(dtype=torch.bool, device=device)
 
+    # remove symmetry break index, memory may be discontinuous
+    data_index = data_index[torch.logical_not[sym_break]]
+
     # mps-vbatch
     unique_batch = unique_state.shape[0]
     result = torch.empty(unique_batch, dtype=torch.double, device=device)
 
     # run mps_vbatch in CUDA and CPU, implement use CPP.
     # CUDA version: using magma dgemv-vbatch, CPU version is similar to mps_vbatch_cpu
-    a = mps_vbatch(data, data_index, nphysical)
+    if data_index.numel() != 0:
+        a = mps_vbatch(data, data_index, nphysical)
+    else:
+        a = 0.0
+
     # calculate permute sgn, if image2 != list(range(nphysical * 2))
     sgn = permute_sgn(torch.tensor(image2), unique_state, nphysical * 2)
 
@@ -262,6 +268,7 @@ def mps_value(onstate: Tensor,
     result[torch.logical_not(sym_break)] = a
     result[sym_break] = 0.0
 
+    del a, sym_break
     return torch.index_select(result, 0, index) * torch.index_select(sgn, 0, index)
 
 
@@ -291,7 +298,7 @@ def convert_mps(nphysical: int,
                 info: str = None,
                 topo: str = None,
                 data_type="numpy",
-                device="cpu") -> Tuple[Union[ndarray, Tensor], ndarray, MPS_py, List[int]]:
+                device="cpu") -> Tuple[Union[ndarray, Tensor], ndarray, MPS_py, List[int], MPS_c]:
 
     # info and topo file is relative path
     if info is None:
@@ -330,4 +337,4 @@ def convert_mps(nphysical: int,
         mps_raw_data = torch.from_numpy(mps_raw_data).to(device=device)
         data_ptr = torch.from_numpy(data_ptr).to(device=device)
 
-    return mps_raw_data, data_ptr, sites, image2
+    return mps_raw_data, data_ptr, sites, image2, mps
