@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <algorithm>
 
-
 #include "excitation_cuda.h"
 #include "hamiltonian_cuda.h"
 #include "kernel.h"
@@ -42,7 +41,7 @@ __global__ void onv_to_tensor_kernel(double *comb, const unsigned long *bra,
   if (idn >= m)
     return;
   size_t idm = idn / sorb;
-  // TODO: the cost of launching thread.
+  // FIXME: the cost of launching thread. thread > 2**31
   squant::get_zvec_cuda(&bra[idm * bra_len], &comb[idm * sorb], sorb, bra_len,
                         idn % sorb);
 }
@@ -54,6 +53,7 @@ __host__ void squant::onv_to_tensor_cuda(double *comb, const unsigned long *bra,
                                          const int nbatch, const size_t numel) {
   dim3 blockDim(1024);
   dim3 gridDim((numel + blockDim.x - 1) / blockDim.x);
+  // FIXME: numel > 2*
   onv_to_tensor_kernel<<<gridDim, blockDim>>>(comb, bra, sorb, bra_len, numel);
 }
 

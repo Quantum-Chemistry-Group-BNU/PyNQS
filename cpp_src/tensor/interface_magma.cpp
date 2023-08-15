@@ -1,5 +1,6 @@
 #include "interface_magma.h"
 
+// FIXME: memory leak, where?
 void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
                          const Tensor &dr, const Tensor &dc,
                          const int nphysical, const int64_t nbatch,
@@ -69,7 +70,8 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
   magma_int_t *dev_ldd_A = dev_n + (nbatch + 1);
   magma_int_t *dev_inc_X = dev_ldd_A + (nbatch + 1);
   magma_int_t *dev_inc_Y = dev_inc_X + (nbatch + 1);
-  auto ones_ptr = torch::ones(nbatch + 1, options_int64_t).data_ptr<int64_t>();
+  auto ones = torch::ones(nbatch + 1, options_int64_t);
+  auto ones_ptr = ones.data_ptr<int64_t>();
   cudaMemcpy(dev_inc_X, ones_ptr, nbatch * sizeof(magma_int_t),
              cudaMemcpyDeviceToDevice);
   cudaMemcpy(dev_inc_Y, ones_ptr, nbatch * sizeof(magma_int_t),
@@ -115,7 +117,6 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
                cudaMemcpyDeviceToDevice);
     cudaMemcpy(dev_ldd_A, dr_site_ptr, sizeof(magma_int_t) * nbatch,
                cudaMemcpyDeviceToDevice);
-
     if (debug) {
       print_tensor<int64_t>(
           torch::from_blob(dev_ldd_A, nbatch, options_int64_t), nbatch,
@@ -158,7 +159,7 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
     }
 
     // swap vector X and Y; Y = alpha * A * x + beta * y, x = y;
-    // TODO: how to accumulate slower
+    // FIXME: how to accumulate slower
     cudaMemcpy(dX_array_data, dY_array_data,
                sizeof(double) * max_dr_dc * nbatch, cudaMemcpyDeviceToDevice);
     if (debug) {
@@ -180,4 +181,7 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
   }
   cudaFree(dev_i_begin);
   cudaFree(dev_d_begin);
+  cudaFree(dev_data_begin);
+  ones.reset();
+  index_v.reset();
 }

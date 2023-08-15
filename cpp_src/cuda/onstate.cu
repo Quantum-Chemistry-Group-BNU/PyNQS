@@ -17,13 +17,13 @@ __device__ void diff_type_cuda(const unsigned long *bra,
   }
 }
 
-__device__ int parity_cuda(const unsigned long *bra, const int n) {
+__device__ int parity_cuda(const unsigned long *bra, const int sorb) {
   int p = 0;
-  for (int i = 0; i < n / 64; i++) {
+  for (int i = 0; i < sorb / 64; i++) {
     p ^= get_parity_cuda(bra[i]);
   }
-  if (n % 64 != 0) {
-    p ^= get_parity_cuda((bra[n / 64] & get_ones_cuda(n % 64)));
+  if (sorb % 64 != 0) {
+    p ^= get_parity_cuda((bra[sorb / 64] & get_ones_cuda(sorb % 64)));
   }
   return -2 * p + 1;
 }
@@ -92,13 +92,13 @@ __device__ void get_olst_ab_cuda(const unsigned long *bra, int *olst,
   }
 }
 
-__device__ void get_vlst_cuda(const unsigned long *bra, int *vlst, const int n,
+__device__ void get_vlst_cuda(const unsigned long *bra, int *vlst, const int sorb,
                               const int _len) {
   int ic = 0;
   unsigned long tmp;
   for (int i = 0; i < _len; i++) {
     // be careful about the virtual orbital case
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cuda(n % 64));
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cuda(sorb % 64));
     while (tmp != 0) {
       int j = __ctzl(tmp);
       vlst[ic] = i * 64 + j;
@@ -109,14 +109,14 @@ __device__ void get_vlst_cuda(const unsigned long *bra, int *vlst, const int n,
 }
 
 __device__ void get_vlst_ab_cuda(const unsigned long *bra, int *vlst,
-                                 const int n, const int _len) {
+                                 const int sorb, const int _len) {
   //abab
   int ic = 0;
   int idb = 0;
   int ida = 0;
   unsigned long tmp;
   for (int i = 0; i < _len; i++) {
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cuda(n % 64));
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cuda(sorb % 64));
     while (tmp != 0) {
       int j = __ctzl(tmp);
       int s = i * 64 + j;
