@@ -22,8 +22,14 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
                        const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                        const int sorb, const int nele);
 
-Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor onstate,
+Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor &onstate,
                                const int sorb);
 
 Tensor mps_vbatch_tensor_cpu(const Tensor &mps_data, const Tensor &data_index,
                              const int nphysical);
+
+tuple_tensor_2d nbatch_convert_sites_cpu(
+    Tensor &onstate, const int nphysical, const Tensor &data_index,
+    const Tensor &qrow_qcol, const Tensor &qrow_qcol_index,
+    const Tensor &qrow_qcol_shape, const Tensor &ista, const Tensor &ista_index,
+    const Tensor image2);

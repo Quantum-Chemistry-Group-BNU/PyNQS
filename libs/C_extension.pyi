@@ -47,7 +47,7 @@ def onv_to_tensor(bra: Tensor, sorb: int) -> Tensor:
 
 
 def get_comb_tensor(bra: Tensor, sorb: int, nele: int, 
-                    noA: int, noB: int, flag_bit: bool) -> Tuple[Tensor, Tensor]:
+                    noA: int, noB: int, flag_bit: bool = False) -> Tuple[Tensor, Tensor]:
     r"""Compute all Singles and Doubles excitation for the given bra tensor
      Singles and Doubles excitation: ncomb = nSa + nSb + nDaa + nDbb + nDab + 1
     nSa = noA * nvA, nSb = noB * nvB

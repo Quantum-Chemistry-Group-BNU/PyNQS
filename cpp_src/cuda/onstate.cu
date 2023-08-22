@@ -179,4 +179,128 @@ __device__ int64_t permute_sgn_cuda(const int64_t *image2,
   return -2 * sgn + 1;
 }
 
+__device__ inline void binary_search_cuda(const int64_t *arr,
+                                          const int64_t *target,
+                                          const int64_t length, int64_t *result,
+                                          const int stride = 4) {
+  int64_t left = 0;
+  int64_t right = length / stride - 1;
+
+  int64_t value_1 = -1;
+  int64_t value_2 = -1;
+
+  while (left <= right) {
+    int64_t mid = left + (right - left) / 2;
+    int64_t mid_index = mid * stride;
+    int64_t mid_x1 = arr[mid_index];
+    int64_t mid_x2 = arr[mid_index + 1];
+
+    if (mid_x1 == target[0] && mid_x2 == target[1]) {
+      value_1 = arr[mid_index + 2];
+      value_2 = arr[mid_index + 3];
+      break;
+    } else if (mid_x1 < target[0] ||
+               (mid_x1 == target[0] && mid_x2 < target[1])) {
+      left = mid + 1;
+    } else {
+      right = mid - 1;
+    }
+  }
+  result[0] = value_1;
+  result[1] = value_2;
+}
+
+__device__ void sites_sym_index(const int64_t *onstate, const int nphysical,
+                                const int64_t *data_index,
+                                const int64_t *qrow_qcol,
+                                const int64_t *qrow_qcol_index,
+                                const int64_t *qrow_qcol_shape,
+                                const int64_t *ista, const int64_t *ista_index,
+                                const int64_t *image2, int64_t *data_info, 
+                                bool *sym_array) {
+  int64_t qsym_out[2] = {0, 0};
+  int64_t qsym_in[2] = {0, 0};
+  int64_t qsym_n[2] = {0, 0};
+  bool qsym_break = false;
+
+  // binary search
+  int64_t begin = 0;
+  int64_t end = 0;
+  int64_t length = 0;
+  int64_t result[2] = {0, 0};
+  for (int i = nphysical - 1; i >= 0; i--){
+    const int64_t na = onstate[image2[2 * i]];
+    const int64_t nb = onstate[image2[2 * i + 1]];
+
+    int64_t idx = 0;
+    if (na == 0 and nb == 0) {  // 00
+      idx = 0;
+      qsym_n[0] = 0;
+      qsym_n[1] = 0;
+    } else if (na == 1 and nb == 1) {  // 11
+      idx = 1;
+      qsym_n[0] = 2;
+      qsym_n[1] = 0;
+    } else if (na == 1 and nb == 0) {  // a
+      idx = 2;
+      qsym_n[0] = 1;
+      qsym_n[1] = 1;
+
+    } else if (na == 0 and nb == 1) {  // b
+      idx = 3;
+      qsym_n[0] = 1;
+      qsym_n[1] = -1;
+    }
+    qsym_in[0] = qsym_out[0];
+    qsym_in[1] = qsym_out[1];
+    qsym_out[0] = qsym_in[0] + qsym_n[0];
+    qsym_out[1] = qsym_in[1] + qsym_n[1];
+
+    begin = qrow_qcol_index[i];
+    end = qrow_qcol_index[i + 1];
+    length = (end - begin) * 4;
+    // XXX: dose not use template? compilation way error??
+    binary_search_cuda(&qrow_qcol[begin * 4], qsym_out, length, result);
+    int64_t dr = result[0];
+    int64_t qi = result[1];
+
+    // printf("(%ld, %ld, %ld)-1\n", begin, end, length);
+    // for(int i = 0; i < length ; i++){
+    //   printf("%ld ", qrow_qcol[begin * 4 + i]);
+    // }
+    // printf("\n");
+
+    begin = qrow_qcol_index[i + 1];
+    end = qrow_qcol_index[i + 2];
+    length = (end - begin) * 4;
+    binary_search_cuda(&qrow_qcol[begin * 4], qsym_in, length, result);
+    int64_t dc = result[0];
+    int64_t qj = result[1];
+
+    // printf("(%ld, %ld, %ld)-2\n", begin, end, length);
+    // for(int i = 0; i < length ; i++){
+    //   printf("%ld ", qrow_qcol[begin * 4 + i]);
+    // }
+    // printf("\n");
+    // printf("(%ld %ld), (%ld, %ld)\n", dr, dc, qi, qj);
+
+    int64_t data_idx = data_index[i * 4 + idx];
+    // [qi, qj], shape: (qrow, qcol)
+    int64_t offset = qi * qrow_qcol_shape[i + 1] + qj;
+    // ista[qi, qj]
+    int ista_value = ista[ista_index[i * 4 + idx] + offset]; 
+    if (qi == -1 or qj == -1 or ista_value == -1) {
+      qsym_break = true;
+      break;
+    } else {
+      data_idx += ista_value;
+    }
+
+    data_info[i * 3 + 0] = data_idx;
+    data_info[i * 3 + 1] = dr;
+    data_info[i * 3 + 2] = dc;
+  }
+  sym_array[0] = qsym_break;
+}
+
 } // namespace squant

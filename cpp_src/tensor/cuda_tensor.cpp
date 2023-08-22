@@ -170,7 +170,7 @@ Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
   return result;
 }
 
-Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor onstate,
+Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
                                const int sorb) {
   /**
   image2: [0, 1, 2, ....], (sorb)\
@@ -196,4 +196,50 @@ Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor onstate,
                                  sorb, nbatch);
 
   return sgn_tensor.to(torch::kDouble);
+}
+
+tuple_tensor_2d nbatch_convert_sites_cuda(Tensor &onstate, const int nphysical,
+                         const Tensor &data_index, const Tensor &qrow_qcol,
+                         const Tensor &qrow_qcol_index,
+                         const Tensor &qrow_qcol_shape, const Tensor &ista,
+                         const Tensor &ista_index, const Tensor image2){
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kInt64)
+                     .layout(onstate.layout())
+                     .device(onstate.device());
+
+  int64_t dim = onstate.dim();
+  if (dim == 1) {
+    onstate = onstate.unsqueeze(0);  // 1D -> 2D
+  }
+  int64_t nbatch = onstate.size(0);
+
+  Tensor data_info = torch::zeros({nbatch, nphysical, 3}, options);
+  Tensor sym_break = torch::zeros(
+      nbatch,
+      torch::TensorOptions().dtype(torch::kBool).device(onstate.device()));
+  int64_t *data_info_ptr = data_info.data_ptr<int64_t>();
+  bool *sym_break_ptr = sym_break.data_ptr<bool>();
+
+  const int64_t *onstate_ptr = onstate.data_ptr<int64_t>();
+  const int64_t *data_index_ptr = data_index.data_ptr<int64_t>();
+
+  const int64_t *image2_ptr =
+      image2.to(torch::kInt64).to(onstate.device()).data_ptr<int64_t>();
+
+  // qrow/qcol
+  const int64_t *qrow_qcol_ptr = qrow_qcol.data_ptr<int64_t>();
+  const int64_t *qrow_qcol_shape_ptr = qrow_qcol_shape.data_ptr<int64_t>();
+  const int64_t *qrow_qcol_index_ptr = qrow_qcol_index.data_ptr<int64_t>();
+
+  // ista
+  const int64_t *ista_ptr = ista.data_ptr<int64_t>();
+  const int64_t *ista_index_ptr = ista_index.data_ptr<int64_t>();
+
+  convert_sites_cuda(onstate_ptr, nphysical, data_index_ptr,
+                     qrow_qcol_ptr, qrow_qcol_index_ptr,
+                     qrow_qcol_shape_ptr, ista_ptr, ista_index_ptr, image2_ptr,
+                     nbatch, data_info_ptr, sym_break_ptr);
+  // torch::cuda::synchronize();
+  return std::make_tuple(data_info, sym_break);
 }

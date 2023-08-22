@@ -7,6 +7,7 @@
 #include "hamiltonian_cuda.h"
 #include "kernel.h"
 #include "onstate_cuda.h"
+#include "cuda_handle_error.h" // gcc 13 error, compile using gcc 11
 
 #include "../common/default.h"
 
@@ -55,6 +56,8 @@ __host__ void squant::onv_to_tensor_cuda(double *comb, const unsigned long *bra,
   dim3 gridDim((numel + blockDim.x - 1) / blockDim.x);
   // FIXME: numel > 2*
   onv_to_tensor_kernel<<<gridDim, blockDim>>>(comb, bra, sorb, bra_len, numel);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 __global__ void get_Hij_kernel_2D(double *Hmat, const unsigned long *bra,
@@ -97,6 +100,8 @@ __host__ void squant::get_Hij_3D_cuda(double *Hmat, const unsigned long *bra,
                (ncomb + blockDim.y - 1) / blockDim.y);
   get_Hij_kernel_3D<<<gridDim, blockDim>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
                                            bra_len, nbatch, ncomb);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 // <i|H|j> matrix, i,j: 2D (nbatch, onv)
@@ -112,6 +117,8 @@ __host__ void squant::get_Hij_2D_cuda(double *Hmat, const unsigned long *bra,
                (m + blockDim.y - 1) / blockDim.y);
   get_Hij_kernel_2D<<<gridDim, blockDim>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
                                            bra_len, n, m);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 __global__ void get_merged_ovlst_kernel(const unsigned long *bra, int *merged,
@@ -131,6 +138,8 @@ __host__ void squant::get_merged_cuda(const unsigned long *bra, int *merged,
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
   get_merged_ovlst_kernel<<<gridDim, blockDim>>>(bra, merged, sorb, nele,
                                                  bra_len, nbatch);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 __global__ void get_comb_SD_kernel(unsigned long *comb, double *comb_bit,
@@ -171,6 +180,8 @@ __host__ void squant::get_comb_cuda(unsigned long *comb,
                (ncomb + blockDim.y - 1) / blockDim.y);
   get_comb_SD_kernel<<<gridDim, blockDim>>>(comb, merged_ovlst, sorb, bra_len,
                                             noA, noB, nbatch, ncomb);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 // get all Singles-Doubles and states(3D: nbatch, ncomb, sorb) for given onv(2D)
@@ -186,6 +197,8 @@ __host__ void squant::get_comb_cuda(double *comb_bit, unsigned long *comb,
                (ncomb + blockDim.y - 1) / blockDim.y);
   get_comb_SD_kernel<<<gridDim, blockDim>>>(comb, comb_bit, merged_ovlst, sorb,
                                             bra_len, noA, noB, nbatch, ncomb);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 __global__ void permuate_sgn_kernel(const int64_t *image2,
@@ -209,7 +222,8 @@ __host__ void squant::permute_sng_batch_cuda(const int64_t *image2,
   dim3 blockDim(1024);
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
   permuate_sgn_kernel<<<gridDim, blockDim>>>(image2, onstate, index, sgn, size, nbatch);
-
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 __global__ void array_index_kernel(double *data_ptr, int64_t *index,
@@ -229,6 +243,8 @@ __host__ void array_index_cuda(double *data_ptr, int64_t *index, int64_t length,
   dim3 gridDim((length + blockDim.x - 1) / blockDim.x);
   array_index_kernel<<<gridDim, blockDim>>>(data_ptr, index, length, offset,
                                             ptr_array);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 __global__ void get_array_kernel(double *data_ptr, int64_t *index,
@@ -246,6 +262,8 @@ __host__ void get_array_cuda(double *data_ptr, int64_t *index, int64_t length,
   dim3 gridDim((length + blockDim.x - 1) / blockDim.x);
   get_array_kernel<<<gridDim, blockDim>>>(data_ptr, index, length, offset,
                                           array);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 __global__ void ones_array_kernel(double *data_ptr, int64_t length,
@@ -261,6 +279,8 @@ __host__ void ones_array_cuda(double *data_ptr, int64_t length, int64_t stride,
   dim3 blockDim(1024);
   dim3 gridDim((length + blockDim.x - 1) / blockDim.x);
   ones_array_kernel<<<gridDim, blockDim>>>(data_ptr, length, stride, offset);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }
 
 __global__ void print_ptr_ptr_kernel(double *data_ptr, double **ptr_array,
@@ -307,4 +327,43 @@ __global__ void swap_pointers_kernel(double **ptr_ptr, double **ptr_ptr_1) {
 
 __host__ void swap_pointers_cuda(double **ptr_ptr, double **ptr_ptr_1) {
   swap_pointers_kernel<<<1, 1>>>(ptr_ptr, ptr_ptr_1);
+}
+
+__global__ void convert_sites_kernel(const int64_t *onstate, const int nphysical,
+                                 const int64_t *data_index,
+                                 const int64_t *qrow_qcol,
+                                 const int64_t *qrow_qcol_index,
+                                 const int64_t *qrow_qcol_shape,
+                                 const int64_t *ista, const int64_t *ista_index,
+                                 const int64_t *image2, const int64_t nbatch,
+                                 int64_t *data_info,
+                                 bool *sym_array){
+  int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idn >= nbatch) 
+    return;
+  // onstate: [nbatch, nphysical * 2]
+  // data_info [nbatch, nphysical, 3]
+  squant::sites_sym_index(&onstate[idn * nphysical * 2], nphysical, data_index, qrow_qcol,
+                          qrow_qcol_index, qrow_qcol_shape, ista, ista_index,
+                          image2, &data_info[idn * nphysical * 3], &sym_array[idn]);
+  }
+
+
+__host__ void convert_sites_cuda(const int64_t *onstate, const int nphysical,
+                                 const int64_t *data_index,
+                                 const int64_t *qrow_qcol,
+                                 const int64_t *qrow_qcol_index,
+                                 const int64_t *qrow_qcol_shape,
+                                 const int64_t *ista, const int64_t *ista_index,
+                                 const int64_t *image2, const int64_t nbatch,
+                                 int64_t *data_info,
+                                 bool *sym_array) {
+  // XXX: how to allocate blockDim???, register overflow if blockDim = 1024
+  dim3 blockDim(256);
+  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
+  convert_sites_kernel<<<gridDim, blockDim>>>(
+      onstate, nphysical, data_index, qrow_qcol, qrow_qcol_index,
+      qrow_qcol_shape, ista, ista_index, image2, nbatch, data_info, sym_array);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
 }

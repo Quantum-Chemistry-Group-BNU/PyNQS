@@ -69,4 +69,12 @@ __device__ int64_t permute_sgn_cuda(const int64_t *image2,
                                     int64_t *index,
                                     const int size);
 
+__device__ void sites_sym_index(const int64_t *onstate, const int nphysical,
+                                const int64_t *data_index,
+                                const int64_t *qrow_qcol,
+                                const int64_t *qrow_qcol_index,
+                                const int64_t *qrow_qcol_shape,
+                                const int64_t *ista, const int64_t *ista_index,
+                                const int64_t *image2,
+                                int64_t *data_info, bool *sym_array);
 }  // namespace squant

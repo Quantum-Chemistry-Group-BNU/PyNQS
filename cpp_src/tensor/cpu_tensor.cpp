@@ -234,7 +234,7 @@ Tensor mps_vbatch_tensor_cpu(const Tensor &mps_data, const Tensor &data_index,
   return result;
 }
 
-Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor onstate,
+Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor &onstate,
                               const int sorb) {
   const int64_t nbatch = onstate.size(0);
   auto options = torch::TensorOptions()
@@ -254,4 +254,157 @@ Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor onstate,
   }
 
   return sgn_tensor.to(torch::kDouble);
+}
+
+template <typename IntType>
+std::tuple<IntType, IntType> binary_search_1d(const IntType *arr,
+                                              const IntType *target,
+                                              const IntType length,
+                                              const int stride = 4) {
+  IntType left = 0;
+  IntType right = length / stride - 1;
+
+  while (left <= right) {
+    IntType mid = left + (right - left) / 2;
+    IntType mid_index = mid * stride;
+    IntType mid_x1 = arr[mid_index];
+    IntType mid_x2 = arr[mid_index + 1];
+
+    if (mid_x1 == target[0] && mid_x2 == target[1]) {
+      return std::make_tuple(arr[mid_index + 2], arr[mid_index + 3]);
+    } else if (mid_x1 < target[0] ||
+               (mid_x1 == target[0] && mid_x2 < target[1])) {
+      left = mid + 1;
+    } else {
+      right = mid - 1;
+    }
+  }
+
+  return std::make_tuple(static_cast<IntType>(-1), static_cast<IntType>(-1));
+}
+
+bool convert_sites_cpu(const Tensor &onstate, const int nphysical,
+                       const Tensor &data_index, const Tensor &qrow_qcol,
+                       const Tensor &qrow_qcol_index,
+                       const Tensor &qrow_qcol_shape, const Tensor &ista,
+                       const Tensor &ista_index, const Tensor image2,
+                       int64_t *data_info) {
+  int64_t qsym_out[2] = {0, 0};
+  int64_t qsym_in[2] = {0, 0};
+  int64_t qsym_n[2] = {0, 0};
+  bool qsym_break = false;
+
+  const int64_t *onstate_ptr = onstate.data_ptr<int64_t>();
+  const int64_t *image2_ptr = image2.to(torch::kInt64).data_ptr<int64_t>();
+  const int64_t *data_ptr = data_index.data_ptr<int64_t>();
+
+  // qrow/qcol
+  const int64_t *qrow_qcol_ptr = qrow_qcol.data_ptr<int64_t>();
+  const int64_t *qrow_qcol_shape_ptr = qrow_qcol_shape.data_ptr<int64_t>();
+  const int64_t *qrow_qcol_index_ptr = qrow_qcol_index.data_ptr<int64_t>();
+
+  // ista
+  const int64_t *ista_ptr = ista.data_ptr<int64_t>();
+  const int64_t *ista_index_ptr = ista_index.data_ptr<int64_t>();
+
+  for (int i = nphysical - 1; i >= 0; i--) {
+    const int64_t na = onstate_ptr[image2_ptr[2 * i]];
+    const int64_t nb = onstate_ptr[image2_ptr[2 * i + 1]];
+
+    int64_t idx = 0;
+    if (na == 0 and nb == 0) {  // 00
+      idx = 0;
+      qsym_n[0] = 0;
+      qsym_n[1] = 0;
+    } else if (na == 1 and nb == 1) {  // 11
+      idx = 1;
+      qsym_n[0] = 2;
+      qsym_n[1] = 0;
+    } else if (na == 1 and nb == 0) {  // a
+      idx = 2;
+      qsym_n[0] = 1;
+      qsym_n[1] = 1;
+
+    } else if (na == 0 and nb == 1) {  // b
+      idx = 3;
+      qsym_n[0] = 1;
+      qsym_n[1] = -1;
+    }
+    qsym_in[0] = qsym_out[0];
+    qsym_in[1] = qsym_out[1];
+    qsym_out[0] = qsym_in[0] + qsym_n[0];
+    qsym_out[1] = qsym_in[1] + qsym_n[1];
+
+    int64_t begin = 0;
+    int64_t end = 0;
+    int64_t length = 0;
+
+    begin = qrow_qcol_index_ptr[i];
+    end = qrow_qcol_index_ptr[i + 1];
+    length = (end - begin) * 4;
+    auto [dr, qi] =
+        binary_search_1d(&qrow_qcol_ptr[begin * 4], qsym_out, length);
+
+    // printf("(%ld, %ld, %ld)-1-cpu\n", begin, end, length);
+    // for(int j = 0; j < length ; j++){
+    //   printf("%ld ", qrow_qcol_ptr[begin * 4 + j]);
+    // }
+    // printf("\n");
+    // std::cout << begin <<  " " << end << std::endl;
+    begin = qrow_qcol_index_ptr[i + 1];
+    end = qrow_qcol_index_ptr[i + 2];
+    length = (end - begin) * 4;
+    auto [dc, qj] =
+        binary_search_1d(&qrow_qcol_ptr[begin * 4], qsym_in, length);
+  
+    // printf("(%ld, %ld, %ld)-2-cpu\n", begin, end, length);
+    // printf("(%ld %ld), (%ld, %ld)\n", dr, dc, qi, qj);
+
+    int64_t data_idx = data_ptr[i * 4 + idx];
+    int64_t offset =
+        qi * qrow_qcol_shape_ptr[i + 1] + qj;  // [qi, qj], shape: (qrow, qcol)
+    int ista_value =
+        ista_ptr[ista_index_ptr[i * 4 + idx] + offset];  // ista[qi, qj]
+    if (qi == -1 or qj == -1 or ista_value == -1) {
+      qsym_break = true;
+      break;
+    } else {
+      data_idx += ista_value;
+    }
+
+    data_info[i * 3 + 0] = data_idx;
+    data_info[i * 3 + 1] = dr;
+    data_info[i * 3 + 2] = dc;
+  }
+  return qsym_break;
+}
+
+tuple_tensor_2d nbatch_convert_sites_cpu(
+    Tensor &onstate, const int nphysical, const Tensor &data_index,
+    const Tensor &qrow_qcol, const Tensor &qrow_qcol_index,
+    const Tensor &qrow_qcol_shape, const Tensor &ista, const Tensor &ista_index,
+    const Tensor image2) {
+  int64_t dim = onstate.dim();
+  if (dim == 1) {
+    onstate = onstate.unsqueeze(0);  // 1D -> 2D
+  }
+  int64_t nbatch = onstate.size(0);
+
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kInt64)
+                     .layout(onstate.layout())
+                     .device(onstate.device());
+  Tensor data_info = torch::zeros({nbatch, nphysical, 3}, options);
+  Tensor sym_break = torch::zeros(
+      nbatch,
+      torch::TensorOptions().dtype(torch::kBool).device(onstate.device()));
+
+  int64_t *data_info_ptr = data_info.data_ptr<int64_t>();
+  for (int64_t i = 0; i < nbatch; i++) {
+    sym_break[i] =
+        convert_sites_cpu(onstate[i], nphysical, data_index, qrow_qcol,
+                          qrow_qcol_index, qrow_qcol_shape, ista, ista_index,
+                          image2, &data_info_ptr[i * nphysical * 3]);
+  }
+  return std::make_tuple(data_info, sym_break);
 }

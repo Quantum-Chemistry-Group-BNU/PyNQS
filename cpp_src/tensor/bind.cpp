@@ -1,5 +1,6 @@
 #include "cpu_tensor.h"
 #include "cuda_tensor.h"
+#include "pybind11/cast.h"
 #include "utils_tensor.h"
 
 Tensor tensor_to_onv(const Tensor &bra_tensor, const int sorb) {
@@ -141,19 +142,62 @@ Tensor permute_sgn(const Tensor image2, const Tensor onstate,
   }
 }
 
+/**
+params:
+* @param onstate: (nbatch, nphysical * 2) or (nphysical * 2), [0, 1, 1, 0, ...]
+* @param nphysical: sorb//2
+* @param data_index: (nphysical * 4), very site data ptr.
+* @param qrow_qcol: (length, 4), int64_t, last dim(Ns, Nz, dr/dc, sorted-idx), sorted with (Ns, Nz) 
+* @param qrow_qcol_shape: (nphysical + 1), [qrow, qcol/qrow, qcol/qrow,..., qcol] 
+* @param qrow_qcol_index: (nphysical + 2), [0, qrow, ...], cumulative sum
+* @param ista: (length)
+* @param ista_index: (nphysical * 4): cumulative sum
+* @param image2: (nphysical *2): MPS topo list, random[0, 1, ..., nphysical * 2]
+* @return data_info: (nbatch, nphysical, 3) int64_t, last dim(idx, dr, dc)
+* @return sym_break: bool array:(nbatch,) bool array if True, symmetry break.
+* @data: 23-08-22
+*/
+tuple_tensor_2d nbatch_convert_sites(
+    Tensor &onstate, const int nphysical, const Tensor &data_index,
+    const Tensor &qrow_qcol, const Tensor &qrow_qcol_index,
+    const Tensor &qrow_qcol_shape, const Tensor &ista, const Tensor &ista_index,
+    const Tensor image2) {
+  CHECK_CONTIGUOUS(onstate);
+  CHECK_CONTIGUOUS(data_index);
+  CHECK_CONTIGUOUS(qrow_qcol);
+  CHECK_CONTIGUOUS(qrow_qcol_index);
+  CHECK_CONTIGUOUS(qrow_qcol_shape);
+  CHECK_CONTIGUOUS(ista);
+  CHECK_CONTIGUOUS(ista_index);
+  if (onstate.is_cpu() and qrow_qcol.is_cpu() and ista.is_cpu()) {
+    return nbatch_convert_sites_cpu(onstate, nphysical, data_index, qrow_qcol,
+                                    qrow_qcol_index, qrow_qcol_shape, ista,
+                                    ista_index, image2);
+#ifdef GPU
+  } else {
+    return nbatch_convert_sites_cuda(onstate, nphysical, data_index, qrow_qcol,
+                                     qrow_qcol_index, qrow_qcol_shape, ista,
+                                     ista_index, image2);
+#endif
+  }
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("get_hij_torch", &get_Hij,
+  m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
+        py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
         "Calculate the matrix <x|H|x'> using CPU or GPU");
   m.def("MCMC_sample", &MCMC_sample, "MCMC sample using CPU");
-  m.def("get_comb_tensor", &get_comb,
+  m.def("get_comb_tensor", &get_comb, py::arg("bra"), py::arg("sorb"),
+        py::arg("nele"), py::arg("noA"), py::arg("noB"),
+        py::arg("flag_bit") = false,
         "Return all singles and doubles excitation for given onstate(1D, 2D) "
         "using CPU or GPU");
-  m.def("onv_to_tensor", &onv_to_tensor,
+  m.def("onv_to_tensor", &onv_to_tensor, py::arg("bra"), py::arg("sorb"),
         "convert onv to bit (-1:unoccupied, 1: occupied) for given onv(1D, 2D) "
         "using CPU or GPU");
   m.def("spin_flip_rand", &spin_flip_rand,
         "Flip the spin randomly in MCMC using CPU");
-  m.def("tensor_to_onv", &tensor_to_onv,
+  m.def("tensor_to_onv", &tensor_to_onv, py::arg("bra"), py::arg("sorb"),
         "convert states (0:unoccupied, 1: occupied) to onv uint8");
   m.def("mps_vbatch", &mps_vbatch, py::arg("mps_data"), py::arg("data_index"),
         py::arg("nphysical"), py::arg("batch") = 5000,
@@ -161,4 +205,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "cycle, default: batch: 5000, if using cpu, batch is placeholder");
 
   m.def("permute_sgn", &permute_sgn, "permute_sgn");
+  // m.def("convert_sites_cpu", &nbatch_convert_sites_cpu, " test");
+  m.def("convert_sites", &nbatch_convert_sites, " test");
 }

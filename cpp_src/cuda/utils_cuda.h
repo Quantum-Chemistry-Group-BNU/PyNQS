@@ -1,3 +1,4 @@
+#pragma once
 #ifdef GPU
 // cuda refer
 #include <cuda.h>

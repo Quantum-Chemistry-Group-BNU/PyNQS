@@ -147,7 +147,7 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
     }
 
     // Y = alpha * A x + Y
-    cudaMemset(dY_array_data, 0.0, sizeof(double) * max_dr_dc * nbatch);
+    // cudaMemset(dY_array_data, 0.0, sizeof(double) * max_dr_dc * nbatch);
     magmablas_dgemv_vbatched(trans, dev_m, dev_n, alpha, dA_array, dev_ldd_A,
                              dX_array, dev_inc_X, beta, dY_array, dev_inc_Y,
                              batch_count, magma_queue);

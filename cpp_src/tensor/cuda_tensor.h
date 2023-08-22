@@ -30,6 +30,13 @@ Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
 Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
                          const int nphysical, int64_t batch);
 
-Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor onstate,
+Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
                                const int sorb);
+
+tuple_tensor_2d nbatch_convert_sites_cuda(Tensor &onstate, const int nphysical,
+                         const Tensor &data_index, const Tensor &qrow_qcol,
+                         const Tensor &qrow_qcol_index,
+                         const Tensor &qrow_qcol_shape, const Tensor &ista,
+                         const Tensor &ista_index, const Tensor image2);
+
 #endif

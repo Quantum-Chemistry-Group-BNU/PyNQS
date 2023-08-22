@@ -59,6 +59,16 @@ __host__ void permute_sng_batch_cuda(const int64_t *image2,
 
 }  // namespace squant
 
+__host__ void convert_sites_cuda(const int64_t *onstate, const int nphysical,
+                                 const int64_t *data_index,
+                                 const int64_t *qrow_qcol,
+                                 const int64_t *qrow_qcol_index,
+                                 const int64_t *qrow_qcol_shape,
+                                 const int64_t *ista, const int64_t *ista_index,
+                                 const int64_t *image2, const int64_t nbatch,
+                                 int64_t *data_info,
+                                 bool *sym_array);
+
 __host__ void array_index_cuda(double *data_ptr, int64_t *index, int64_t length,
                                int64_t offset, double **ptr_array);
 

@@ -39,6 +39,11 @@ BUG: pre_train failure (Y)
 1. How to calculate batch when calculating local energy using RNN model
 2. How to use Multiple GPU
 
+#----------2023-8------------ zbwu1996@gmail.com
+1. Add CUDAException handle (Y)
+2. MPS onstate index implement in CUDA or CPU by binary search. (Y)
+3. Store onstate local energy.
+
 #---------------feature's------------------
 1. Add tutorial using "Read the Docs"
 2. Support spin_multiplicity == 1
@@ -64,7 +69,9 @@ BUG: pre_train failure (Y)
 4. Fe8S7, cuda get_hij_torch error? OOM?? onv_to_tensor (Y) (Y, 23-08-15)
 5. Video memory leak?? interface_magma error??
 6. MPS index functions is pretty slower. see: qubic/qmatrix/utils "convert_sites" functions
-    e.g. Fe8S7: [2, 1216609, 24], cost time: ~800s, how to implement in cuda.
+    e.g. Fe8S7: [2, 1216609, 24], cost time: ~800s, how to implement in cuda. (Y, 23-08-22)
+    CUDA binary search: ~32.1ms, CPU binary search ~11.6s, see: tensor/bind.cpp/nbatch_convert_sites.
+7. How to remove duplicate onstate. how to set threshold?? (nbatch < n_SD)
 
 #---------------Notice------------------
 1. h1e and h2e may be different even though the molecular structure is the same. 
