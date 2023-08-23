@@ -111,7 +111,9 @@ class MPSData:
 
     def __init__(self, sites: List[List[QMatrix]],
                  nphysical: int,
-                 device: str = "cpu") -> None:
+                 device: str = "cpu",
+                 max_memory: float = 3.2
+                 ) -> None:
 
         self.sites = sites
         self.nphysical = nphysical
@@ -129,6 +131,11 @@ class MPSData:
         self.ista_ptr: Tensor = None
 
         self.device = device
+        
+        # memory relative
+        self.max_memory = max_memory # GiB
+        self.allocate_memory: float = None # GiB
+        self.free_memory: float = None # GiB
 
         self.init(self.nphysical, self.sites)
         self.to(self.device)
@@ -198,6 +205,12 @@ class MPSData:
         self.ista = torch.from_numpy(ista)
         self.ista_ptr = torch.from_numpy(ista_ptr)
 
+        self.allocate_memory = (self.data.numel() + self.data_index.numel()) * 8 / 2**30
+        self.allocate_memory += (self.qrow_qcol.numel() + self.qrow_qcol_shape.numel()
+                                 + self.qrow_qcol_shape.numel()) *8 / 2**30
+        self.allocate_memory += (self.ista.numel() + self.ista_ptr.numel()) * 8 / 2**30
+        self.free_memory = self.max_memory - self.allocate_memory
+
     def to(self, device: str) -> None:
         self.data = self.data.to(device=device)
         self.data_index = self.data_index.to(device=device)
@@ -209,12 +222,31 @@ class MPSData:
         self.ista = self.ista.to(device)
         self.ista_ptr = self.ista_ptr.to(device)
 
+    def __repr__(self) -> str:
+        return(
+            f"MPSData" +"(\n"
+            f"    nphysical: {self.nphysical}\n" +
+            f"    data shape: {self.data.shape[0]}\n" +
+            f"    data_index shape: {self.data_index.shape[0]}\n" +
+            f"    qrow_qcol shape: {self.qrow_qcol.shape[0]}\n" +
+            f"    qrow_qcol_ptr shape: {self.qrow_qcol_ptr.shape[0]}\n" +
+            f"    qrow_qcol_shape shape : {self.qrow_qcol_shape.shape[0]}\n" +
+            f"    ista shape: {self.ista.shape[0]}\n" +
+            f"    ista_ptr shape: {self.ista_ptr.shape[0]}\n" +
+            f"    Device: {self.device}\n"
+            f"    Max memory: {self.max_memory:.3f} GiB\n" +
+            f"    Using memory: {self.allocate_memory:.3f} GiB\n" +
+            f"    Free memory: {self.free_memory:.3f} GiB\n" + 
+            f")"
+        )
 
 def convert_mps(nphysical: int,
                 input_path: str,
                 info: str = None,
                 topo: str = None,
-                device="cpu") -> Tuple[MPSData, List[List[QMatrix]], Tensor, MPS_c]:
+                device: str ="cpu",
+                max_memory: float = 3.2
+                ) -> Tuple[MPSData, List[List[QMatrix]], Tensor, MPS_c]:
 
     # info and topo file is relative path
     if info is None:
@@ -242,7 +274,7 @@ def convert_mps(nphysical: int,
         sites.append(site)
 
     image2 = torch.tensor(mps.image2, dtype=torch.int64, device=device)
-    mps_py = MPSData(sites, nphysical, device)
+    mps_py = MPSData(sites, nphysical, device, max_memory=max_memory)
 
     return mps_py, sites, image2, mps
 
@@ -254,7 +286,8 @@ def mps_value(onstate: Tensor,
               remove_duplicate: bool = False) -> Tensor:
 
     # 1. onstate is [1, -1, -1, 1, ...], double.
-
+    
+    # 8.3GiB
     device = onstate.device
     if onstate.dim() == 1:
         onstate.unsqueeze_(0)  # dim = 2
@@ -278,7 +311,16 @@ def mps_value(onstate: Tensor,
 
     # remove symmetry break index, memory copy
     data_info_sym = data_info[torch.logical_not(sym_break)]
+    del data_info, state
+    torch.cuda.empty_cache()
 
+    # 26.8GiB 
+    # SD: 1216608
+    # delta: 18.4GiB ??? empty_cache()???
+    # state: 4866436 * 146 * 8/2**30 = 5.29GiB
+    # data_info: 4866436 * 73 * 3 * 8/2**30 = 7.94GiB
+    # data_info_sym: 4597445 * 73 * 3 * 8/2**30 = 7.50GiB
+    # sym_break:(bool) 4866436 * 1/2**30 = 0.0045GiB
     # mps-vbatch
     unique_batch = unique_state.shape[0]
     result = torch.empty(unique_batch, dtype=torch.double, device=device)
@@ -287,9 +329,13 @@ def mps_value(onstate: Tensor,
     # CUDA version: using magma dgemv-vbatch, CPU version is similar to mps_vbatch_cpu
     t0 = time.time_ns()
     if data_info_sym.numel() != 0:
-        a = mps_vbatch(mps.data, data_info_sym, nphysical, 50000)
+        max_dr_dc = data_info_sym[:, :, 1:].max().item()
+        batch = magma_allocate_memory(max_dr_dc, max_allocate_memory=mps.free_memory * 0.75)
+        print(f"Magma Using memory: {mps.free_memory * 0.75:.3f} GiB")
+        # 6.144GiB cost: 56.25s
+        value = mps_vbatch(mps.data, data_info_sym, nphysical, batch=batch)
     else:
-        a = 0.0
+        value = 0.0
     print(f"Magma vbatch: {(time.time_ns() -t0)/1.0E09:.3E} s")
 
     print(
@@ -304,9 +350,20 @@ def mps_value(onstate: Tensor,
         sgn = permute_sgn(image2, unique_state, nphysical * 2)
 
     # index
-    result[torch.logical_not(sym_break)] = a
+    result[torch.logical_not(sym_break)] = value
     result[sym_break] = 0.0
 
-    del a, sym_break, data_info, data_info_sym, unique_state, state
+    del value, sym_break, data_info_sym, unique_state
     torch.cuda.empty_cache()
     return torch.index_select(result, 0, index) * torch.index_select(sgn, 0, index)
+
+def magma_allocate_memory(max_dr_dc: int, max_allocate_memory = 32) ->int:
+    """
+    Calculate magma_dgemv vbatch
+    """
+    # sizeof(double */magma_int_t/double) = 8
+    # double ptr: dA_array/dX_array/dY_array = nbatch * 3 * sizeof(double *)
+    # dX/dY: nbatch * max_dr_dc * 2 * sizeof(double)
+    # dev_m/dev_n/dev_ldd_A/dev_inc_x/dev_inc_y: 5 * (nbatch + 1) * sizeof(magma_int_t)
+    batch = int(max_allocate_memory * 2**30 / (8 * 8 + max_dr_dc * 2 * 8))
+    return batch

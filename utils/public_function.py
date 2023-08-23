@@ -271,6 +271,9 @@ class ElectronInfo:
         self._noa = electron_info.get("noa", self._nele//2)
         self._nva = electron_info.get("nva", self.nv//2)
 
+        self._memory = (self._h1e.numel() + self._h2e.numel()) * 8 / 2**30 # GiB Double
+        self._memory += (self.ci_space.numel()) / 2**30 # Uint8
+        
     @property
     def __name__(self):
         return "ElectronInfo"
@@ -331,6 +334,10 @@ class ElectronInfo:
     def n_SinglesDoubles(self) -> int:
         return get_Num_SinglesDoubles(self._sorb, self.noa, self.nob)
 
+    @property
+    def memory(self) -> float:
+        return self._memory
+    
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}" + "(\n"
@@ -342,6 +349,7 @@ class ElectronInfo:
             f"    noa: {self.noa}, nob: {self.nob}\n" +
             f"    nva: {self.nva}, nvb: {self.nvb}\n" +
             f"    Singles + Doubles: {self.n_SinglesDoubles}\n" +
+            f"    Using memory: {self.memory:.3f} GiB\n"+
             f")"
         )
 
