@@ -1,3 +1,4 @@
+import time
 import torch
 import numpy as np
 
@@ -11,10 +12,9 @@ from qubic.qtensor import Qbond, Stensor2
 from qubic.mps import MPS_c
 from utils import EnterDir
 
-from libs.C_extension import mps_vbatch, permute_sgn
+from libs.C_extension import mps_vbatch, permute_sgn, convert_sites
 
 QMatrix = TypeVar("QMatrix", QMatrix_numpy, QMatrix_torch, QMatrix_jax)
-MPS_py = NewType("MPS", List[List[QMatrix]])
 
 
 def Qbond_to_qrow(qbond: Qbond) -> ndarray[np.int64]:
@@ -71,8 +71,10 @@ def Stensor2_to_QMatrix(stensor: Stensor2, data_type="torch", device=None, qsym=
         elif data_type == "jax":
             QMatrix_class = QMatrix_jax
         else:
-            raise ValueError(f"Data_type({data_type}) error, excepted 'torch' 'numpy' 'jax'")
-    qmat = QMatrix_class(qrow, qcol, data, qrow_sym_dict, qcol_sym_dict, qsym=qsym, device=device)
+            raise ValueError(
+                f"Data_type({data_type}) error, excepted 'torch' 'numpy' 'jax'")
+    qmat = QMatrix_class(qrow, qcol, data, qrow_sym_dict,
+                         qcol_sym_dict, qsym=qsym, device=device)
     qmat.init()
     assert (qmat.nnz == stensor.size())
     return qmat
@@ -102,204 +104,117 @@ def convert_order(data_F: ndarray, qrow: ndarray, qcol: ndarray, qsym: ndarray):
     return data
 
 
-def permute_sgn_py(image2: List[int], onstate: List[int]) -> int:
-    size = len(image2)
-    index = list(range(size))
-    sgn = 0
-    for i in range(size):
-        if image2[i] == index[i]:
-            continue
-        k = 0
-        for j in range(i + 1, size):
-            if index[j] == image2[i]:
-                k = j
-                break
-        fk = onstate[index[k]]
-        for j in range(k - 1, i - 1, -1):
-            index[j + 1] = index[j]
-            if fk and onstate[index[j]]:
-                sgn ^= 1
-        index[i] = image2[i]
-    return -2 * sgn + 1
-
-def convert_sites(onstate: ndarray, nphysical: int, data_ptr: ndarray, sites: MPS_py,
-                  image2: List[int]) -> Tuple[ndarray, bool]:
-    r"""
-    convert sites:
-
-    Args:
-        onstate(ndarray): [0, 1, 1, 0, ...]
-        nphysical(int): spin orbital // 2
-        data_ptr(ndarray): the start pointer of the very site data, shape: (nphysical * 4).
-        sites(MPS_py): List[List[QMatrix]], shape: (nphysical, 4)
-        image2: MPS topo list, length: sorb
-    
-    Returns:
-        data_info(Tensor): (nphysical, 3)
-        sym_break(bool): True, symmetry break.
+class MPSData:
     """
-    # (data_ptr, dr, rc)
-    sym_break = False
-    data_info = np.empty((nphysical, 3), dtype=np.int64)
-    qsym_out = np.array([0, 0], dtype=np.int64)
-    init_idx = 0
-    for i in reversed(range(nphysical)):
-        na = onstate[image2[2 * i]]
-        nb = onstate[image2[2 * i + 1]]
-        if (na, nb) == (0, 0):  # 00
-            idx = 0
-            qsym_n = np.array([0, 0])
-        elif (na, nb) == (1, 1):  # 11
-            idx = 1
-            qsym_n = np.array([2, 0])
-        elif (na, nb) == (1, 0):  # a
-            idx = 2
-            qsym_n = np.array([1, 1])
-        elif (na, nb) == (0, 1):  # b
-            idx = 3
-            qsym_n = np.array([1, -1])
-        qsym_in = qsym_out
-        qsym_out = qsym_in + qsym_n
-        site = sites[i][idx]
-        # time consuming, how to accumulate dict index
-        qi = site.find_syms_idx(site.qrow_sym_dict, qsym_out)
-        qj = site.find_syms_idx(site.qcol_sym_dict, qsym_in)
-        data_idx = data_ptr[i * 4 + idx]
-        if site.ista[qi, qj] == -1:
-            dr = dc = 0
-            sym_break = True
-            break
-        else:
-            dr = site.qrow[qi, 2]
-            dc = site.qcol[qj, 2]
-            ista = site.ista[qi, qj]
-            data_idx += ista
-        init_idx += 4 * site.data.size
-        data_info[i, 0] = data_idx
-        data_info[i, 1] = dr
-        data_info[i, 2] = dc
-
-    return data_info, sym_break
-
-
-def nbatch_convert_sites(space: Union[ndarray, Tensor], nphysical: int, data_ptr: ndarray, sites: MPS_py,
-                         image2: List[int]) -> Tuple[ndarray, ndarray[np.bool_]]:
-    r"""
-    
-    nbatch convert sites:
-
-    Args:
-        onstate(ndarray|Tensor): shape: (nbatch, sorb)
-        nphysical(int): spin orbital // 2
-        data_ptr(ndarray): the start pointer of the very site data, shape: (nphysical * 4).
-        sites(MPS_py): List[List[QMatrix]], shape: (nphysical, 4)
-        image2: MPS topo list, length: sorb
-    
-    Returns:
-        data_info(Tensor): (sorb, nphysical, 3), last dim: (ptr, dr, dc)
-        sym_break(ndarray[np.bool_]): bool array, if True, symmetry break, shape: (nbatch)
+    MPS data
     """
-    
-    if isinstance(space, Tensor):
-        space: ndarray = space.to("cpu").numpy()
-    data_index: List[np.ndarray] = []
-    if space.ndim == 1:
-        space = space[np.newaxis, :]
-    nbatch = space.shape[0]
-    sym_break = np.zeros(nbatch, dtype=np.bool_())
-    for i in range(nbatch):
-        result = convert_sites(space[i], nphysical, data_ptr, sites, image2)
-        data_index.append(result[0])
-        sym_break[i] = result[1]
-    return np.stack(data_index), sym_break
 
+    def __init__(self, sites: List[List[QMatrix]],
+                 nphysical: int,
+                 device: str = "cpu") -> None:
 
-def mps_value(onstate: Tensor,
-              data: Tensor,
-              nphysical: int,
-              data_ptr: ndarray,
-              sites: MPS_py,
-              image2: List[int],
-              remove_duplicate: bool = False) -> Tensor:
+        self.sites = sites
+        self.nphysical = nphysical
+        # MPS data
+        self.data: Tensor = None
+        self.data_index: Tensor = None
 
-    # 1. onstate is [1, -1, -1, 1, ...], double.
-    # 2. how to use mpi4py from function 'nbatch-convert'
-    # 3.data_ptr: ndarray [ 0, 1, 2, 3, 4, 13, 22, 31, 40, 140]
+        # qrow_qcol
+        self.qrow_qcol: Tensor = None
+        self.qrow_qcol_ptr: Tensor = None
+        self.qrow_qcol_shape: Tensor = None
 
-    device = onstate.device
-    if onstate.dim() == 1:
-        onstate.unsqueeze_(0) # dim = 2
-    onstate = ((onstate + 1)//2).to(dtype=torch.int64) # convert [-1, 1] -> [0, 1]
+        # ista
+        self.ista: Tensor = None
+        self.ista_ptr: Tensor = None
 
-    print(onstate.shape)
-    # remove duplicate, may be time consuming, uint8 maybe faster than int64
-    # duplicated states have been removed in calculating local energy, so default False
-    if remove_duplicate:
-        unique_state, index = torch.unique(onstate, dim=0, return_inverse=True)
-    else:
-        unique_state = onstate
-        index = torch.arange(len(onstate), device=device)
+        self.device = device
 
-    # onstate, data_ptr, imag2: ndarray
-    # numpy faster than torch, ~8 times, for H6 FCI-space test in CPU
-    data_index, sym_break = nbatch_convert_sites(unique_state, nphysical, data_ptr, sites, image2)
+        self.init(self.nphysical, self.sites)
+        self.to(self.device)
 
-    # record symmetry conservation, numpy -> torch
-    data_index = torch.from_numpy(data_index).to(dtype=torch.int64, device=device)
-    sym_break = torch.from_numpy(sym_break).to(dtype=torch.bool, device=device)
+    def init(self, nphysical: int, sites: List[List[QMatrix]]) -> None:
 
-    # remove symmetry break index, memory may be discontinuous
-    data_index = data_index[torch.logical_not(sym_break)]
+        data: List = []
 
-    # mps-vbatch
-    unique_batch = unique_state.shape[0]
-    result = torch.empty(unique_batch, dtype=torch.double, device=device)
+        # very site ptr header, cumulative sum
+        data_index = np.empty(nphysical * 4, dtype=np.int64)
+        ptr_begin = 0
 
-    # run mps_vbatch in CUDA and CPU, implement use CPP.
-    # CUDA version: using magma dgemv-vbatch, CPU version is similar to mps_vbatch_cpu
-    if data_index.numel() != 0:
-        a = mps_vbatch(data, data_index, nphysical)
-    else:
-        a = 0.0
+        # (length * 4), last dim: (Ns, Nz, dr/dc index, ista.index), sorted (Ns, Nz)
+        qrow_qcol: List[List[int]] = []
+        # qrow_qcol_shape: [qrow, qcol/qrow, qcol/qrow, ..., qcol], shape: (nphysical + 1)
+        qrow_qcol_shape = np.empty(nphysical+1, dtype=np.int64)
 
-    # calculate permute sgn, if image2 != list(range(nphysical * 2))
-    sgn = permute_sgn(torch.tensor(image2), unique_state, nphysical * 2)
+        ista: List[float] = []
+        ista_shape = np.empty(nphysical * 4, dtype=np.int64)  # nphysical * 4
 
-    # index
-    result[torch.logical_not(sym_break)] = a
-    result[sym_break] = 0.0
+        for i in range(nphysical):
 
-    del a, sym_break
-    return torch.index_select(result, 0, index) * torch.index_select(sgn, 0, index)
+            # very site qrow/qcol is equal
+            site = sites[i][0]
+            qrow_qcol_shape[i] = site.qrow.shape[0]
+            # sorted (Ns, Nz)
+            idx = np.lexsort((site.qrow[:, 1], site.qrow[:, 0]))
+            qrow_qcol.append(np.concatenate([site.qrow[idx], idx[:, None]], axis=1))
+            if i == nphysical-1:
+                qrow_qcol_shape[i+1] = site.qcol.shape[0]
+                idx = np.lexsort((site.qcol[:, 1], site.qcol[:, 0]))
+                qrow_qcol.append(np.concatenate([site.qcol[idx], idx[:, None]], axis=1))
 
+            for j in range(4):
+                data.append(sites[i][j].data)
+                data_index[i * 4 + j] = ptr_begin
+                ptr_begin += sites[i][j].data.size
 
-def CIcoeff(mps_data: Tensor, qinfo: Tensor, nphysical: int) -> float:
-    vec0 = torch.tensor([1.0], dtype=torch.double)
-    for i in reversed(range(nphysical)):
-        dr = qinfo[i, 1]
-        dc = qinfo[i, 2]
-        istat = qinfo[i, 0]
-        blk = mps_data[istat:istat + dr * dc].reshape(dr, dc)
-        if blk.size == 0:
-            return 0.0
-        vec0 = blk.reshape(dc, dr).T.matmul(vec0)  # F order
-    return vec0[0]
+                size = site.qrow.shape[0] * site.qcol.shape[0]
+                ista_shape[i*4 + j] = size
+                ista.append(sites[i][j].ista.flatten())
 
+        data = np.concatenate(data)
+        qrow_qcol = np.concatenate(
+            qrow_qcol, axis=0).flatten()  # shape:(n * 4)
 
-def mps_vbatch_cpu(data: Tensor, data_index: Tensor, nphysical: int) -> Tensor:
-    nbatch = data_index.shape[0]
-    result = torch.empty(nbatch, dtype=torch.double)
-    for i in range(nbatch):
-        result[i] = CIcoeff(data, data_index[i], nphysical)
-    return result
+        # very site ptr header. shape: (nphysical + 2),[0, qrow, ...], cumulative sum
+        qrow_qcol_ptr = np.concatenate(
+            [np.array([0]), qrow_qcol_shape], dtype=np.int64).cumsum()
+
+        # very site ista ptr header. shape: (nphysical), cumulative sum
+        ista_ptr = np.concatenate(
+            [np.array([0]), ista_shape[:-1]], dtype=np.int64).cumsum()
+        ista: ndarray = np.concatenate(ista)
+
+        # numpy ndarray -> torch Tensor
+        # MPS data
+        self.data = torch.from_numpy(data)
+        self.data_index = torch.from_numpy(data_index)
+
+        # qrow_qcol
+        self.qrow_qcol = torch.from_numpy(qrow_qcol)
+        self.qrow_qcol_ptr = torch.from_numpy(qrow_qcol_ptr)
+        self.qrow_qcol_shape = torch.from_numpy(qrow_qcol_shape)
+
+        # ista
+        self.ista = torch.from_numpy(ista)
+        self.ista_ptr = torch.from_numpy(ista_ptr)
+
+    def to(self, device: str) -> None:
+        self.data = self.data.to(device=device)
+        self.data_index = self.data_index.to(device=device)
+
+        self.qrow_qcol = self.qrow_qcol.to(device=device)
+        self.qrow_qcol_ptr = self.qrow_qcol_ptr.to(device=device)
+        self.qrow_qcol_shape = self.qrow_qcol_shape.to(device=device)
+
+        self.ista = self.ista.to(device)
+        self.ista_ptr = self.ista_ptr.to(device)
 
 
 def convert_mps(nphysical: int,
                 input_path: str,
                 info: str = None,
                 topo: str = None,
-                data_type="numpy",
-                device="cpu") -> Tuple[Union[ndarray, Tensor], ndarray, MPS_py, List[int], MPS_c]:
+                device="cpu") -> Tuple[MPSData, List[List[QMatrix]], Tensor, MPS_c]:
 
     # info and topo file is relative path
     if info is None:
@@ -307,35 +222,91 @@ def convert_mps(nphysical: int,
     if topo is None:
         topo = "./topology/topo1"
 
-    # run qubic:
+    # load qubic:
+    t0 = time.time_ns()
     with EnterDir(input_path):
         mps = MPS_c()
         mps.nphysical = nphysical
         mps.load(info)
         mps.image2 = mps.load_topology(topo)
         s = mps.convert()
+    print(f"Load MPS: {(time.time_ns()-t0)/1.0E09:.3f} s")
 
-    sites: MPS_py = []
-    mps_raw_data: List[Tensor] = []
-    data_ptr = np.empty(nphysical * 4, dtype=np.int64)
-    ptr_begin = 0
-
+    sites: List[List[QMatrix]] = []
     for i in range(nphysical):
-        site: List[QMatrix] = []
-        for j in range(4):  #00 11 01, 10
-            qmatrix = Stensor2_to_QMatrix(s[i][j], device=device, data_type="numpy")
+        site = []
+        for j in range(4):  # 00 11 01, 10
+            qmatrix = Stensor2_to_QMatrix(
+                s[i][j], device=device, data_type="numpy")
             site.append(qmatrix)
-            mps_raw_data.append(qmatrix.data)
-            data_ptr[i * 4 + j] = ptr_begin
-            ptr_begin += qmatrix.data.size
-
         sites.append(site)
-    mps_raw_data = np.concatenate(mps_raw_data)
-    image2 = mps.image2
 
-    assert(data_type in ("torch", "numpy"))
-    if data_type == "torch":
-        mps_raw_data = torch.from_numpy(mps_raw_data).to(device=device)
-        data_ptr = torch.from_numpy(data_ptr).to(device=device)
+    image2 = torch.tensor(mps.image2, dtype=torch.int64, device=device)
+    mps_py = MPSData(sites, nphysical, device)
 
-    return mps_raw_data, data_ptr, sites, image2, mps
+    return mps_py, sites, image2, mps
+
+
+def mps_value(onstate: Tensor,
+              mps: MPSData,
+              nphysical: int,
+              image2: Tensor,
+              remove_duplicate: bool = False) -> Tensor:
+
+    # 1. onstate is [1, -1, -1, 1, ...], double.
+
+    device = onstate.device
+    if onstate.dim() == 1:
+        onstate.unsqueeze_(0)  # dim = 2
+    # convert [-1, 1] -> [0, 1]
+    state = ((onstate + 1)//2).to(dtype=torch.int64)
+
+    # remove duplicate, may be time consuming, uint8 maybe faster than int64
+    # duplicated states have been removed in calculating local energy, so default False
+    if remove_duplicate:
+        unique_state, index = torch.unique(state, dim=0, return_inverse=True)
+    else:
+        unique_state = state
+        index = torch.arange(len(state), device=device)
+
+    t0 = time.time_ns()
+    # run nbatch_convert_sites in CUDA and CPU, implement use CPP
+    data_info, sym_break = convert_sites(unique_state, nphysical, mps.data_index, mps.qrow_qcol,
+                                         mps.qrow_qcol_ptr, mps.qrow_qcol_shape,
+                                         mps.ista, mps.ista_ptr, image2)
+    print(f"MPS Index: {(time.time_ns() -t0)/1.0E09:.3E} s")
+
+    # remove symmetry break index, memory copy
+    data_info_sym = data_info[torch.logical_not(sym_break)]
+
+    # mps-vbatch
+    unique_batch = unique_state.shape[0]
+    result = torch.empty(unique_batch, dtype=torch.double, device=device)
+
+    # run mps_vbatch in CUDA and CPU, implement use CPP.
+    # CUDA version: using magma dgemv-vbatch, CPU version is similar to mps_vbatch_cpu
+    t0 = time.time_ns()
+    if data_info_sym.numel() != 0:
+        a = mps_vbatch(mps.data, data_info_sym, nphysical, 50000)
+    else:
+        a = 0.0
+    print(f"Magma vbatch: {(time.time_ns() -t0)/1.0E09:.3E} s")
+
+    print(
+        f"Current allocated memory: {torch.cuda.memory_allocated()/2**30:.5f} GiB")
+    print(
+        f"Max allocated memory: {torch.cuda.max_memory_allocated()/2**30:.5f} GiB")
+
+    # calculate permute sgn, if image2 != range(nphysical * 2)
+    if torch.allclose(image2, torch.arange(nphysical * 2, device=device)):
+        sgn = torch.ones(unique_batch, dtype=torch.double, device=device)
+    else:
+        sgn = permute_sgn(image2, unique_state, nphysical * 2)
+
+    # index
+    result[torch.logical_not(sym_break)] = a
+    result[sym_break] = 0.0
+
+    del a, sym_break, data_info, data_info_sym, unique_state, state
+    torch.cuda.empty_cache()
+    return torch.index_select(result, 0, index) * torch.index_select(sgn, 0, index)

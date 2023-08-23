@@ -70,9 +70,9 @@ def total_energy(x: Tensor,
     if not exact:
         if state_counts is None:
             state_counts = torch.ones(dim, dtype=dtype, device=device)
-        variance = torch.sum((eloc_lst - eloc_mean)**2 * state_counts)
         n_sample = state_counts.sum()
-        sd = torch.sqrt(variance / n_sample)
+        variance = torch.sum((eloc_lst - eloc_mean)**2 * state_counts) /(n_sample - 1)
+        sd = torch.sqrt(variance)
         se = sd / torch.sqrt(n_sample)
         statistics["mean"] = e_total.real.item()
         statistics["var"] = variance.real.item()

@@ -5,7 +5,7 @@ from torch import Tensor
 def tensor_to_onv(bra: Tensor, sorb: int) -> Tensor:
     r"""tensor_to_onv(bra, sorb) ->Tensor
      notice: the dim of bra: 1 or 2, dtype = torch.uint8
-    
+
     Args:
         bra(Tensor): the states using 0/1 representation, dtype: torch.uint8
             0: unoccupied, 1:occupied
@@ -13,7 +13,7 @@ def tensor_to_onv(bra: Tensor, sorb: int) -> Tensor:
     Returns: 
         the occupied number vector(onv) of the bra tensor(2D), dtype:torch.uint8
 
-    
+
     Example::
     >>> bra = torch.tensor([1, 1, 1, 1, 0, 0, 0, 0], dtype=torch.uint8) 
     >>> sorb = 8
@@ -27,7 +27,7 @@ def tensor_to_onv(bra: Tensor, sorb: int) -> Tensor:
 def onv_to_tensor(bra: Tensor, sorb: int) -> Tensor:
     r"""onv_to_tensor(bra, sorb) ->Tensor
      notice: the dim of bra: 1 or 2, dtype = torch.uint8
-    
+
     Args:
         bra(Tensor): the occupied number vector(onv), dtype: torch.uint8
         sorb(int): the number of spin orbital
@@ -46,7 +46,7 @@ def onv_to_tensor(bra: Tensor, sorb: int) -> Tensor:
     ...
 
 
-def get_comb_tensor(bra: Tensor, sorb: int, nele: int, 
+def get_comb_tensor(bra: Tensor, sorb: int, nele: int,
                     noA: int, noB: int, flag_bit: bool = False) -> Tuple[Tensor, Tensor]:
     r"""Compute all Singles and Doubles excitation for the given bra tensor
      Singles and Doubles excitation: ncomb = nSa + nSb + nDaa + nDbb + nDab + 1
@@ -56,7 +56,7 @@ def get_comb_tensor(bra: Tensor, sorb: int, nele: int,
     nDab = noA * noB * nvA * nvB
     Loop 1, ncomb, then unpack to get annihilation(hole) and creation(electron) index,
     and bit-flip hole and electron index.
-     
+
     notice: the dim of bra: 2
 
 
@@ -67,7 +67,7 @@ def get_comb_tensor(bra: Tensor, sorb: int, nele: int,
         noA(int): the number of alpha spin orbital
         noB(int): the number of beta spin orbital
         flag_bit(bool): Whether to convert onv to states, see 'onv_to_tensor'
-    
+
     Returns:
         (Tensor, Tensor), A tuple of tensor containing
         - **onv** (Tensor): the all SD for the given bra(3D).
@@ -91,14 +91,14 @@ def get_comb_tensor(bra: Tensor, sorb: int, nele: int,
     ...
 
 
-def get_hij_torch(bra: Tensor, ket: Tensor, 
+def get_hij_torch(bra: Tensor, ket: Tensor,
                   h1e: Tensor, h2e: Tensor, sorb: int, nele: int) -> Tensor:
     r"""Compute the matrix element <i|H|j> using Slater-Condon Rules
         see: Szabo A, Ostlund N S. Modern quantum chemistry and
          http://vergil.chemistry.gatech.edu/notes/permsymm/permsymm.pdf
          and https://doi.org/10.48550/arXiv.1311.6244
 
-    
+
     Notes: 
         the dim of bra: 2(n, onv), ket: 2 or 3(m, onv) or (n, ncomb, onv)
         ncomb: all Singles and Doubles for the given onv
@@ -124,13 +124,13 @@ def get_hij_torch(bra: Tensor, ket: Tensor,
     ...
 
 
-def MCMC_sample(model_file: str, initial_state: Tensor, state_sample: Tensor, 
-                psi_sample: Tensor, sorb: int, nele: int, 
+def MCMC_sample(model_file: str, initial_state: Tensor, state_sample: Tensor,
+                psi_sample: Tensor, sorb: int, nele: int,
                 noA: int, noB: int, seed: int, n_sweep: int, therm_step: int) -> float:
     ...
 
 
-def spin_flip_rand(bra: Tensor, sorb: int, nele: int, 
+def spin_flip_rand(bra: Tensor, sorb: int, nele: int,
                    noA: int, noB: int, seed: int) -> Tuple[Tensor, Tensor]:
     r"""
     Flip the spin randomly (restricted to SD excitation) in MCMC sample
@@ -145,12 +145,12 @@ def spin_flip_rand(bra: Tensor, sorb: int, nele: int,
         noA(int): the number of alpha spin orbital
         noB(int): the number of beta spin orbital
         seed: the seed of c++ std::mt19937 random
-    
+
     Returns:
         (Tensor, Tensor), A tuple of tensor containing
         - **states**
         - **onv** the onv(1D)
-    
+
     Example:
     >>> bra = torch.tensor([[0b1111, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
     >>> nele = 4; sorb = 8; noA = 2; noB = 2; seed = 2023
@@ -167,6 +167,7 @@ def spin_flip_rand(bra: Tensor, sorb: int, nele: int,
     """
     ...
 
+
 def mps_vbatch(data: Tensor, index: Tensor, nphysical: int, batch: int = 5000) -> Tensor:
     r"""
     variable batch matrix and vector product using magma_dgemv_vbatch or cycle, 
@@ -177,15 +178,41 @@ def mps_vbatch(data: Tensor, index: Tensor, nphysical: int, batch: int = 5000) -
         index(Tensor): shape: (nbatch, nphysical, 3) ->[ptr_begin, dr, dc]
     """
 
+
 def permute_sgn(image2: Tensor, onstate: Tensor, sorb: int) -> Tensor:
     r"""
     permute sgn.
-   
+
     Args:
         image2(Tensor): [0, 1, 3, ...], shape: (sorb)
         onstate(Tensor): [0, 1, 0, 1, ...], shape: (nbatch, sorb)
         sorb(int):
-    
+
     Returns:
         (Tensor)
+    """
+
+
+def convert_sites(onstate: Tensor, nphysical: int, data_index: Tensor,
+                  qrow_qcol: Tensor, qrow_qcol_ptr: Tensor, qrow_qcol_shape: Tensor,
+                  ista: Tensor, ista_ptr: Tensor,
+                  image2: Tensor) -> Tuple[Tensor, Tensor]:
+    r"""
+
+    nbatch convert sites:
+    Args:
+        onstate(Tensor): (nbatch, nphysical * 2) or (nphysical * 2), [0, 1, 1, 0, ...]
+        nphysical(int): sorb//2
+        data_index(Tensor): (nphysical * 4), very site data ptr
+        qrow_qcol(Tensor): (length, 4), int64_t, last dim(Ns, Nz, dr/dc, sorted-idx), sorted with (Ns, Nz)
+        qrow_qcol_shape(Tensor): (nphysical + 1), [qrow, qcol/qrow, qcol/qrow,..., qcol] 
+        qrow_qcol_index(Tensor): (nphysical + 2), [0, qrow, ...], cumulative sum
+        ista(Tensor): (length)
+        ista_index(Tensor): (nphysical * 4): cumulative sum
+        image2:(Tensor) (nphysical *2): MPS topo list, random[0, 1, ..., nphysical * 2]
+
+    Return:
+        data_info(Tensor): (nbatch, nphysical, 3) int64_t, last dim(idx, dr, dc)
+        sym_break(Tensor): bool array:(nbatch,) bool array if True, symmetry break.
+
     """
