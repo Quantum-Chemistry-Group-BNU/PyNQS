@@ -216,8 +216,8 @@ __device__ void sites_sym_index(const int64_t *onstate, const int nphysical,
                                 const int64_t *qrow_qcol_index,
                                 const int64_t *qrow_qcol_shape,
                                 const int64_t *ista, const int64_t *ista_index,
-                                const int64_t *image2, int64_t *data_info, 
-                                bool *sym_array) {
+                                const int64_t *image2, const int64_t nbatch, 
+                                int64_t *data_info, bool *sym_array) {
   int64_t qsym_out[2] = {0, 0};
   int64_t qsym_in[2] = {0, 0};
   int64_t qsym_n[2] = {0, 0};
@@ -296,9 +296,12 @@ __device__ void sites_sym_index(const int64_t *onstate, const int nphysical,
       data_idx += ista_value;
     }
 
-    data_info[i * 3 + 0] = data_idx;
-    data_info[i * 3 + 1] = dr;
-    data_info[i * 3 + 2] = dc;
+    // data_info: (3, nphysical, nbatch)
+    // slice: 0-dim:
+    // data_info: (3, nphysical, batch]
+    data_info[i * nbatch] = data_idx;
+    data_info[i * nbatch + nbatch * nphysical * 1] = dr;
+    data_info[i * nbatch + nbatch * nphysical * 2] = dc;
   }
   sym_array[0] = qsym_break;
 }

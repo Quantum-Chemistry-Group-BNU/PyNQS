@@ -208,9 +208,10 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
   return Hmat;
 }
 
-Tensor mps_vbatch_tensor_cpu(const Tensor &mps_data, const Tensor &data_index,
+tuple_tensor_2d mps_vbatch_tensor_cpu(const Tensor &mps_data, const Tensor &data_info,
                              const int nphysical) {
-  const int64_t nbatch = data_index.size(0);
+  // data_index: (3, nphysical, nbatch)
+  const int64_t nbatch = data_info.size(2);
   auto options = torch::TensorOptions()
                      .dtype(torch::kDouble)
                      .layout(mps_data.layout())
@@ -219,10 +220,10 @@ Tensor mps_vbatch_tensor_cpu(const Tensor &mps_data, const Tensor &data_index,
   for (int i = 0; i < nbatch; i++) {
     auto vec0 = torch::tensor({1.0}, options);
     for (int j = nphysical - 1; j >= 0; j--) {
-      auto dr = data_index[i][j][1].item<int64_t>();
-      auto dc = data_index[i][j][2].item<int64_t>();
-      auto istat = data_index[i][j][0].item<int64_t>();
-      auto blk = mps_data.slice(0, istat, istat + dr * dc).reshape({dr, dc});
+      auto dr = data_info[1][j][i].item<int64_t>();
+      auto dc = data_info[2][j][i].item<int64_t>();
+      auto ista = data_info[0][j][i].item<int64_t>();
+      auto blk = mps_data.slice(0, ista, ista + dr * dc).reshape({dr, dc});
       if (blk.numel() == 0) {
         result[i] = 0.0;
         break;
@@ -231,7 +232,8 @@ Tensor mps_vbatch_tensor_cpu(const Tensor &mps_data, const Tensor &data_index,
     }
     result[i] = vec0[0].item<double>();
   }
-  return result;
+  auto flops = torch::zeros({1}, options);
+  return std::make_tuple(result, flops);
 }
 
 Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor &onstate,
@@ -288,7 +290,7 @@ bool convert_sites_cpu(const Tensor &onstate, const int nphysical,
                        const Tensor &qrow_qcol_index,
                        const Tensor &qrow_qcol_shape, const Tensor &ista,
                        const Tensor &ista_index, const Tensor image2,
-                       int64_t *data_info) {
+                       const int64_t nbatch, int64_t *data_info) {
   int64_t qsym_out[2] = {0, 0};
   int64_t qsym_in[2] = {0, 0};
   int64_t qsym_n[2] = {0, 0};
@@ -345,12 +347,6 @@ bool convert_sites_cpu(const Tensor &onstate, const int nphysical,
     auto [dr, qi] =
         binary_search_1d(&qrow_qcol_ptr[begin * 4], qsym_out, length);
 
-    // printf("(%ld, %ld, %ld)-1-cpu\n", begin, end, length);
-    // for(int j = 0; j < length ; j++){
-    //   printf("%ld ", qrow_qcol_ptr[begin * 4 + j]);
-    // }
-    // printf("\n");
-    // std::cout << begin <<  " " << end << std::endl;
     begin = qrow_qcol_index_ptr[i + 1];
     end = qrow_qcol_index_ptr[i + 2];
     length = (end - begin) * 4;
@@ -372,9 +368,12 @@ bool convert_sites_cpu(const Tensor &onstate, const int nphysical,
       data_idx += ista_value;
     }
 
-    data_info[i * 3 + 0] = data_idx;
-    data_info[i * 3 + 1] = dr;
-    data_info[i * 3 + 2] = dc;
+    // data_info: (3, nphysical, nbatch)
+    // slice: 0-dim:
+    // data_info: (3, nphysical, batch]
+    data_info[i * nbatch] = data_idx;
+    data_info[i * nbatch + nbatch * nphysical * 1] = dr;
+    data_info[i * nbatch + nbatch * nphysical * 2] = dc;
   }
   return qsym_break;
 }
@@ -384,17 +383,17 @@ tuple_tensor_2d nbatch_convert_sites_cpu(
     const Tensor &qrow_qcol, const Tensor &qrow_qcol_index,
     const Tensor &qrow_qcol_shape, const Tensor &ista, const Tensor &ista_index,
     const Tensor image2) {
-  int64_t dim = onstate.dim();
+  const int64_t dim = onstate.dim();
   if (dim == 1) {
     onstate = onstate.unsqueeze(0);  // 1D -> 2D
   }
-  int64_t nbatch = onstate.size(0);
+  const int64_t nbatch = onstate.size(0);
 
   auto options = torch::TensorOptions()
                      .dtype(torch::kInt64)
                      .layout(onstate.layout())
                      .device(onstate.device());
-  Tensor data_info = torch::zeros({nbatch, nphysical, 3}, options);
+  Tensor data_info = torch::zeros({3, nphysical, nbatch}, options);
   Tensor sym_break = torch::zeros(
       nbatch,
       torch::TensorOptions().dtype(torch::kBool).device(onstate.device()));
@@ -404,7 +403,7 @@ tuple_tensor_2d nbatch_convert_sites_cpu(
     sym_break[i] =
         convert_sites_cpu(onstate[i], nphysical, data_index, qrow_qcol,
                           qrow_qcol_index, qrow_qcol_shape, ista, ista_index,
-                          image2, &data_info_ptr[i * nphysical * 3]);
+                          image2, nbatch, &data_info_ptr[i]);
   }
   return std::make_tuple(data_info, sym_break);
 }

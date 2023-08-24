@@ -26,9 +26,10 @@ Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
                            const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                            const int sorb, const int nele);
 
-// data: 1dim, data_index(nbatch, nphysical, 3)
-Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
-                         const int nphysical, int64_t batch);
+// data: 1dim, data_index(3, nphysical, nbatch)
+tuple_tensor_2d mps_vbatch_tensor(const Tensor &mps_data,
+                                  const Tensor &data_index, const int nphysical,
+                                  int64_t batch);
 
 Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
                                const int sorb);

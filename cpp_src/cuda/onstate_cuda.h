@@ -75,6 +75,6 @@ __device__ void sites_sym_index(const int64_t *onstate, const int nphysical,
                                 const int64_t *qrow_qcol_index,
                                 const int64_t *qrow_qcol_shape,
                                 const int64_t *ista, const int64_t *ista_index,
-                                const int64_t *image2,
+                                const int64_t *image2, const int64_t nbatch,
                                 int64_t *data_info, bool *sym_array);
 }  // namespace squant

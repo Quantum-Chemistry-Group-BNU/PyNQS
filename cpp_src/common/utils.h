@@ -16,8 +16,14 @@
 #include <torch/extension.h>
 #include <torch/script.h>
 
-namespace utils {
+namespace tools {
 
-std::chrono::high_resolution_clock::time_point get_time();
+template <typename T>
+double get_duration_nano(T t) {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(t).count();
+}
 
+inline std::chrono::high_resolution_clock::time_point get_time() {
+  return std::chrono::high_resolution_clock::now();
+}
 }

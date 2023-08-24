@@ -307,12 +307,15 @@ def mps_value(onstate: Tensor,
     data_info, sym_break = convert_sites(unique_state, nphysical, mps.data_index, mps.qrow_qcol,
                                          mps.qrow_qcol_ptr, mps.qrow_qcol_shape,
                                          mps.ista, mps.ista_ptr, image2)
+    if onstate.is_cuda:
+        torch.cuda.synchronize()
     print(f"MPS Index: {(time.time_ns() -t0)/1.0E09:.3E} s")
 
     # remove symmetry break index, memory copy
-    data_info_sym = data_info[torch.logical_not(sym_break)]
+    data_info_sym = data_info[:, :, torch.logical_not(sym_break)]
     del data_info, state
-    torch.cuda.empty_cache()
+    if onstate.is_cuda:
+        torch.cuda.empty_cache()
 
     # 26.8GiB 
     # SD: 1216608
@@ -329,15 +332,15 @@ def mps_value(onstate: Tensor,
     # CUDA version: using magma dgemv-vbatch, CPU version is similar to mps_vbatch_cpu
     t0 = time.time_ns()
     if data_info_sym.numel() != 0:
-        max_dr_dc = data_info_sym[:, :, 1:].max().item()
-        batch = magma_allocate_memory(max_dr_dc, max_allocate_memory=mps.free_memory * 0.75)
-        print(f"Magma Using memory: {mps.free_memory * 0.75:.3f} GiB")
+        max_dr_dc = data_info_sym[1:, :, :].max().item()
+        batch = magma_allocate_memory(max_dr_dc, max_allocate_memory=mps.free_memory * 0.15)
+        print(f"Magma Using memory: {mps.free_memory * 0.15:.3f} GiB, batch: {batch}")
         # 6.144GiB cost: 56.25s
-        value = mps_vbatch(mps.data, data_info_sym, nphysical, batch=batch)
+        value, flops = mps_vbatch(mps.data, data_info_sym, nphysical, batch=batch)
     else:
         value = 0.0
-    print(f"Magma vbatch: {(time.time_ns() -t0)/1.0E09:.3E} s")
-
+    delta = (time.time_ns() -t0)/1.0E09
+    print(f"Magma vbatch: {delta:.3E} s, flops: {flops.mean():.3E}")
     print(
         f"Current allocated memory: {torch.cuda.memory_allocated()/2**30:.5f} GiB")
     print(
@@ -354,7 +357,8 @@ def mps_value(onstate: Tensor,
     result[sym_break] = 0.0
 
     del value, sym_break, data_info_sym, unique_state
-    torch.cuda.empty_cache()
+    if onstate.is_cuda:
+        torch.cuda.empty_cache()
     return torch.index_select(result, 0, index) * torch.index_select(sgn, 0, index)
 
 def magma_allocate_memory(max_dr_dc: int, max_allocate_memory = 32) ->int:

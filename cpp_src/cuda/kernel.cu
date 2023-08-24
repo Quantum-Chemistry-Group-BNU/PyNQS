@@ -343,9 +343,10 @@ __global__ void convert_sites_kernel(const int64_t *onstate, const int nphysical
     return;
   // onstate: [nbatch, nphysical * 2]
   // data_info [nbatch, nphysical, 3]
-  squant::sites_sym_index(&onstate[idn * nphysical * 2], nphysical, data_index, qrow_qcol,
-                          qrow_qcol_index, qrow_qcol_shape, ista, ista_index,
-                          image2, &data_info[idn * nphysical * 3], &sym_array[idn]);
+  squant::sites_sym_index(&onstate[idn * nphysical * 2], nphysical, data_index,
+                          qrow_qcol, qrow_qcol_index, qrow_qcol_shape, ista,
+                          ista_index, image2, nbatch, &data_info[idn],
+                          &sym_array[idn]);
   }
 
 

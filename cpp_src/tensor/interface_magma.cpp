@@ -1,21 +1,25 @@
 #include "interface_magma.h"
+#include "../common/utils.h"
+#include <iomanip>
+#include <vector>
 
 // FIXME: memory leak, where?
-void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
+std::vector<double> dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
                          const Tensor &dr, const Tensor &dc,
                          const int nphysical, const int64_t nbatch,
                          Tensor result) {
   /**
   data: (length data)
-  data_index: (nbatch, nphysical)
-  dr: (nbatch, nphysical)
-  dc: (nbatch, nphysical)
+  data_index: (nphysical, nbatch)
+  dr: (nphysical, nbatch)
+  dc: (nphysical, nbatch)
   nphysical: space orbital
   nbatch: number of nbatch
   **/
   bool debug = false;
   bool use_cpu = data.is_cpu();
   double *data_ptr = data.data_ptr<double>();
+  auto flops = std::vector<double>(nphysical, 0);
 
   auto options = torch::TensorOptions()
                      .dtype(torch::kFloat64)
@@ -97,11 +101,13 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
     if (debug){
       std::cout << "i-cycle: " << i << std::endl;
     }
+    auto t0 = tools::get_time();
     // memory must be is contiguous, and convert CPU to GPU
-    Tensor dr_site = dr.slice(1, i, i + 1).reshape(-1).contiguous();  //(nbatch)
-    Tensor dc_site = dc.slice(1, i, i + 1).reshape(-1).contiguous();  //(nbatch)
+    // dr/dr/data_index : (nphysical, nbatch)
+    Tensor dr_site = dr.slice(0, i, i + 1).reshape(-1);  //(nbatch)
+    Tensor dc_site = dc.slice(0, i, i + 1).reshape(-1);  //(nbatch)
     Tensor data_index_site =
-        data_index.slice(1, i, i + 1).reshape(-1).contiguous();  //(nbatch)
+        data_index.slice(0, i, i + 1).reshape(-1);  //(nbatch)
 
     auto dr_site_ptr = dr_site.data_ptr<int64_t>();
     auto dc_site_ptr = dc_site.data_ptr<int64_t>();
@@ -167,12 +173,24 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
                       "vector-Y:", use_cpu);
         std::cout << "---------------------" << std::endl;
     }
+    cudaDeviceSynchronize();
+    auto t1 = tools::get_time();
+    auto delta = tools::get_duration_nano(t1 - t0) /1E09;
+    auto cost = 2 * (dr_site * dc_site).sum().item<int64_t>();
+    flops[i] = cost/delta;
   }
   //
   magma_queue_sync(magma_queue);
   magma_queue_destroy(magma_queue);
   magma_finalize();
 
+  if (debug) {
+    std::cout << std::setiosflags(std::ios::scientific) << std::setprecision(3);
+    for (auto i : flops) {
+        std::cout << i << "\n";
+    }
+    std::cout << "-------" << std::endl;
+  }
   double *result_ptr = result.data_ptr<double>();
   get_array_cuda(dY_array_data, index_v_ptr, nbatch, 0, result_ptr);
   if (debug) {
@@ -184,4 +202,5 @@ void dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_index,
   cudaFree(dev_data_begin);
   ones.reset();
   index_v.reset();
+  return flops;
 }

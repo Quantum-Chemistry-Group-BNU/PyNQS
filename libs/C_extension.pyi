@@ -168,14 +168,15 @@ def spin_flip_rand(bra: Tensor, sorb: int, nele: int,
     ...
 
 
-def mps_vbatch(data: Tensor, index: Tensor, nphysical: int, batch: int = 5000) -> Tensor:
+def mps_vbatch(data: Tensor, index: Tensor, nphysical: int,
+               batch: int = 5000) -> Tuple[Tensor, Tensor]:
     r"""
     variable batch matrix and vector product using magma_dgemv_vbatch or cycle, 
             default: batch: 5000, if using cpu, batch is placeholder"
-
+     index(Tensor): shape: (3, nphysical, nbatch) ->[ptr_begin, dr, dc]
     Args:
         data(Tensor):
-        index(Tensor): shape: (nbatch, nphysical, 3) ->[ptr_begin, dr, dc]
+        flops(Tensor): each physical flops in per batch. shape: (nbatch, nphysical)
     """
 
 
@@ -212,7 +213,7 @@ def convert_sites(onstate: Tensor, nphysical: int, data_index: Tensor,
         image2:(Tensor) (nphysical *2): MPS topo list, random[0, 1, ..., nphysical * 2]
 
     Return:
-        data_info(Tensor): (nbatch, nphysical, 3) int64_t, last dim(idx, dr, dc)
+        data_info(Tensor): (3, nphysical, nbatch) int64_t, last dim(idx, dr, dc)
         sym_break(Tensor): bool array:(nbatch,) bool array if True, symmetry break.
 
     """

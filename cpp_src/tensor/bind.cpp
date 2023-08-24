@@ -119,8 +119,8 @@ auto MCMC_sample(const std::string model_file, Tensor &initial_state,
   return n_accept;
 }
 
-Tensor mps_vbatch(const Tensor mps_data, const Tensor data_index,
-                  const int nphysical, const int64_t batch) {
+tuple_tensor_2d mps_vbatch(const Tensor mps_data, const Tensor data_index,
+                           const int nphysical, const int64_t batch) {
   if (mps_data.is_cpu() || data_index.is_cpu()) {
     return mps_vbatch_tensor_cpu(mps_data.to(torch::kCPU),
                                  data_index.to(torch::kCPU), nphysical);
@@ -153,7 +153,7 @@ params:
 * @param ista: (length)
 * @param ista_index: (nphysical * 4): cumulative sum
 * @param image2: (nphysical *2): MPS topo list, random[0, 1, ..., nphysical * 2]
-* @return data_info: (nbatch, nphysical, 3) int64_t, last dim(idx, dr, dc)
+* @return data_info: (3, nphysical, nbatch) int64_t, last dim(idx, dr, dc)
 * @return sym_break: bool array:(nbatch,) bool array if True, symmetry break.
 * @data: 23-08-22
 */

@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdint>
 #include <tuple>
+#include <vector>
 
 #include "cuda/kernel.h"
 #include "interface_magma.h"
@@ -142,10 +143,11 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
   return std::make_tuple(comb, comb_bit);
 }
 
-Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
-                         const int nphysical, int64_t batch = 5000) {
-  // data_index: (nbatch, nphysical, 3)
-  const int64_t data_len = data_index.size(0);
+tuple_tensor_2d mps_vbatch_tensor(const Tensor &mps_data,
+                                  const Tensor &data_info, const int nphysical,
+                                  int64_t batch = 5000) {
+  // data_info: (3, nphysical, nbatch)
+  const int64_t data_len = data_info.size(2);
   auto options = torch::TensorOptions()
                      .dtype(torch::kFloat64)
                      .layout(mps_data.layout())
@@ -154,20 +156,25 @@ Tensor mps_vbatch_tensor(const Tensor &mps_data, const Tensor &data_index,
   const int64_t n = data_len / batch + 1;
   int64_t start = 0;
   int64_t end = 0;
-  Tensor index_tensor = data_index.slice(2,0, 1); //(nbatch, nphysical)
-  Tensor dr_tensor = data_index.slice(2, 1, 2); //(nbatch, nphysical)
-  Tensor dc_tensor = data_index.slice(2, 2, 3); //(nbatch, nphysical)
+  Tensor index_tensor = data_info[0]; //(nphysical, nbatch)
+  Tensor dr_tensor = data_info[1]; //(nphysical, nbatch)
+  Tensor dc_tensor = data_info[2]; //(nphysical, nbatch)
+  auto flops_batch = std::vector<double>(n * nphysical, 0);
   for (int i = 0; i < n; i++) {
     end = std::min(start + batch, data_len);
     if(start == end) break; // slice may be is empty tensor
     batch = std::min(batch, end - start);
-    dgemv_vbatch_tensor(
-        mps_data, index_tensor.slice(0, start, end),
-        dr_tensor.slice(0, start, end), dc_tensor.slice(0, start, end),
+    auto flops = dgemv_vbatch_tensor(
+        mps_data, index_tensor.slice(1, start, end),
+        dr_tensor.slice(1, start, end), dc_tensor.slice(1, start, end),
         nphysical, batch, result.slice(0, start, end));
     start = end;
+    std::copy_n(flops.data(), nphysical, &flops_batch[i * nphysical]);
   }
-  return result;
+  // notice torch::from_blob will be released when the function ends.
+  Tensor flops_tensor = torch::from_blob(flops_batch.data(), n * nphysical)
+                            .reshape({n, nphysical});
+  return std::make_tuple(result, std::move(flops_tensor.to(mps_data.device())));
 }
 
 Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
@@ -186,7 +193,7 @@ Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
       torch::arange(sorb, options).unsqueeze(0).repeat({nbatch, 1});
 
   int64_t *index_ptr = index_tensor.data_ptr<int64_t>();  // tmp index
-  Tensor sgn_tensor = torch::empty(nbatch, options);      // Int64
+  Tensor sgn_tensor = torch::empty(nbatch, options);  // Int64
   int64_t *sgn_ptr = sgn_tensor.data_ptr<int64_t>();
 
   const int64_t *image2_ptr =
@@ -208,13 +215,13 @@ tuple_tensor_2d nbatch_convert_sites_cuda(Tensor &onstate, const int nphysical,
                      .layout(onstate.layout())
                      .device(onstate.device());
 
-  int64_t dim = onstate.dim();
+  const int64_t dim = onstate.dim();
   if (dim == 1) {
     onstate = onstate.unsqueeze(0);  // 1D -> 2D
   }
-  int64_t nbatch = onstate.size(0);
+  const int64_t nbatch = onstate.size(0);
 
-  Tensor data_info = torch::zeros({nbatch, nphysical, 3}, options);
+  Tensor data_info = torch::zeros({3, nphysical, nbatch}, options);
   Tensor sym_break = torch::zeros(
       nbatch,
       torch::TensorOptions().dtype(torch::kBool).device(onstate.device()));

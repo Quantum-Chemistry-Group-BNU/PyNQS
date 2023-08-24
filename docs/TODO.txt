@@ -43,6 +43,7 @@ BUG: pre_train failure (Y)
 1. Add CUDAException handle (Y)
 2. MPS onstate index implement in CUDA or CPU by binary search. (Y)
 3. Store onstate local energy.
+4. Test Fe2S2/Fe8S7 energy, interface-magma-dgemv-vbatch (Y)
 
 #---------------feature's------------------
 1. Add tutorial using "Read the Docs"
@@ -67,7 +68,8 @@ BUG: pre_train failure (Y)
    "Trying to create tensor with negative dimension -2483944428352"
 3. cpp_src: size_t, int64_t and int usage confusion
 4. Fe8S7, cuda get_hij_torch error? OOM?? onv_to_tensor (Y) (Y, 23-08-15)
-5. Video memory leak?? interface_magma error??
+5. Video memory leak?? interface_magma error?? (Y, 23-08-24)
+   pytorch memory cache, and using del tensor and torch.cuda.empty_cache() release.
 6. MPS index functions is pretty slower. see: qubic/qmatrix/utils "convert_sites" functions
     e.g. Fe8S7: [2, 1216609, 24], cost time: ~800s, how to implement in cuda. (Y, 23-08-22)
     CUDA binary search: ~32.1ms, CPU binary search ~11.6s, see: tensor/bind.cpp/nbatch_convert_sites.
@@ -76,3 +78,17 @@ BUG: pre_train failure (Y)
 #---------------Notice------------------
 1. h1e and h2e may be different even though the molecular structure is the same. 
     The phase of h1e/h2e is different (+-).
+2. libtorch slice dim.
+
+
+
+#---------------Test-------------------
+1. Fe8S7(114e, 73o) n_SD: 1216608 A100-40GB
+time         n_SD    <i|Hj>    MPS     magma-vbatch    mps-index
+batch =4:   4.817ms  0.043ms  64.27s    63.51s         0.2168s
+energy             mean:        delta-E	       var:        SD:      ref-energy
+sample = 200/4  -1075.523502    0.007441	0.007139    0.084497    -1075.516061
+sample = 300/2  -1075.521529    0.005468	0.005265    0.072560    
+sample = 1000/4 -1075.519443    0.003382	0.003750    0.0612375   ~ 276 min
+
+flops max~5.0E11 see: magma-dgemv-flops.png
