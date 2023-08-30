@@ -1,3 +1,4 @@
+import os
 import time
 import torch
 import numpy as np
@@ -280,7 +281,14 @@ def convert_mps(nphysical: int,
 
 
 def mps_value(onstate: Tensor,
-              mps: MPSData,
+              data: Tensor,
+              data_index: Tensor,
+              qrow_qcol: Tensor,
+              qrow_qcol_ptr: Tensor,
+              qrow_qcol_shape: Tensor,
+              ista: Tensor,
+              ista_ptr: Tensor,
+              free_memory: float,
               nphysical: int,
               image2: Tensor,
               remove_duplicate: bool = False) -> Tensor:
@@ -288,6 +296,111 @@ def mps_value(onstate: Tensor,
     # 1. onstate is [1, -1, -1, 1, ...], double.
     
     # 8.3GiB
+    # device = onstate.device
+    # if onstate.dim() == 1:
+    #     onstate.unsqueeze_(0)  # dim = 2
+    # # convert [-1, 1] -> [0, 1]
+    # state = ((onstate + 1)//2).to(dtype=torch.int64)
+
+    # # remove duplicate, may be time consuming, uint8 maybe faster than int64
+    # # duplicated states have been removed in calculating local energy, so default False
+    # if remove_duplicate:
+    #     unique_state, index = torch.unique(state, dim=0, return_inverse=True)
+    # else:
+    #     unique_state = state
+    #     index = torch.arange(len(state), device=device)
+
+    # t0 = time.time_ns()
+    # # run nbatch_convert_sites in CUDA and CPU, implement use CPP
+    # data_info, sym_break = convert_sites(unique_state, nphysical, data_index, qrow_qcol,
+    #                                      qrow_qcol_ptr, qrow_qcol_shape,
+    #                                      ista, ista_ptr, image2)
+    # if onstate.is_cuda:
+    #     torch.cuda.synchronize()
+    # print(f"MPS Index: {(time.time_ns() -t0)/1.0E09:.3E} s")
+
+    # # remove symmetry break index, memory copy
+    # data_info_sym = data_info[:, :, torch.logical_not(sym_break)]
+    # del data_info, state
+    # if onstate.is_cuda:
+    #     torch.cuda.empty_cache()
+    
+    # get onstate (index, dr, dc)
+    data_info_sym, sym_break, index, sgn = nbatch_convert_sites(onstate,
+                                                                data_index,
+                                                                qrow_qcol,
+                                                                qrow_qcol_ptr,
+                                                                qrow_qcol_shape,
+                                                                ista,
+                                                                ista_ptr,
+                                                                image2,
+                                                                nphysical,
+                                                                remove_duplicate)
+    device = onstate.device
+    # 26.8GiB 
+    # SD: 1216608
+    # delta: 18.4GiB ??? empty_cache()???
+    # state: 4866436 * 146 * 8/2**30 = 5.29GiB
+    # data_info: 4866436 * 73 * 3 * 8/2**30 = 7.94GiB
+    # data_info_sym: 4597445 * 73 * 3 * 8/2**30 = 7.50GiB
+    # sym_break:(bool) 4866436 * 1/2**30 = 0.0045GiB
+    # mps-vbatch
+    result = torch.empty_like(index, dtype=torch.double, device=device)
+
+    # run mps_vbatch in CUDA and CPU, implement use CPP.
+    # CUDA version: using magma dgemv-vbatch, CPU version is similar to mps_vbatch_cpu
+    t0 = time.time_ns()
+    if data_info_sym.numel() != 0:
+        max_dr_dc = data_info_sym[1:, :, :].max().item()
+        batch = magma_allocate_memory(max_dr_dc, max_allocate_memory=free_memory)
+        print(f"Magma Using memory: {free_memory:.5f} GiB, batch: {batch}")
+        # 6.144GiB cost: 56.25s
+        value, flops = mps_vbatch(data, data_info_sym, nphysical, batch=batch)
+    else:
+        value = 0.0
+    delta = (time.time_ns() -t0)/1.0E09
+    print(
+        f"Magma vbatch: {delta:.3E} s, flops mean: {flops.mean():.3E}, max: {flops.max():.3E}")
+    print(
+        f"Current allocated memory: {torch.cuda.memory_allocated()/2**30:.5f} GiB")
+    print(
+        f"Max allocated memory: {torch.cuda.max_memory_allocated()/2**30:.5f} GiB")
+
+    # index
+    result[torch.logical_not(sym_break)] = value
+    result[sym_break] = 0.0
+
+    del value, sym_break, data_info_sym
+    if onstate.is_cuda:
+        torch.cuda.empty_cache()
+    
+    return torch.index_select(result, 0, index) * torch.index_select(sgn, 0, index)
+
+def magma_allocate_memory(max_dr_dc: int, max_allocate_memory: float = 32.0) ->int:
+    """
+    Calculate magma_dgemv batch, max_allocate_memory: GiB
+    """
+    # sizeof(double */magma_int_t/double) = 8
+    # double ptr: dA_array/dX_array/dY_array = nbatch * 3 * sizeof(double *)
+    # dX/dY: nbatch * max_dr_dc * 2 * sizeof(double)
+    # dev_m/dev_n/dev_ldd_A/dev_inc_x/dev_inc_y: 5 * (nbatch + 1) * sizeof(magma_int_t)
+    # index_v/ones: (nbatch + nbatch + 1) * sizeof(magma_int_t)
+    batch = int(max_allocate_memory * 2**30 / (10 * 8 + max_dr_dc * 2 * 8))
+    return batch
+
+def nbatch_convert_sites(
+    onstate: Tensor, 
+    data_index: Tensor,
+    qrow_qcol: Tensor, 
+    qrow_qcol_ptr: Tensor,
+    qrow_qcol_shape: Tensor, 
+    ista: Tensor, 
+    ista_ptr: Tensor,
+    image2: Tensor,
+    nphysical: int, 
+    remove_duplicate: bool = False
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+
     device = onstate.device
     if onstate.dim() == 1:
         onstate.unsqueeze_(0)  # dim = 2
@@ -301,73 +414,28 @@ def mps_value(onstate: Tensor,
     else:
         unique_state = state
         index = torch.arange(len(state), device=device)
-
+    unique_batch = unique_state.shape[0]
+    
     t0 = time.time_ns()
     # run nbatch_convert_sites in CUDA and CPU, implement use CPP
-    data_info, sym_break = convert_sites(unique_state, nphysical, mps.data_index, mps.qrow_qcol,
-                                         mps.qrow_qcol_ptr, mps.qrow_qcol_shape,
-                                         mps.ista, mps.ista_ptr, image2)
+    data_info, sym_break = convert_sites(unique_state, nphysical, data_index, qrow_qcol,
+                                         qrow_qcol_ptr, qrow_qcol_shape,
+                                         ista, ista_ptr, image2)
     if onstate.is_cuda:
         torch.cuda.synchronize()
     print(f"MPS Index: {(time.time_ns() -t0)/1.0E09:.3E} s")
 
     # remove symmetry break index, memory copy
     data_info_sym = data_info[:, :, torch.logical_not(sym_break)]
-    del data_info, state
-    if onstate.is_cuda:
-        torch.cuda.empty_cache()
-
-    # 26.8GiB 
-    # SD: 1216608
-    # delta: 18.4GiB ??? empty_cache()???
-    # state: 4866436 * 146 * 8/2**30 = 5.29GiB
-    # data_info: 4866436 * 73 * 3 * 8/2**30 = 7.94GiB
-    # data_info_sym: 4597445 * 73 * 3 * 8/2**30 = 7.50GiB
-    # sym_break:(bool) 4866436 * 1/2**30 = 0.0045GiB
-    # mps-vbatch
-    unique_batch = unique_state.shape[0]
-    result = torch.empty(unique_batch, dtype=torch.double, device=device)
-
-    # run mps_vbatch in CUDA and CPU, implement use CPP.
-    # CUDA version: using magma dgemv-vbatch, CPU version is similar to mps_vbatch_cpu
-    t0 = time.time_ns()
-    if data_info_sym.numel() != 0:
-        max_dr_dc = data_info_sym[1:, :, :].max().item()
-        batch = magma_allocate_memory(max_dr_dc, max_allocate_memory=mps.free_memory * 0.15)
-        print(f"Magma Using memory: {mps.free_memory * 0.15:.3f} GiB, batch: {batch}")
-        # 6.144GiB cost: 56.25s
-        value, flops = mps_vbatch(mps.data, data_info_sym, nphysical, batch=batch)
-    else:
-        value = 0.0
-    delta = (time.time_ns() -t0)/1.0E09
-    print(f"Magma vbatch: {delta:.3E} s, flops: {flops.mean():.3E}")
-    print(
-        f"Current allocated memory: {torch.cuda.memory_allocated()/2**30:.5f} GiB")
-    print(
-        f"Max allocated memory: {torch.cuda.max_memory_allocated()/2**30:.5f} GiB")
-
-    # calculate permute sgn, if image2 != range(nphysical * 2)
-    if torch.allclose(image2, torch.arange(nphysical * 2, device=device)):
+    
+    if torch.allclose(image2, torch.arange(nphysical * 2, device= device)):
         sgn = torch.ones(unique_batch, dtype=torch.double, device=device)
     else:
         sgn = permute_sgn(image2, unique_state, nphysical * 2)
 
-    # index
-    result[torch.logical_not(sym_break)] = value
-    result[sym_break] = 0.0
-
-    del value, sym_break, data_info_sym, unique_state
+    # del tensor
+    del data_info, state, unique_state
     if onstate.is_cuda:
         torch.cuda.empty_cache()
-    return torch.index_select(result, 0, index) * torch.index_select(sgn, 0, index)
 
-def magma_allocate_memory(max_dr_dc: int, max_allocate_memory = 32) ->int:
-    """
-    Calculate magma_dgemv vbatch
-    """
-    # sizeof(double */magma_int_t/double) = 8
-    # double ptr: dA_array/dX_array/dY_array = nbatch * 3 * sizeof(double *)
-    # dX/dY: nbatch * max_dr_dc * 2 * sizeof(double)
-    # dev_m/dev_n/dev_ldd_A/dev_inc_x/dev_inc_y: 5 * (nbatch + 1) * sizeof(magma_int_t)
-    batch = int(max_allocate_memory * 2**30 / (8 * 8 + max_dr_dc * 2 * 8))
-    return batch
+    return data_info_sym, sym_break, index, sgn
