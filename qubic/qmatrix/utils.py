@@ -7,7 +7,7 @@ from typing import List, Tuple, NewType, TypeVar, Union
 from numpy import ndarray
 from torch import Tensor
 
-from .qmatrix import QMatrix_torch, QMatrix_numpy, QMatrix_jax
+from .qmatrix import QMatrix_torch, QMatrix_numpy
 from .types import NSz_index
 from qubic.qtensor import Qbond, Stensor2
 from qubic.mps import MPS_c
@@ -15,7 +15,7 @@ from utils import EnterDir
 
 from libs.C_extension import mps_vbatch, permute_sgn, convert_sites
 
-QMatrix = TypeVar("QMatrix", QMatrix_numpy, QMatrix_torch, QMatrix_jax)
+QMatrix = TypeVar("QMatrix", QMatrix_numpy, QMatrix_torch)
 
 
 def Qbond_to_qrow(qbond: Qbond) -> ndarray[np.int64]:
@@ -64,16 +64,11 @@ def Stensor2_to_QMatrix(stensor: Stensor2, data_type="torch", device=None, qsym=
         qcol = torch.from_numpy(qcol).to(device=device, dtype=torch.int64)
         qsym = torch.from_numpy(qsym).to(device=device, dtype=torch.int64)
         QMatrix_class = QMatrix_torch
-        # qmat = QMatrix(qrow, qcol, data, qrow_sym_dict, qcol_sym_dict, qsym=qsym, device=device)
-        # qmat.init()
+    elif data_type == "numpy":
+        QMatrix_class = QMatrix_numpy
     else:
-        if data_type == "numpy":
-            QMatrix_class = QMatrix_numpy
-        elif data_type == "jax":
-            QMatrix_class = QMatrix_jax
-        else:
-            raise ValueError(
-                f"Data_type({data_type}) error, excepted 'torch' 'numpy' 'jax'")
+        raise ValueError(
+            f"Data_type({data_type}) error, excepted 'torch' 'numpy'")
     qmat = QMatrix_class(qrow, qcol, data, qrow_sym_dict,
                          qcol_sym_dict, qsym=qsym, device=device)
     qmat.init()
@@ -81,7 +76,7 @@ def Stensor2_to_QMatrix(stensor: Stensor2, data_type="torch", device=None, qsym=
     return qmat
 
 
-def convert_order(data_F: ndarray, qrow: ndarray, qcol: ndarray, qsym: ndarray):
+def convert_order(data_F: ndarray, qrow: ndarray, qcol: ndarray, qsym: ndarray) ->ndarray:
     """
     F-order to C-oder
     """
@@ -293,39 +288,6 @@ def mps_value(onstate: Tensor,
               image2: Tensor,
               remove_duplicate: bool = False) -> Tensor:
 
-    # 1. onstate is [1, -1, -1, 1, ...], double.
-    
-    # 8.3GiB
-    # device = onstate.device
-    # if onstate.dim() == 1:
-    #     onstate.unsqueeze_(0)  # dim = 2
-    # # convert [-1, 1] -> [0, 1]
-    # state = ((onstate + 1)//2).to(dtype=torch.int64)
-
-    # # remove duplicate, may be time consuming, uint8 maybe faster than int64
-    # # duplicated states have been removed in calculating local energy, so default False
-    # if remove_duplicate:
-    #     unique_state, index = torch.unique(state, dim=0, return_inverse=True)
-    # else:
-    #     unique_state = state
-    #     index = torch.arange(len(state), device=device)
-
-    # t0 = time.time_ns()
-    # # run nbatch_convert_sites in CUDA and CPU, implement use CPP
-    # data_info, sym_break = convert_sites(unique_state, nphysical, data_index, qrow_qcol,
-    #                                      qrow_qcol_ptr, qrow_qcol_shape,
-    #                                      ista, ista_ptr, image2)
-    # if onstate.is_cuda:
-    #     torch.cuda.synchronize()
-    # print(f"MPS Index: {(time.time_ns() -t0)/1.0E09:.3E} s")
-
-    # # remove symmetry break index, memory copy
-    # data_info_sym = data_info[:, :, torch.logical_not(sym_break)]
-    # del data_info, state
-    # if onstate.is_cuda:
-    #     torch.cuda.empty_cache()
-    
-    # get onstate (index, dr, dc)
     data_info_sym, sym_break, index, sgn = nbatch_convert_sites(onstate,
                                                                 data_index,
                                                                 qrow_qcol,
@@ -337,27 +299,18 @@ def mps_value(onstate: Tensor,
                                                                 nphysical,
                                                                 remove_duplicate)
     device = onstate.device
-    # 26.8GiB 
-    # SD: 1216608
-    # delta: 18.4GiB ??? empty_cache()???
-    # state: 4866436 * 146 * 8/2**30 = 5.29GiB
-    # data_info: 4866436 * 73 * 3 * 8/2**30 = 7.94GiB
-    # data_info_sym: 4597445 * 73 * 3 * 8/2**30 = 7.50GiB
-    # sym_break:(bool) 4866436 * 1/2**30 = 0.0045GiB
-    # mps-vbatch
     result = torch.empty_like(index, dtype=torch.double, device=device)
 
     # run mps_vbatch in CUDA and CPU, implement use CPP.
     # CUDA version: using magma dgemv-vbatch, CPU version is similar to mps_vbatch_cpu
     t0 = time.time_ns()
-    if data_info_sym.numel() != 0:
+    if onstate.is_cuda:
         max_dr_dc = data_info_sym[1:, :, :].max().item()
         batch = magma_allocate_memory(max_dr_dc, max_allocate_memory=free_memory)
-        print(f"Magma Using memory: {free_memory:.5f} GiB, batch: {batch}")
-        # 6.144GiB cost: 56.25s
-        value, flops = mps_vbatch(data, data_info_sym, nphysical, batch=batch)
     else:
-        value = 0.0
+        batch = 1  # batch is placeholder"
+    print(f"Magma Using memory: {free_memory:.5f} GiB, batch: {batch}")
+    value, flops = mps_vbatch(data, data_info_sym, nphysical, batch=batch)
     delta = (time.time_ns() -t0)/1.0E09
     print(
         f"Magma vbatch: {delta:.3E} s, flops mean: {flops.mean():.3E}, max: {flops.max():.3E}")
@@ -406,14 +359,13 @@ def nbatch_convert_sites(
         onstate.unsqueeze_(0)  # dim = 2
     # convert [-1, 1] -> [0, 1]
     state = ((onstate + 1)//2).to(dtype=torch.int64)
-
     # remove duplicate, may be time consuming, uint8 maybe faster than int64
     # duplicated states have been removed in calculating local energy, so default False
     if remove_duplicate:
         unique_state, index = torch.unique(state, dim=0, return_inverse=True)
     else:
         unique_state = state
-        index = torch.arange(len(state), device=device)
+        index = torch.arange(state.shape[0], device=device)
     unique_batch = unique_state.shape[0]
     
     t0 = time.time_ns()

@@ -44,6 +44,7 @@ BUG: pre_train failure (Y)
 2. MPS onstate index implement in CUDA or CPU by binary search. (Y)
 3. Store onstate local energy.
 4. Test Fe2S2/Fe8S7 energy, interface-magma-dgemv-vbatch (Y)
+5. RNNWavefunction distributed.
 
 #---------------feature's------------------
 1. Add tutorial using "Read the Docs"
@@ -52,13 +53,15 @@ BUG: pre_train failure (Y)
 4. Support SR from RNN, vmap doesn't 'torch.nn.functions.one_hot' functions
 5. Support different cuda stream. ref: https://zhuanlan.zhihu.com/p/51402722
 6. Support block calculation energy in CIWavefunction. ref:https://zhuanlan.zhihu.com/p/422710424
-7. Support Multiprocessing or Multiprocessing
+7. Support Multiprocessing or Multithreading
 8. mpi4py: the seed of the different rank
 
 
 #---------------question about pytorch------------------
 1. torch.compile doesn't speedups GRU, RNN, see: https://github.com/pytorch/pytorch/issues/91439
 2. vmap doesn't support 'torch.nn.functions.one_hot' functions
+3. MPSWavefunction(aten::fill_) doesn't support model Serialization,
+    see: https://github.com/pytorch/pytorch/issues/67834
 
 #----------------Bug--------------------
 1. cpp_src C_extension functions doesn't support different cuda stream,
@@ -92,3 +95,5 @@ sample = 300/2  -1075.521529    0.005468	0.005265    0.072560
 sample = 1000/4 -1075.519443    0.003382	0.003750    0.0612375   ~ 276 min
 
 flops max~5.0E11 see: magma-dgemv-flops.png
+cudaMemcpy Device->Device ~614GiB/s
+MPS is so pretty expensive, so MPS + RMB/MPS *RMB fail.

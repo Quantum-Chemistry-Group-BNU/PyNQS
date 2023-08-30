@@ -79,7 +79,7 @@
     "C_Cpp.errorSquiggles": "disabled",
     // "python.formatting.provider": "yapf",
     // "python.formatting.yapfArgs": ["--style", "{column_limit: 110, based_on_style: google, indent_width: 4}"],
-    "python.formatting.autopep8Args": ["--max-line-length=110", "--experimental"],
+    //"python.formatting.autopep8Args": ["--max-line-length=110", "--experimental"],
     "clangd.fallbackFlags": [
     "-std=c++17",
     "-I${workspaceFolder}/cpp_src",
@@ -102,6 +102,6 @@
     // clang does not discover both the cpp and cuda header files.
     // "-xcuda",
     "-fsyntax-only",
-    "MAGMA_ILP64", // 
+    "-DMAGMA_ILP64", // 
 ]
 }
