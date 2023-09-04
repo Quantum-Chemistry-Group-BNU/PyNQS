@@ -338,6 +338,11 @@ class ElectronInfo:
     def memory(self) -> float:
         return self._memory
     
+    def to(self, device: str=None) ->None:
+        self._h1e = self._h1e.to(device)
+        self._h2e = self._h2e.to(device)
+        self._ci_space = self._ci_space.to(device)
+    
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}" + "(\n"

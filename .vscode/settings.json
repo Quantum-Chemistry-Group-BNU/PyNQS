@@ -77,7 +77,15 @@
         "source_location": "cpp"
     },
     "C_Cpp.errorSquiggles": "disabled",
-    // "python.formatting.provider": "yapf",
+    "[python]":{
+        "editor.formatOnType": false,
+        "editor.defaultFormatter": "ms-python.black-formatter",
+    },
+    "black-formatter.args": [
+        "--line-length",
+        "110"
+    ],
+    //"python.formatting.provider": "yapf",
     // "python.formatting.yapfArgs": ["--style", "{column_limit: 110, based_on_style: google, indent_width: 4}"],
     //"python.formatting.autopep8Args": ["--max-line-length=110", "--experimental"],
     "clangd.fallbackFlags": [
