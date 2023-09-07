@@ -2,13 +2,16 @@ import time
 import os
 import random
 import torch
+import torch.distributed as dist
 import tempfile
 import numpy as np
 import pandas as pd
 
 from functools import partial
-from typing import Callable, Tuple, List
+from typing import Callable, Tuple, List, Union
 from torch import Tensor, nn
+from torch.nn.parallel import DistributedDataParallel as DDP
+from loguru import logger
 from pandas import DataFrame
 from scipy import special
 
@@ -18,18 +21,19 @@ from line_profiler import LineProfiler
 from vmc.energy import total_energy
 from libs.C_extension import onv_to_tensor, spin_flip_rand, MCMC_sample
 from libs.C_extension import tensor_to_onv
-from utils import state_to_string, ElectronInfo, check_para, get_nbatch
+from utils import state_to_string, ElectronInfo, check_para, get_nbatch, diff_rank_seed, setup_seed
 
 print = partial(print, flush=True)
 
 # @profile(precision=4, stream=open('MCMC_memory_profiler.log','w+'))
 
 
-class Sampler():
+class Sampler:
     """
     Generates samples of configurations from a neural quantum state(NQS)
     using Markov chain Monte Carlo(MCMC) or Auto regressive(AR) algorithm
     """
+
     METHOD_SAMPLE = ("MCMC", "AR")
     n_accept: int
     str_full: List[str]
@@ -37,11 +41,10 @@ class Sampler():
 
     def __init__(
         self,
-        nqs: nn.Module,
+        nqs: DDP,
         ele_info: ElectronInfo,
         n_sample: int = 100,
         therm_step: int = 2000,
-        verbose: bool = False,
         debug_exact: bool = False,
         seed: int = 100,
         record_sample: bool = True,
@@ -50,22 +53,29 @@ class Sampler():
         dtype=torch.double,
         method_sample="MCMC",
         max_n_sample: int = None,
-        max_unique_sample: int = None
+        max_unique_sample: int = None,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
+
+        # setup random seed
+        self.rank = dist.get_rank()
+        # self.seed = 22022
+        # setup_seed(self.seed)
+        self.seed = diff_rank_seed(seed, rank=self.rank)
+        logger.debug((self.seed, self.rank))
 
         self.ele_info = ele_info
         self.read_electron_info(self.ele_info)
         self.nqs = nqs
         self.debug_exact = debug_exact
-        self.seed = seed
-        self.verbose = verbose
         self.therm_step = therm_step
         self.n_sample = n_sample
 
         if method_sample not in self.METHOD_SAMPLE:
-            raise TypeError(f"Sample method is invalid: {method_sample}, and expected {self.METHOD_SAMPLE}")
+            raise TypeError(
+                f"Sample method is invalid: {method_sample}, and expected {self.METHOD_SAMPLE}"
+            )
         self.method_sample = method_sample
 
         # device and cuda
@@ -82,7 +92,9 @@ class Sampler():
             self.str_full = state_to_string(self.ci_space, self.sorb)
             self.frame_sample = pd.DataFrame({"full_space": self.str_full})
             if self.ci_space.size(0) != self.fci_size:
-                raise ValueError(f"The dim of full space is {self.ci_space.size(0)} != {self.fci_size}")
+                raise ValueError(
+                    f"The dim of full space is {self.ci_space.size(0)} != {self.fci_size}"
+                )
         self.time_sample = 0
 
         # memory control and nbatch
@@ -90,12 +102,22 @@ class Sampler():
         self.alpha = alpha
 
         # unique sample, apply to AR sample
-        self.max_unique_sample = min(max_unique_sample, self.fci_size) if max_unique_sample is not None else self.fci_size
+        self.max_unique_sample = (
+            min(max_unique_sample, self.fci_size)
+            if max_unique_sample is not None
+            else self.fci_size
+        )
         self.max_n_sample = max_n_sample if max_n_sample is not None else n_sample
         self.min_n_sample = n_sample
+        self.max_n_sample += (self.rank + 1) * 10000
+        self.min_n_sample += (self.rank + 1) * 10000
+        self.n_sample += (self.rank + 1) * 10000
 
     def read_electron_info(self, ele_info: ElectronInfo):
-        print(f"Read electronic structure information From {ele_info.__name__}")
+        if self.rank == 0:
+            logger.info(
+                f"Read electronic structure information From {ele_info.__name__}", master=True
+            )
         self.sorb = ele_info.sorb
         self.nele = ele_info.nele
         self.no = ele_info.nele
@@ -111,7 +133,9 @@ class Sampler():
         self.ci_space = ele_info.ci_space
 
     # @profile(precision=4, stream=open('MCMC_memory_profiler.log','w+'))
-    def run(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, Tensor, float, dict]:
+    def run(
+        self, initial_state: Tensor, n_sweep: int = None
+    ) -> Tuple[Tensor, Tensor, Tensor, complex, dict]:
         t0 = time.time_ns()
         check_para(initial_state)
         if self.debug_exact:
@@ -124,14 +148,13 @@ class Sampler():
 
         sample_unique, sample_counts, sample_prob = self.sampling(initial_state, n_sweep)
         delta = time.time_ns() - t0
-        print(f"Completed {self.method_sample} Sampling: {delta/1.0E09:.3E} s")
+        logger.debug(f"Completed {self.method_sample} Sampling: {delta/1.0E09:.3E} s")
         if self.method_sample == "MCMC":
-            print(f"Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
+            logger.debug(f"rank: {self.rank}  Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
-        e_total, eloc, stats_dict = self.calculate_energy(sample_unique,
-                                                          state_prob=sample_prob,
-                                                          state_counts=sample_counts)
-
+        e_total, eloc, stats_dict = self.calculate_energy(
+            sample_unique, state_prob=sample_prob, state_counts=sample_counts
+        )
         # print local energy statistics information
         self._statistics(stats_dict, sample_counts)
 
@@ -148,7 +171,9 @@ class Sampler():
 
         self.time_sample += 1
         delta = time.time_ns() - t0
-        print(f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s")
+        logger.debug(
+            f"rank: {self.rank}: Completed Sampling and calculating eloc {delta/1.0E09:.3E} s"
+        )
 
         if self.is_cuda:
             torch.cuda.empty_cache()
@@ -183,27 +208,40 @@ class Sampler():
 
         # Implement MCMC-Sample in CPP functions
         if False:
-            example_inputs = onv_to_tensor(self.current_state, self.sorb)  # -1:unoccupied, 1: occupied
+            example_inputs = onv_to_tensor(
+                self.current_state, self.sorb
+            )  # -1:unoccupied, 1: occupied
             serialized_model = torch.jit.trace(self.nqs, example_inputs)
             model_file = tempfile.mkstemp()[1]
             serialized_model.save(model_file)
             # print(f"Serialized model time: {(time.time_ns() - t0)/1.E06:.3f} ms")
             with torch.no_grad():
-                self.n_accept = MCMC_sample(model_file, self.current_state, self.state_sample,
-                                            self.psi_sample, self.sorb, self.nele, self.noa, self.nob,
-                                            self.seed, self.n_sweep, self.therm_step)
+                self.n_accept = MCMC_sample(
+                    model_file,
+                    self.current_state,
+                    self.state_sample,
+                    self.psi_sample,
+                    self.sorb,
+                    self.nele,
+                    self.noa,
+                    self.nob,
+                    self.seed,
+                    self.n_sweep,
+                    self.therm_step,
+                )
             os.remove(model_file)
             # print(f"CPP model time: {(time.time_ns() - t0)/1.E06:.3f} ms")
         else:
             with torch.no_grad():
                 psi_current = self.nqs(onv_to_tensor(self.current_state, self.sorb))
-                prob_current = psi_current.norm()**2
+                prob_current = psi_current.norm() ** 2
             for i in range(self.n_sweep):
-                psi, self.next_state = spin_flip_rand(self.current_state, self.sorb, self.nele, self.noa,
-                                                      self.nob, self.seed)
+                psi, self.next_state = spin_flip_rand(
+                    self.current_state, self.sorb, self.nele, self.noa, self.nob, self.seed
+                )
                 with torch.no_grad():
                     psi_next = self.nqs(psi)
-                    prob_next = psi_next.norm()**2
+                    prob_next = psi_next.norm() ** 2
                 prob_accept = min(1.00, (prob_next / prob_current).item())
                 p = random.random()
                 # print(f"{p:.3E}")
@@ -244,17 +282,15 @@ class Sampler():
         """
         Auto regressive sampling
         """
-
-        # breakpoint()
         while True:
-            sample = self.nqs.ar_sampling(self.n_sample)  # (n_sample, sorb) 0/1
+            sample = self.nqs.module.ar_sampling(self.n_sample)  # (n_sample, sorb) 0/1
 
             # remove duplicate state
             sample_unique, sample_counts = torch.unique(sample, dim=0, return_counts=True)
 
             if sample_unique.size(0) >= self.max_unique_sample:
                 # reach lower limit of samples or decreased samples times
-                self.n_sample = int(max(self.min_n_sample, self.n_sample//10))
+                self.n_sample = int(max(self.min_n_sample, self.n_sample // 10))
                 break
             else:
                 # reach upper limits of samples
@@ -264,9 +300,74 @@ class Sampler():
                     # continue AR sampling, increase samples
                     self.n_sample = int(min(self.max_n_sample, self.n_sample * 10))
                     continue
+        # TODO: implement all_gather/scatter/broadcast functions, List[Tensor/int], shape:1D/2D
 
+        # gather_data = [torch.zeros_like(sample) for _ in range(dist.get_world_size())]
         sample_prob = sample_counts / sample_counts.sum()
+        # gather sample/unique
+        # TODO: different shape tensor
+        if False:
+            if dist.get_rank() == 0:
+                gather_data = [torch.zeros_like(sample) for _ in range(dist.get_world_size())]
+                dist.gather(sample, gather_list=gather_data, dst=0)
+            else:
+                dist.gather(sample, gather_list=[], dst=0)
+            dist.barrier()
+            if dist.get_rank() == 0:
+                print(f"rank: {dist.get_rank()}, sample: {torch.cat(gather_data, dim=0).shape}\n")
 
+            split_shape = torch.ones(dist.get_world_size(), device=self.device, dtype=torch.int64)
+            if dist.get_rank() == 0:
+                sample = torch.cat(gather_data, dim=0)
+                sample_unique, sample_counts = torch.unique(sample, dim=0, return_counts=True)
+                sample_prob = sample_counts / sample_counts.sum()
+                k = (sample_unique.shape[0] - 1 + dist.get_world_size()) // dist.get_world_size()
+                res = sample_unique.shape[0] - k * (dist.get_world_size() - 1)
+                # k, res = divmod(sample_unique.shape[0], dist.get_world_size())
+                split_shape.mul_(k)
+                split_shape[-1] = res
+                print(split_shape)
+            # broadcast split_shape:
+            dist.broadcast(split_shape, src=0)
+            dist.barrier()
+
+            # TODO: how to deal with res != 0;
+            # ref:https://stackoverflow.com/questions/71433507/pytorch-python-distributed-multiprocessing-gather-concatenate-tensor-arrays-of
+            # Scatter sample_unique, sample_counts, sample_prob
+            data = torch.zeros(split_shape[0], dtype=torch.double, device=self.device)
+            data1 = torch.zeros(split_shape[0], self.sorb, dtype=torch.int64, device=self.device)
+            data2 = torch.zeros(split_shape[0], dtype=torch.int64, device=self.device)
+            if dist.get_rank() == 0:
+                scatter_data = torch.cat(
+                    [sample_prob, torch.zeros(k - res, dtype=torch.double, device=self.device)],
+                    dim=0,
+                )
+                scatter_prob = list(scatter_data.split(k, dim=0))
+                scatter_data1 = torch.cat(
+                    [
+                        sample_unique,
+                        torch.zeros(k - res, self.sorb, dtype=torch.int64, device=self.device),
+                    ],
+                    dim=0,
+                )
+                scatter_unique = list(scatter_data1.split(k, dim=0))
+                scatter_data2 = torch.cat(
+                    [sample_counts, torch.zeros(k - res, dtype=torch.int64, device=self.device)],
+                    dim=0,
+                )
+                scatter_count = list(scatter_data2.split(k, dim=0))
+            else:
+                scatter_prob = None
+                scatter_unique = None
+                scatter_count = None
+            dist.scatter(data, scatter_prob, src=0)
+            dist.scatter(data1, scatter_unique, src=0)
+            dist.scatter(data2, scatter_count, src=0)
+            dist.barrier()
+            # TODO: length(sample_unique) < word_size()
+            print(f"rank: {dist.get_rank()}, prob: {data.sum():.3f}, {data.device}")
+            print(f"rank: {dist.get_rank()}, unique-sample: {data1[:10]}, {data1.device}")
+            print(f"rank: {dist.get_rank()}, count: {data2[:10]}, {data2.device}")
         # convert to onv
         sample_unique = tensor_to_onv(sample_unique.to(torch.uint8), self.sorb)
 
@@ -275,39 +376,52 @@ class Sampler():
 
     # TODO: how to calculate batch_size;
     # calculate the max nbatch for given Max Memory
-    def calculate_energy(self, sample: Tensor, state_prob: Tensor = None, state_counts: Tensor = None):
-        nbatch = get_nbatch(self.sorb, len(sample), self.n_SinglesDoubles, self.max_memory, self.alpha)
-        e_total, eloc, stats_dict = total_energy(sample,
-                                                 nbatch,
-                                                 h1e=self.h1e,
-                                                 h2e=self.h2e,
-                                                 ansatz=self.nqs,
-                                                 ecore=self.ecore,
-                                                 sorb=self.sorb,
-                                                 nele=self.nele,
-                                                 noa=self.noa,
-                                                 nob=self.nob,
-                                                 state_prob=state_prob,
-                                                 state_counts=state_counts,
-                                                 verbose=self.verbose,
-                                                 exact=self.debug_exact,
-                                                 dtype=self.dtype)
+    def calculate_energy(
+        self, sample: Tensor, state_prob: Tensor = None, state_counts: Tensor = None
+    ) -> Tuple[Union[complex, float], Tensor, dict]:
+        nbatch = get_nbatch(
+            self.sorb,
+            len(sample),
+            self.n_SinglesDoubles,
+            self.max_memory,
+            self.alpha,
+            device=self.device,
+        )
+        e_total, eloc, stats_dict = total_energy(
+            sample,
+            nbatch,
+            h1e=self.h1e,
+            h2e=self.h2e,
+            ansatz=self.nqs,
+            ecore=self.ecore,
+            sorb=self.sorb,
+            nele=self.nele,
+            noa=self.noa,
+            nob=self.nob,
+            state_prob=state_prob,
+            state_counts=state_counts,
+            exact=self.debug_exact,
+            dtype=self.dtype,
+        )
         return e_total, eloc, stats_dict
 
     def __repr__(self) -> str:
-        return (f"{type(self).__name__}:" + " (\n"
-                f"    the number of sample: {self.n_sample}\n" + 
-                f"    Therm step: {self.therm_step}\n" +
-                f"    Exact sampling: {self.debug_exact}\n"
-                f"    Given CI: {self.ci_space.size(0):.3E}\n" +
-                f"    FCI space: {self.fci_size:.3E}\n" +
-                f"    Record the sample: {self.record_sample}\n" +
-                f"    Singles + Doubles: {self.n_SinglesDoubles}\n" +
-                f"    Max unique sample: {self.max_unique_sample}\n"+
-                f"    Max sample: {self.max_n_sample}\n" +
-                f"    Random seed: {self.seed}\n" + ")")
+        return (
+            f"{type(self).__name__}:" + " (\n"
+            f"    the number of sample: {self.n_sample}\n"
+            + f"    Therm step: {self.therm_step}\n"
+            + f"    Exact sampling: {self.debug_exact}\n"
+            f"    Given CI: {self.ci_space.size(0):.3E}\n"
+            + f"    FCI space: {self.fci_size:.3E}\n"
+            + f"    Record the sample: {self.record_sample}\n"
+            + f"    Singles + Doubles: {self.n_SinglesDoubles}\n"
+            + f"    Max unique sample: {self.max_unique_sample}\n"
+            + f"    Max sample: {self.max_n_sample}\n"
+            + f"    Random seed: {self.seed}\n"
+            + ")"
+        )
 
     def _statistics(self, data: dict, sample_counts: Tensor):
         s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}], "
         s += f"unique sample: {sample_counts.sum().item()} -> {len(sample_counts)}"
-        print(s)
+        logger.debug(s)

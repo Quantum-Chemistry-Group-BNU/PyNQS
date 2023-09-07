@@ -1,13 +1,16 @@
 import torch
-from typing import List, Tuple
+import torch.distributed as dist
+from typing import List, Tuple, Union
 from torch import Tensor, nn
+from loguru import logger
 
-
+from utils.distributed import all_reduce_tensor
 
 def energy_grad(nqs: nn.Module,
                 states: Tensor,
                 state_prob: Tensor,
                 eloc: Tensor,
+                eloc_mean: Union[complex, float],
                 exact: bool = False,
                 dtype=torch.double,
                 method: str= None,
@@ -42,9 +45,9 @@ def energy_grad(nqs: nn.Module,
         if method is None:
             method = "AD"
         if method == "AD":
-            psi = _ad_grad(nqs, states, state_prob, eloc, exact, dtype)
+            psi = _ad_grad(nqs, states, state_prob, eloc, eloc_mean, exact, dtype)
         elif method == "analytic" or "num_diff":
-            psi = _analytical_grad(nqs, states, state_prob, eloc, exact, dtype, method)
+            psi = _analytical_grad(nqs, states, state_prob, eloc, eloc_mean, exact, dtype, method)
         else:
             raise TypeError(f"method {method} must be in ('AD', 'analytic', 'num_diff')")
 
@@ -55,6 +58,7 @@ def _analytical_grad(nqs: nn.Module,
                      states: Tensor,
                      state_prob: Tensor,
                      eloc: Tensor,
+                     eloc_mean: Union[complex, float],
                      exact: bool = False,
                      dtype=torch.double,
                      method: str = "analytic", 
@@ -95,7 +99,7 @@ def _analytical_grad(nqs: nn.Module,
         # (n_sample, n_para), two dim
         dlnPsi = dws.reshape(n_sample, -1).to(dtype)
         F_p = torch.einsum("i, ij, i ->j", eloc, dlnPsi.conj(), state_prob)
-        F_p -= torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("ij, i -> j", dlnPsi.conj(), state_prob)
+        F_p -= eloc_mean * torch.einsum("ij, i -> j", dlnPsi.conj(), state_prob)
         grad_update_lst.append(2 * F_p.real)
 
     # update nqs gradient
@@ -108,6 +112,7 @@ def _ad_grad(nqs: nn.Module,
             states: Tensor,
             state_prob: Tensor,
             eloc: Tensor,
+            eloc_mean: Union[complex, float],
             exact: bool = False,
             dtype=torch.double) -> Tensor:
     """
@@ -128,13 +133,19 @@ def _ad_grad(nqs: nn.Module,
         raise ValueError(
             f"There are negative numbers in the log-psi, please use complex128")
     loss1 = torch.einsum("i, i, i ->", eloc, log_psi.conj(), state_prob)
-    # loss2 = (e_total - self.ecore) * torch.einsum("i, i -> ", log_psi.conj(), state_prob)
-    loss2 = torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("i, i ->", log_psi.conj(), state_prob)
+    # loss2 = torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("i, i ->", log_psi.conj(), state_prob)
+    loss2 = eloc_mean * torch.einsum("i, i ->", log_psi.conj(), state_prob)
     loss = 2 * (loss1 - loss2).real
+
+    # reduce_loss = all_reduce_tensor(loss, word_size=dist.get_world_size(), in_place=False)
+    # dist.barrier()
+    # if dist.get_rank() == 0:
+    #     logger.debug(f"Reduce-loss: {reduce_loss}", master=True)
+    # reduce_loss.backward()
+
     loss.backward()
-
+    logger.debug(f"rank: {dist.get_rank() } loss: {loss:.4f}")
     return psi.detach()
-
 
 def _numerical_differentiation(nqs: nn.Module,
                                states: Tensor,

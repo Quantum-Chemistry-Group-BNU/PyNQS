@@ -1,8 +1,10 @@
 import time
 import torch
 import torch.utils.data as Data
+import torch.distributed as dist
 from functools import partial
 from typing import Callable, Tuple, List, Union
+from loguru import logger
 from torch import Tensor, nn
 
 from memory_profiler import profile
@@ -15,23 +17,24 @@ print = partial(print, flush=True)
 
 
 # TODO: how to save unique x eloc energy
-def local_energy(x: Tensor,
-                 h1e: Tensor,
-                 h2e: Tensor,
-                 ansatz: Union[nn.Module, Callable],
-                 sorb: int,
-                 nele: int,
-                 noa: int,
-                 nob: int,
-                 verbose: bool = False,
-                 dtype=torch.double) -> Tuple[Tensor, Tensor, Tuple[float, float, float]]:
+def local_energy(
+    x: Tensor,
+    h1e: Tensor,
+    h2e: Tensor,
+    ansatz: Union[nn.Module, Callable],
+    sorb: int,
+    nele: int,
+    noa: int,
+    nob: int,
+    dtype=torch.double,
+) -> Tuple[Tensor, Tensor, Tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
-    E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'> 
+    E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
     1. the all Singles and Doubles excitation about given state:
         x: (1, sorb)/(batch, sorb) -> comb_x: (batch, ncomb, sorb)/(ncomb, sorb)
     2. Compute matrix element <x|H|x'> (1, ncomb)/(batch, ncomb)
-    3. psi(x), psi(comb_x)[ncomb] using NAQS. 
+    3. psi(x), psi(comb_x)[ncomb] using NAQS.
     4. calculate the local energy
 
     Return:
@@ -58,7 +61,7 @@ def local_energy(x: Tensor,
     with torch.no_grad():
         # unique, index = torch.unique(comb_x.reshape(-1, bra_len), dim=0, return_inverse=True)
         # unique_x1 = onv_to_tensor(unique, sorb)
-        # psi_x1 = torch.index_select(ansatz(unique_x1), 0, index).reshape(batch, -1) 
+        # psi_x1 = torch.index_select(ansatz(unique_x1), 0, index).reshape(batch, -1)
         psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
     # print(torch.cuda.mem_get_info())
     # print(prof.table())
@@ -73,13 +76,14 @@ def local_energy(x: Tensor,
     elif dim == 2 and batch > 1:
         eloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * comb_hij, -1)  # (batch)
 
-    delta0 = (t1 - t0) / 1.0E06
-    delta1 = (t2 - t1) / 1.0E06
-    delta2 = (t3 - t2) / 1.0E06
-    if verbose:
-        print(f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " +
-              f"nqs time: {delta2:.3E} ms")
-    del comb_hij, comb_x, #index, unique_x1, unique
+    delta0 = (t1 - t0) / 1.0e06
+    delta1 = (t2 - t1) / 1.0e06
+    delta2 = (t3 - t2) / 1.0e06
+    logger.debug(
+        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, "
+        + f"nqs time: {delta2:.3E} ms"
+    )
+    del comb_hij, comb_x  # index, unique_x1, unique
 
     if x.is_cuda:
         torch.cuda.empty_cache()

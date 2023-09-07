@@ -5,6 +5,7 @@ import os
 import sys
 import __main__
 import torch
+import torch.distributed as dist
 import numpy as np
 
 from memory_profiler import profile
@@ -12,6 +13,7 @@ from line_profiler import LineProfiler
 from functools import partial
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
+from loguru import logger
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
@@ -23,6 +25,7 @@ from vmc.sample import Sampler
 from vmc.energy import total_energy
 from vmc.grad import energy_grad, sr_grad
 from ci import CITrain, CIWavefunction
+from utils.distributed import all_reduce_tensor
 
 from utils import ElectronInfo, Dtype, state_to_string
 from libs.C_extension import onv_to_tensor
@@ -30,8 +33,7 @@ from libs.C_extension import onv_to_tensor
 print = partial(print, flush=True)
 
 
-class VMCOptimizer():
-
+class VMCOptimizer:
     sys_name = platform.node()
     TORCH_VERSION: str = torch.__version__
     # torch.compile is lower in GTX 1650, but faster in A100
@@ -44,14 +46,10 @@ class VMCOptimizer():
         sampler_param: dict,
         electron_info: ElectronInfo,
         opt_type: Optimizer = torch.optim.Adam,
-        opt_params: dict = {
-            "lr": 0.005,
-            "weight_decay": 0.001
-        },
+        opt_params: dict = {"lr": 0.005, "weight_decay": 0.001},
         lr_scheduler=None,
         lr_sch_params: dict = None,
         max_iter: int = 2000,
-        verbose: bool = False,
         dtype: Dtype = None,
         HF_init: int = None,
         external_model: any = None,
@@ -67,6 +65,7 @@ class VMCOptimizer():
             dtype = Dtype()
         self.dtype = dtype.dtype
         self.device = dtype.device
+        self.rank = dist.get_rank()
         self.external_model = external_model
 
         # whether read nqs/h1e-h2e from external file
@@ -90,13 +89,11 @@ class VMCOptimizer():
         self.method_jacobian: str = method_jacobian if self.sr else None
         self.max_iter = max_iter
         self.method_grad = method_grad
-        self.verbose = verbose
 
         # Sample
         self.sampler_param = sampler_param
         self.exact = self.sampler_param.get("debug_exact", False)
         self.sampler = Sampler(self.model, electron_info, dtype=self.dtype, **self.sampler_param)
-        self.n_sample = 0
         self.record_sample = self.sampler_param.get("record_sample", False)
         self.only_sample = only_sample
 
@@ -113,13 +110,16 @@ class VMCOptimizer():
         self.time_iter: List[float] = []
 
         self.dump_input()
-        print(f"NQS model:\n{self.model}")
-        print(f"The number param of NQS model: {sum(map(torch.numel, self.model.parameters()))}")
-        print(f"Optimizer:\n{self.opt}")
-        print(f"Sampler:\n{self.sampler}")
-        print(f"Grad method: {self.method_grad}")
-        if self.sr:
-            print(f"Jacobian method: {self.method_jacobian}")
+        if self.rank == 0:
+            logger.info(f"NQS model:\n{self.model}")
+            logger.info(
+                f"The number param of NQS model: {sum(map(torch.numel, self.model.parameters()))}"
+            )
+            logger.info(f"Optimizer:\n{self.opt}")
+            logger.info(f"Sampler:\n{self.sampler}")
+            logger.info(f"Grad method: {self.method_grad}")
+            if self.sr:
+                logger.info(f"Jacobian method: {self.method_jacobian}")
 
         # pre-train CI wavefunction
         self.pre_CI = pre_CI
@@ -131,10 +131,12 @@ class VMCOptimizer():
         else:
             self.nprt = 1
         self.model_dict_lst: List[nn.Module] = []
-        print(f"Save model interval: {self.nprt}")
+        if self.rank == 0:
+            logger.info(f"Save model interval: {self.nprt}")
 
     def read_electron_info(self, ele_info: ElectronInfo):
-        print(ele_info)
+        if self.rank == 0:
+            logger.info(ele_info)
         self.sorb = ele_info.sorb
         self.nele = ele_info.nele
         self.no = ele_info.nele
@@ -149,7 +151,8 @@ class VMCOptimizer():
         self.onstate = ele_info.ci_space
 
     def read_model(self, external_model):
-        print(f"Read nqs model/h1e-h2e from '.pth' file {external_model}")
+        if self.rank == 0:
+            logger.info(f"Read nqs model/h1e-h2e from '.pth' file {external_model}")
         state = torch.load(external_model, map_location=self.device)
         self.model_raw = state["model"]
         # notice h1e, he2 may be different even if the coordinate and basis are the same.
@@ -157,22 +160,23 @@ class VMCOptimizer():
         self.h2e: Tensor = state["h2e"]
 
     def dump_input(self):
-        s = "System:\n"
-        if hasattr(__main__, '__file__'):
-            filename = os.path.abspath(__main__.__file__)
-            s += f"Input file: {filename}\n"
-        s += f"System {str(platform.uname())}\n"
-        s += f"Python {sys.version}\n"
-        s += f"numpy {np.__version__} torch {torch.__version__}\n"
-        s += f"Date: {time.ctime()}\n"
-        s += f"Device: {self.device}\n"
-        sys.stdout.write(s)
-        sys.stdout.flush()
+        if dist.get_rank() == 0:
+            s = "System:\n"
+            if hasattr(__main__, "__file__"):
+                filename = os.path.abspath(__main__.__file__)
+                s += f"Input file: {filename}\n"
+            s += f"System {str(platform.uname())}\n"
+            s += f"Python {sys.version}\n"
+            s += f"numpy {np.__version__} torch {torch.__version__}\n"
+            s += f"Date: {time.ctime()}\n"
+            s += f"Device: {self.device}\n"
+            logger.info(s)
 
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self):
         begin_vmc = time.time_ns()
-        sys.stdout.write(f"Begin VMC iteration: {time.ctime()}\n")
+        if self.rank == 0:
+            logger.info(f"Begin VMC iteration: {time.ctime()}", master=True)
         for epoch in range(self.max_iter):
             t0 = time.time_ns()
             if self.HF_init is None or epoch < self.HF_init:
@@ -187,41 +191,105 @@ class VMCOptimizer():
             # lp.print_stats()
             # exit()
 
+            # TODO: e_total: mean
             state, state_prob, eloc, e_total, stats = self.sampler.run(initial_state)
 
-            self.n_sample = len(state)
-            self.e_lst.append(e_total)
-            self.stats_lst.append(stats)
+            # All_Reduce mean local energy
+            eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
+            logger.debug(f"eloc-mean: {eloc_mean.real:.5f}{eloc_mean.imag:+.5f}j")
+            # dist.all_reduce(eloc_mean, op=dist.ReduceOp.SUM, async_op=True)
+            # dist.barrier()
+            # eloc_mean.div_(dist.get_world_size())
+            all_reduce_tensor(eloc_mean, word_size=dist.get_world_size())
+
+            e_total = eloc_mean.item().real + self.ecore
+            if self.rank == 0:
+                self.e_lst.append(e_total)
+            # self.stats_lst.append(stats)
 
             if self.only_sample:
-                delta = (time.time_ns() - t0) / 1.00E06
-                print(f"{epoch} only Sampling finished, cost time {delta:.3f} ms")
+                delta = (time.time_ns() - t0) / 1.00e06
+                logger.info(f"{epoch}-th only Sampling finished, cost time {delta:.3f} ms")
                 continue
 
             sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
 
-            delta = (time.time_ns() - t0) / 1.00E06
+            delta = (time.time_ns() - t0) / 1.00e06
+            # TODO: time rank
             self.time_sample.append(delta)
 
             # calculate model grad
             t1 = time.time_ns()
             if self.sr:
-                psi = sr_grad(self.model, sample_state, state_prob, eloc, self.exact, self.dtype,
-                              self.method_grad, self.method_jacobian)
+                psi = sr_grad(
+                    self.model,
+                    sample_state,
+                    state_prob,
+                    eloc,
+                    self.exact,
+                    self.dtype,
+                    self.method_grad,
+                    self.method_jacobian,
+                )
             else:
-                psi = energy_grad(self.model, sample_state, state_prob, eloc, self.exact, self.dtype,
-                                  self.method_grad)
-            delta_grad = (time.time_ns() - t1) / 1.00E09
+                psi = energy_grad(
+                    self.model,
+                    sample_state,
+                    state_prob,
+                    eloc,
+                    eloc_mean,
+                    self.exact,
+                    self.dtype,
+                    self.method_grad,
+                )
+            delta_grad = (time.time_ns() - t1) / 1.00e09
+            # for i, param in enumerate(self.model.parameters()):
+            #     if i == 2:
+            #         if param.grad is not None:
+            #             x0 = param.grad.reshape(-1).clone()
 
+            # nbatch = sample_state.shape[0] - 20
+            # psi = energy_grad(self.model, sample_state[:nbatch//2], state_prob[:nbatch//2], eloc[:nbatch//2],
+            #                   eloc_mean,
+            #                   self.exact, self.dtype,
+            #                   self.method_grad)
+            # for i, param in enumerate(self.model.parameters()):
+            #     if i == 2:
+            #         if param.grad is not None:
+            #             x1 = param.grad.reshape(-1).clone()
+
+            # psi = energy_grad(self.model, sample_state[nbatch//2:], state_prob[nbatch//2:], eloc[nbatch//2:],
+            #                   eloc_mean,
+            #                   self.exact, self.dtype,
+            #                   self.method_grad)
+            # for i, param in enumerate(self.model.parameters()):
+            #     if i == 2:
+            #         if param.grad is not None:
+            #             x2 = param.grad.reshape(-1).clone()
+            # print(torch.allclose(x1, x0))
+            # print(torch.allclose(x2, x0))
+            # print(x1)
+            # print(x2)
+            # print(x0)
+            # save the energy grad
+            # for i, param in enumerate(self.model.parameters()):
+            #     if i == 0:
+            #         if param.grad is not None:
+            #             np.save(f"{self.rank}-grad-{dist.get_world_size()}", param.grad.reshape(-1).detach().to("cpu").numpy())
+            # for i, param in enumerate(self.model.parameters()):
+            #     if i == 2:
+            #         if param.grad is not None:
+            #             print(param.grad,"\n")
             # for param in self.model.parameters():
             #     print(param.grad)
 
             # save the energy grad
-            for i, param in enumerate(self.model.parameters()):
-                if param.grad is not None:
-                    self.grad_e_lst[i].append(param.grad.reshape(-1).detach().to("cpu").numpy())
-                else:
-                    self.grad_e_lst[i].append(np.zeros(param.numel()))
+            if self.rank == 0:
+                for i, param in enumerate(self.model.parameters()):
+                    if param.grad is not None:
+                        self.grad_e_lst[i].append(param.grad.reshape(-1).detach().to("cpu").numpy())
+                    else:
+                        self.grad_e_lst[i].append(np.zeros(param.numel()))
 
             t2 = time.time_ns()
             if epoch < self.max_iter - 1:
@@ -229,18 +297,38 @@ class VMCOptimizer():
                 self.opt.zero_grad()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
-            delta_update = (time.time_ns() - t2) / 1.00E09
 
-            if epoch % self.nprt == 0 or epoch == self.max_iter -1:
-                print("Save model state dict")
-                self.model_dict_lst.append(deepcopy(self.model_raw.state_dict()))
+            if epoch == 2:
+                if self.rank == 0:
+                    for i, param in enumerate(self.model.parameters()):
+                        if i == 2:
+                            print(param.data.reshape(-1).clone())
+                exit()
 
-            delta = (time.time_ns() - t0) / 1.00E09
-            print(f"Calculating grad: {delta_grad:.3E} s, update param: {delta_update:.3E} s")
-            print(f"Total energy is {e_total:.9f} a.u., cost time {delta:.3E} s")
-            print(f"{epoch} iteration end {time.ctime()}")
-            print("="*100)
-            self.time_iter.append(delta)
+            delta_update = (time.time_ns() - t2) / 1.00e09
+
+            if self.rank == 0:
+                if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
+                    logger.info("Save model state dict", master=True)
+                    self.model_dict_lst.append(deepcopy(self.model_raw.state_dict()))
+
+            delta = (time.time_ns() - t0) / 1.00e09
+            # TODO: All-Reduce mean-time or max-time zbwu(23-09-07)
+            # All-Reduce max-time
+            c = torch.tensor([delta_grad, delta_update, delta], device=self.device)
+            all_reduce_tensor(c, op=dist.ReduceOp.MAX)
+            dist.barrier()
+            if self.rank == 0:
+                logger.info(
+                    f"Calculating grad: {c[0].item():.3E} s, update param: {c[1].item():.3E} s",
+                    master=True,
+                )
+                logger.info(
+                    f"Total energy {e_total:.9f} a.u., cost time {c[2].item():.3E} s", master=True
+                )
+                logger.info(f"{epoch} iteration end {time.ctime()}", master=True)
+                logger.info("=" * 100, master=True)
+                self.time_iter.append(c[2].item())
             # psi /= psi.norm()
             # dim = self.onstate.shape[0]
             # for i in range(dim):
@@ -248,17 +336,30 @@ class VMCOptimizer():
             #     print(f"{s[0]}  {psi[i].norm()**2:.6f}")
             # print(eloc)
 
-            del sample_state, eloc, state, psi
+            del sample_state, eloc, state, psi, c
 
         # end vmc iterations
-        total_vmc_time = (time.time_ns() - begin_vmc)/1.0E09
-        sys.stdout.write(f"End VMC iteration: {time.ctime()}\n") 
-        sys.stdout.write(f"total cost time: {total_vmc_time:.3E} s, {total_vmc_time/60:.3E} min {total_vmc_time/3600:.3E} h\n")
+        total_vmc_time = (time.time_ns() - begin_vmc) / 1.0e09
+        dist.barrier()
+        if self.rank == 0:
+            logger.info(f"End VMC iteration: {time.ctime()}", master=True)
+            logger.info(
+                f"total cost time: {total_vmc_time:.3E} s, {total_vmc_time/60:.3E} min {total_vmc_time/3600:.3E} h",
+                master=True,
+            )
 
     def pre_train(self, prefix: str = None):
-        t = CITrain(self.model, self.opt, self.pre_CI, self.pre_train_info, self.sorb, self.dtype,
-                    self.lr_scheduler, self.exact)
-        print(t)
+        t = CITrain(
+            self.model,
+            self.opt,
+            self.pre_CI,
+            self.pre_train_info,
+            self.sorb,
+            self.dtype,
+            self.lr_scheduler,
+            self.exact,
+        )
+        logger.info(t, master=True)
         t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
         del t
 
@@ -283,8 +384,10 @@ class VMCOptimizer():
                     "sampler_param": self.sampler_param,
                     "h1e": self.h1e,
                     "h2e": self.h2e,
-                    "model_dict": self.model_dict_lst
-                }, model_file)
+                    "model_dict": self.model_dict_lst,
+                },
+                model_file,
+            )
 
     def plot_figure(self, e_ref: float = None, e_lst: List[float] = None, prefix: str = "VMC"):
         fig = plt.figure()
@@ -296,22 +399,24 @@ class VMCOptimizer():
         ax.set_xlabel("Iteration Time")
         ax.set_ylabel("Energy")
         if e_ref is not None:
-            ax.axhline(e_ref, color='coral', ls='--')
+            ax.axhline(e_ref, color="coral", ls="--")
             if e_lst is not None:
                 for i in range(len(e_lst)):
-                    ax.axhline(e_lst[i], color=plt.get_cmap("Accent")(i), ls='--')
+                    ax.axhline(e_lst[i], color=plt.get_cmap("Accent")(i), ls="--")
             # plot partial enlarged view
-            axins = inset_axes(ax,
-                               width="50%",
-                               height="45%",
-                               loc=1,
-                               bbox_to_anchor=(0.2, 0.1, 0.8, 0.8),
-                               bbox_transform=ax.transAxes)
+            axins = inset_axes(
+                ax,
+                width="50%",
+                height="45%",
+                loc=1,
+                bbox_to_anchor=(0.2, 0.1, 0.8, 0.8),
+                bbox_transform=ax.transAxes,
+            )
             axins.plot(e[idx:])
-            axins.axhline(e_ref, color='coral', ls='--')
+            axins.axhline(e_ref, color="coral", ls="--")
             if e_lst is not None:
                 for i in range(len(e_lst)):
-                    axins.axhline(e_lst[i], color=plt.get_cmap("Accent")(i), ls='--')
+                    axins.axhline(e_lst[i], color=plt.get_cmap("Accent")(i), ls="--")
             zone_left = len(e) - len(e) // 10
             zone_right = len(e) - 1
             x_ratio = 0
@@ -323,8 +428,10 @@ class VMCOptimizer():
             ylim1 = np.max(y) + (np.min(y) - e_ref) * y_ratio
             axins.set_xlim(xlim0, xlim1)
             axins.set_ylim(ylim0, ylim1)
-            print(f"Last 100th energy: {np.average(e[-100]):.9f}")
-            print(f"Reference energy: {e_ref:.9f}, error: {abs((np.average(e[-100])-e_ref)/e_ref) * 100:.6f} %")
+            logger.info(f"Last 100th energy: {np.average(e[-100]):.9f}")
+            logger.info(
+                f"Reference energy: {e_ref:.9f}, error: {abs((np.average(e[-100])-e_ref)/e_ref) * 100:.6f} %"
+            )
 
         # plot the L2-norm and max-abs of the gradients
         param_L2: List[np.ndarray] = []
@@ -347,7 +454,7 @@ class VMCOptimizer():
         plt.legend(loc="best")
 
         plt.subplots_adjust(wspace=0, hspace=0.5)
-        plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches='tight')
+        plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches="tight")
         plt.close()
 
         # save energy, ||g||, max_|g|
@@ -355,7 +462,8 @@ class VMCOptimizer():
 
 
 class GD(Optimizer):
-    """ Naive Gradient Descent"""
+    """Naive Gradient Descent"""
+
     def __init__(self, params, lr=required, weight_decay: float = 0.00) -> None:
         if lr is not required and lr < 0.0:
             raise ValueError(f"Invalid learning rate : {lr}")
@@ -368,11 +476,13 @@ class GD(Optimizer):
         for group in self.param_groups:
             params_with_grad: List[Tensor] = []
             d_p_list = []
-            for p in group['params']:
+            for p in group["params"]:
                 if p.grad is not None:
                     params_with_grad.append(p)
                     d_p_list.append(p.grad)
-            _gd_update(params_with_grad, d_p_list, lr=group['lr'], weight_decay=group["weight_decay"])
+            _gd_update(
+                params_with_grad, d_p_list, lr=group["lr"], weight_decay=group["weight_decay"]
+            )
 
 
 def _gd_update(params: List[Tensor], grads: List[Tensor], lr: float, weight_decay: float):

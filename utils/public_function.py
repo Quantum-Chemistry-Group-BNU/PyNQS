@@ -2,6 +2,7 @@ import random
 import sys
 import os
 import torch
+import torch.distributed as dist
 import itertools
 import numpy as np
 from torch import Tensor
@@ -9,21 +10,34 @@ from typing import List, Type, Tuple, Union
 from dataclasses import dataclass
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv
+from utils.distributed import N_NODES, RANK
+
 
 def check_para(bra: Tensor):
     if bra.dtype != torch.uint8:
         raise Exception(f"The type of bra {bra.dtype} must be torch.uint8")
 
-def setup_seed(x: int):
+
+def setup_seed(x: int) -> None:
     """
     Set up the random seed of numpy, torch, random, and cpp function
     """
-    x = abs(x) % (1<<32)
+    x = abs(x) % (1 << 32)
     torch.manual_seed(x)
     np.random.seed(x)
     random.seed(x)
     torch.cuda.manual_seed(x)
     torch.cuda.manual_seed_all(x)
+
+
+def diff_rank_seed(x: int, rank: int = 0) -> int:
+    """
+    diff rank random seed
+    """
+    x = (rank * 2**rank * 10000 + x) % (1 << 32)
+    setup_seed(x)
+    return x
+
 
 def string_to_state(sorb: int, string: str) -> Tensor:
     """
@@ -35,15 +49,16 @@ def string_to_state(sorb: int, string: str) -> Tensor:
     tensor([3, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8) # bin(3) = "0b0011"
     >>> output = string_to_state(8, "1111")
     tensor([15, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8) # bin(15) = "0b00001111"
-    """ 
+    """
     arr = np.array(list(map(int, string)))[::-1]
-    state = [0] * ((sorb-1)//64 +1)*8
-    for i in range((sorb-1)//8+1):
+    state = [0] * ((sorb - 1) // 64 + 1) * 8
+    for i in range((sorb - 1) // 8 + 1):
         begin = i * 8
-        end = (i+1) * 8 if (i+1)*8 < sorb else sorb
+        end = (i + 1) * 8 if (i + 1) * 8 < sorb else sorb
         idx = arr[begin:end]
-        state[i] = np.sum(2**np.arange(len(idx)) * idx)
+        state[i] = np.sum(2 ** np.arange(len(idx)) * idx)
     return torch.tensor(state, dtype=torch.uint8)
+
 
 def state_to_string(state: Tensor, sorb: int = None, vcc_one: bool = False) -> List[str]:
     """
@@ -75,12 +90,14 @@ def state_to_string(state: Tensor, sorb: int = None, vcc_one: bool = False) -> L
     if state.dtype == torch.uint8:
         if sorb is None:
             raise ValueError(f"sorb {sorb} must be given when state dtype is uint8")
-        assert (sorb > 0)
-        full_bit = ((onv_to_tensor(state, sorb) + 1)//2).to(torch.uint8).tolist() # -1:unoccupied, 1: occupied
+        assert sorb > 0
+        full_bit = (
+            ((onv_to_tensor(state, sorb) + 1) // 2).to(torch.uint8).tolist()
+        )  # -1:unoccupied, 1: occupied
         # full_bit = ((1 - onv_to_tensor(state, sorb))//2).to(torch.uint8).tolist()
     else:
         if vcc_one:
-            full_bit = ((state+1)//2).to(torch.uint8).tolist()
+            full_bit = ((state + 1) // 2).to(torch.uint8).tolist()
         else:
             full_bit = state.to(torch.uint8).tolist()
 
@@ -91,47 +108,55 @@ def state_to_string(state: Tensor, sorb: int = None, vcc_one: bool = False) -> L
         tmp.append("".join(list(map(str, lst))[::-1]))
     return tmp
 
-def get_Num_SinglesDoubles(sorb: int ,noA: int ,noB: int) ->int:
+
+def get_Num_SinglesDoubles(sorb: int, noA: int, noB: int) -> int:
     """
     Calculate the number of the Singles and Doubles
     """
     k = sorb // 2
-    nvA = k-noA
-    nvB = k-noB
-    nSa = noA*nvA
-    nSb = noB*nvB
-    nDaa = noA*(noA-1)//2*nvA*(nvA-1)//2 
-    nDbb = noB*(noB-1)//2*nvB*(nvB-1)//2 
-    nDab = noA*noB*nvA*nvB
-    return sum((nSa,nSb,nDaa,nDbb,nDab))
+    nvA = k - noA
+    nvB = k - noB
+    nSa = noA * nvA
+    nSb = noB * nvB
+    nDaa = noA * (noA - 1) // 2 * nvA * (nvA - 1) // 2
+    nDbb = noB * (noB - 1) // 2 * nvB * (nvB - 1) // 2
+    nDab = noA * noB * nvA * nvB
+    return sum((nSa, nSb, nDaa, nDbb, nDab))
 
-def get_nbatch(sorb: int, n_sample_unique: int, n_comb_sd: int,
-               Max_memory = 32, alpha = 0.25):
+
+def get_nbatch(
+    sorb: int, n_sample_unique: int, n_comb_sd: int, Max_memory=32, alpha=0.25, device: str = None
+) -> int:
     """
     Calculate the nbatch of total energy when using local energy
     """
+
     def comb_memory():
-        x1 = n_comb_sd * sorb * 8 /(1<<30) * 2 # onv_to_tensor, double, GiB
-        x2 = n_comb_sd * ((sorb-1)//64 + 1) * 8 / (1<<30) # SD, uint8, GiB
+        x1 = n_comb_sd * sorb * 8 / (1 << 30) * 2  # onv_to_tensor, double, GiB
+        x2 = n_comb_sd * ((sorb - 1) // 64 + 1) * 8 / (1 << 30)  # SD, uint8, GiB
         return x1 + x2
+
     m = comb_memory() * n_sample_unique
-    if torch.cuda.is_available():
-        mem_available = torch.cuda.mem_get_info()[0]/ (1<<30) # GiB
+
+    if device != torch.device("cpu"):
+        mem_available = torch.cuda.mem_get_info(device)[0] / (1 << 30)  # GiB
         Max_memory = min(mem_available, Max_memory)
     if m / Max_memory >= alpha:
-        batch = int(Max_memory/(comb_memory()) * alpha)
+        batch = int(Max_memory / (comb_memory()) * alpha)
     else:
         batch = n_sample_unique
     # print(f"{m / Max_memory * 100:.3f} %, alpha = {alpha * 100:.3f} , batch: {batch}")
     return batch
 
+
 def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
-    assert(x%2==0 and x <= sorb and x >=(noa + nob))
+    assert x % 2 == 0 and x <= sorb and x >= (noa + nob)
 
     # the order is different from pyscf.fci.cistring._gen_occslst(iterable, r)
     # the '_gen_occslst' is pretty slow than 'combinations', and only is used exact optimization testing.
     if x == sorb:
-        from pyscf import fci 
+        from pyscf import fci
+
         noA_lst = fci.cistring.gen_occslst([i for i in range(0, x, 2)], noa)
         noB_lst = fci.cistring.gen_occslst([i for i in range(1, x, 2)], nob)
     else:
@@ -149,6 +174,7 @@ def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
 
     return convert_onv(spins, sorb=sorb, device=device)
 
+
 def get_fock_space(sorb: int, device=None) -> Tensor:
     """
     Generate fock space(2^n) for given the spin orbital.
@@ -159,55 +185,56 @@ def get_fock_space(sorb: int, device=None) -> Tensor:
     return convert_onv(space, sorb=sorb, device=device)
 
 
-
-def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor,Tensor, Tensor]:
+def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     """
      find the common onv in the two different onstate
 
     Returns
-        common[Tensor]: common onv in state1 and state2 
+        common[Tensor]: common onv in state1 and state2
         idx1, idx2: index of in state1 and state2
     """
-    assert (state1.dtype == torch.uint8)
-    assert (state2.dtype == torch.uint8)
-    assert (state1.dim() == 2 and state2.dim() == 2)
-    union,counts = torch.cat([state1, state2]).unique(dim=0, return_counts=True)
+    assert state1.dtype == torch.uint8
+    assert state2.dtype == torch.uint8
+    assert state1.dim() == 2 and state2.dim() == 2
+    union, counts = torch.cat([state1, state2]).unique(dim=0, return_counts=True)
     common = union[torch.where(counts.gt(1))]
 
     # torch.unique does not have 'return_inverse'
     union = torch.cat([state1, common]).to("cpu").numpy()
     idx1, counts = np.unique(union, axis=0, return_index=True, return_counts=True)[1:]
-    idx1 = torch.from_numpy(idx1[np.where(counts>1)]).to(state1.device)
+    idx1 = torch.from_numpy(idx1[np.where(counts > 1)]).to(state1.device)
     union = torch.cat([state2, common]).to("cpu").numpy()
     idx2, counts = np.unique(union, axis=0, return_index=True, return_counts=True)[1:]
-    idx2 = torch.from_numpy(idx2[np.where(counts>1)]).to(state2.device)
+    idx2 = torch.from_numpy(idx2[np.where(counts > 1)]).to(state2.device)
 
     # check indices
-    assert (torch.all(idx1 < state1.shape[0]))
-    assert (torch.all(idx2 < state2.shape[0]))
+    assert torch.all(idx1 < state1.shape[0])
+    assert torch.all(idx2 < state2.shape[0])
     return common, idx1, idx2
 
-def check_spin_multiplicity(state: Tensor, sorb: int,
-                            ms: Union[Tuple[int],
-                            List[int]] = None) -> Tensor:
+
+def check_spin_multiplicity(
+    state: Tensor, sorb: int, ms: Union[Tuple[int], List[int]] = None
+) -> Tensor:
     """
     Check spin_multiplicity for the given onv
     """
-    assert (state.dtype == torch.uint8 and state.dim() == 2)
+    assert state.dtype == torch.uint8 and state.dim() == 2
     if ms is None:
-        ms = (1, )
+        ms = (1,)
     else:
         assert isinstance(ms, (tuple, list))
-    x = (1 + onv_to_tensor(state, sorb))//2 # 1: occupied, 0: unoccupied
+    x = (1 + onv_to_tensor(state, sorb)) // 2  # 1: occupied, 0: unoccupied
     x0 = torch.empty_like(x)
     x0[..., 0::2] = -1
     x0[..., 1::2] = 1
-    spin = ((x0 * x).sum(axis=-1).abs().to(torch.int32) + 1)
+    spin = (x0 * x).sum(axis=-1).abs().to(torch.int32) + 1
     idx = torch.zeros_like(spin, dtype=torch.bool)
     for s in ms:
         torch.logical_or(spin == s, idx, out=idx)
 
     return torch.index_select(state, dim=0, index=torch.arange(state.size(0))[idx])
+
 
 def convert_onv(spins: Union[Tensor, np.ndarray], sorb: int, device: str = None) -> Tensor:
     """
@@ -221,7 +248,7 @@ def convert_onv(spins: Union[Tensor, np.ndarray], sorb: int, device: str = None)
 
     if not isinstance(spins, Tensor):
         raise TypeError(f"spins has invalid type: {type(spins)}, and excepted pytorch-Tensor")
-    
+
     if not spins.dtype == torch.uint8:
         raise TypeError(f"spins has invalid datatype: {spins.dtype}, and expected torch.uint8")
 
@@ -232,22 +259,26 @@ def convert_onv(spins: Union[Tensor, np.ndarray], sorb: int, device: str = None)
 
     return tensor_to_onv(spins, sorb).to(device)
 
+
 @dataclass(frozen=True)
 class Dtype:
     """
     dtype: default: torch.double
     device: default: cpu
     """
-    dtype:Type = torch.double
+
+    dtype: Type = torch.double
     device: str = "cpu"
 
-class Logger():
+
+class Logger:
     """
     Log Input to file or terminal
     """
+
     def __init__(self, filename: str, stream=sys.stdout):
         self.terminal = stream
-        self.log = open(filename, "w", encoding='utf-8')
+        self.log = open(filename, "w", encoding="utf-8")
 
     def write(self, message):
         self.terminal.write(message)
@@ -256,11 +287,13 @@ class Logger():
     def flush(self):
         pass
 
+
 class ElectronInfo:
     """
-    A class about electronic structure information, 
+    A class about electronic structure information,
      and include 'h1e, h2e, sorb, nele, noa, nob, ecore, nv, onstate'
     """
+
     def __init__(self, electron_info: dict, device=None) -> None:
         self._h1e = electron_info["h1e"].to(device)
         self._h2e = electron_info["h2e"].to(device)
@@ -268,12 +301,12 @@ class ElectronInfo:
         self._nele = electron_info["nele"]
         self._ecore = electron_info["ecore"]
         self._ci_space = electron_info["onstate"].to(device)
-        self._noa = electron_info.get("noa", self._nele//2)
-        self._nva = electron_info.get("nva", self.nv//2)
+        self._noa = electron_info.get("noa", self._nele // 2)
+        self._nva = electron_info.get("nva", self.nv // 2)
 
-        self._memory = (self._h1e.numel() + self._h2e.numel()) * 8 / 2**30 # GiB Double
-        self._memory += (self.ci_space.numel()) / 2**30 # Uint8
-        
+        self._memory = (self._h1e.numel() + self._h2e.numel()) * 8 / 2**30  # GiB Double
+        self._memory += (self.ci_space.numel()) / 2**30  # Uint8
+
     @property
     def __name__(self):
         return "ElectronInfo"
@@ -297,25 +330,25 @@ class ElectronInfo:
     @property
     def sorb(self) -> int:
         return self._sorb
-    
+
     @property
     def nele(self) -> int:
         return self._nele
-    
+
     @property
     def noa(self) -> int:
         return self._noa
-    
+
     @property
     def nob(self) -> int:
         return self._nele - self._noa
-    
+
     @property
     def nva(self) -> int:
         return self._nva
-    
+
     @property
-    def nvb(self) ->int:
+    def nvb(self) -> int:
         return self.nv - self.nva
 
     @property
@@ -337,26 +370,27 @@ class ElectronInfo:
     @property
     def memory(self) -> float:
         return self._memory
-    
-    def to(self, device: str=None) ->None:
+
+    def to(self, device: str = None) -> None:
         self._h1e = self._h1e.to(device)
         self._h2e = self._h2e.to(device)
         self._ci_space = self._ci_space.to(device)
-    
+
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}" + "(\n"
-            f"    h1e shape: {self.h1e.shape[0]}\n" +
-            f"    h2e shape: {self.h2e.shape[0]}\n" +
-            f"    ci shape:{tuple(self.ci_space.shape)}\n" +
-            f"    ecore: {self.ecore:.8f}\n" +
-            f"    sorb: {self.sorb}, nele: {self.nele}\n" +
-            f"    noa: {self.noa}, nob: {self.nob}\n" +
-            f"    nva: {self.nva}, nvb: {self.nvb}\n" +
-            f"    Singles + Doubles: {self.n_SinglesDoubles}\n" +
-            f"    Using memory: {self.memory:.3f} GiB\n"+
-            f")"
+            f"    h1e shape: {self.h1e.shape[0]}\n"
+            + f"    h2e shape: {self.h2e.shape[0]}\n"
+            + f"    ci shape:{tuple(self.ci_space.shape)}\n"
+            + f"    ecore: {self.ecore:.8f}\n"
+            + f"    sorb: {self.sorb}, nele: {self.nele}\n"
+            + f"    noa: {self.noa}, nob: {self.nob}\n"
+            + f"    nva: {self.nva}, nvb: {self.nvb}\n"
+            + f"    Singles + Doubles: {self.n_SinglesDoubles}\n"
+            + f"    Using memory: {self.memory:.3f} GiB\n"
+            + f")"
         )
+
 
 class EnterDir:
     def __init__(self, c) -> None:
@@ -372,10 +406,11 @@ class EnterDir:
     def __exit__(self, exc_type, exc_val, exc_tb):
         os.chdir(self.before_path)
 
+
 if __name__ == "__main__":
     # print(given_onstate(12, 12, 3, 3)) # H20
     # print(state_to_string(torch.tensor([0b1111, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8), 8))
-    s = ['1100', '0011', '1010', '0101', '1001', '0110']
+    s = ["1100", "0011", "1010", "0101", "1001", "0110"]
     lst = []
     for i in s:
         lst.append(string_to_state(4, i))
