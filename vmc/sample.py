@@ -109,9 +109,9 @@ class Sampler:
         )
         self.max_n_sample = max_n_sample if max_n_sample is not None else n_sample
         self.min_n_sample = n_sample
-        self.max_n_sample += (self.rank + 1) * 10000
-        self.min_n_sample += (self.rank + 1) * 10000
-        self.n_sample += (self.rank + 1) * 10000
+        # self.max_n_sample += (self.rank + 1) * 10000
+        # self.min_n_sample += (self.rank + 1) * 10000
+        # self.n_sample += (self.rank + 1) * 10000
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:

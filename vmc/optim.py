@@ -13,6 +13,7 @@ from line_profiler import LineProfiler
 from functools import partial
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
+from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
 
 import matplotlib.pyplot as plt
@@ -25,7 +26,7 @@ from vmc.sample import Sampler
 from vmc.energy import total_energy
 from vmc.grad import energy_grad, sr_grad
 from ci import CITrain, CIWavefunction
-from utils.distributed import all_reduce_tensor
+from utils.distributed import all_reduce_tensor, all_gather_tensor
 
 from utils import ElectronInfo, Dtype, state_to_string
 from libs.C_extension import onv_to_tensor
@@ -42,7 +43,7 @@ class VMCOptimizer:
 
     def __init__(
         self,
-        nqs: nn.Module,
+        nqs: DDP,
         sampler_param: dict,
         electron_info: ElectronInfo,
         opt_type: Optimizer = torch.optim.Adam,
@@ -60,6 +61,7 @@ class VMCOptimizer:
         sr: bool = False,
         method_jacobian: str = "vector",
         interval: int = 100,
+        prefix: str = "VMC",
     ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -79,7 +81,7 @@ class VMCOptimizer:
 
         # Read parameters from an external model or model
         self.opt: Optimizer = opt_type(self.model.parameters(), **opt_params)
-        if lr_sch_params is not None and lr_sch_params is None:
+        if lr_sch_params is not None and lr_scheduler is not None:
             self.lr_scheduler = lr_scheduler(self.opt, **lr_sch_params)
         else:
             self.lr_scheduler = None
@@ -111,15 +113,16 @@ class VMCOptimizer:
 
         self.dump_input()
         if self.rank == 0:
-            logger.info(f"NQS model:\n{self.model}")
-            logger.info(
-                f"The number param of NQS model: {sum(map(torch.numel, self.model.parameters()))}"
+            s = f"NQS model:\n{self.model}\n"
+            s += (
+                f"The number param of NQS model: {sum(map(torch.numel, self.model.parameters()))}\n"
             )
-            logger.info(f"Optimizer:\n{self.opt}")
-            logger.info(f"Sampler:\n{self.sampler}")
-            logger.info(f"Grad method: {self.method_grad}")
+            s += f"Optimizer:\n{self.opt}\n"
+            s += f"Sampler:\n{self.sampler}\n"
+            s += f"Grad method: {self.method_grad}\n"
             if self.sr:
-                logger.info(f"Jacobian method: {self.method_jacobian}")
+                s += f"Jacobian method: {self.method_jacobian}"
+            logger.info(s, master=True)
 
         # pre-train CI wavefunction
         self.pre_CI = pre_CI
@@ -131,8 +134,10 @@ class VMCOptimizer:
         else:
             self.nprt = 1
         self.model_dict_lst: List[nn.Module] = []
+        self.opt_dict_lst: List[dict] = []
         if self.rank == 0:
-            logger.info(f"Save model interval: {self.nprt}")
+            logger.info(f"Save model interval: {self.nprt}", master=True)
+        self.prefix = prefix
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -152,7 +157,7 @@ class VMCOptimizer:
 
     def read_model(self, external_model):
         if self.rank == 0:
-            logger.info(f"Read nqs model/h1e-h2e from '.pth' file {external_model}")
+            logger.info(f"Read nqs model/h1e-h2e from '.pth' file {external_model}", master=True)
         state = torch.load(external_model, map_location=self.device)
         self.model_raw = state["model"]
         # notice h1e, he2 may be different even if the coordinate and basis are the same.
@@ -170,7 +175,7 @@ class VMCOptimizer:
             s += f"numpy {np.__version__} torch {torch.__version__}\n"
             s += f"Date: {time.ctime()}\n"
             s += f"Device: {self.device}\n"
-            logger.info(s)
+            logger.info(s, master=True)
 
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self):
@@ -216,7 +221,8 @@ class VMCOptimizer:
 
             delta = (time.time_ns() - t0) / 1.00e06
             # TODO: time rank
-            self.time_sample.append(delta)
+            if self.rank == 0:
+                self.time_sample.append(delta)
 
             # calculate model grad
             t1 = time.time_ns()
@@ -243,45 +249,6 @@ class VMCOptimizer:
                     self.method_grad,
                 )
             delta_grad = (time.time_ns() - t1) / 1.00e09
-            # for i, param in enumerate(self.model.parameters()):
-            #     if i == 2:
-            #         if param.grad is not None:
-            #             x0 = param.grad.reshape(-1).clone()
-
-            # nbatch = sample_state.shape[0] - 20
-            # psi = energy_grad(self.model, sample_state[:nbatch//2], state_prob[:nbatch//2], eloc[:nbatch//2],
-            #                   eloc_mean,
-            #                   self.exact, self.dtype,
-            #                   self.method_grad)
-            # for i, param in enumerate(self.model.parameters()):
-            #     if i == 2:
-            #         if param.grad is not None:
-            #             x1 = param.grad.reshape(-1).clone()
-
-            # psi = energy_grad(self.model, sample_state[nbatch//2:], state_prob[nbatch//2:], eloc[nbatch//2:],
-            #                   eloc_mean,
-            #                   self.exact, self.dtype,
-            #                   self.method_grad)
-            # for i, param in enumerate(self.model.parameters()):
-            #     if i == 2:
-            #         if param.grad is not None:
-            #             x2 = param.grad.reshape(-1).clone()
-            # print(torch.allclose(x1, x0))
-            # print(torch.allclose(x2, x0))
-            # print(x1)
-            # print(x2)
-            # print(x0)
-            # save the energy grad
-            # for i, param in enumerate(self.model.parameters()):
-            #     if i == 0:
-            #         if param.grad is not None:
-            #             np.save(f"{self.rank}-grad-{dist.get_world_size()}", param.grad.reshape(-1).detach().to("cpu").numpy())
-            # for i, param in enumerate(self.model.parameters()):
-            #     if i == 2:
-            #         if param.grad is not None:
-            #             print(param.grad,"\n")
-            # for param in self.model.parameters():
-            #     print(param.grad)
 
             # save the energy grad
             if self.rank == 0:
@@ -298,20 +265,25 @@ class VMCOptimizer:
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
 
-            if epoch == 2:
-                if self.rank == 0:
-                    for i, param in enumerate(self.model.parameters()):
-                        if i == 2:
-                            print(param.data.reshape(-1).clone())
-                exit()
-
             delta_update = (time.time_ns() - t2) / 1.00e09
 
+            # save the checkpoint
             if self.rank == 0:
                 if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
-                    logger.info("Save model state dict", master=True)
+                    checkpoint_file = f"{self.prefix}-checkpoint.pth"
+                    logger.info(f"Save model/opt state: -> {checkpoint_file}", master=True)
                     self.model_dict_lst.append(deepcopy(self.model_raw.state_dict()))
-
+                    self.opt_dict_lst.append(deepcopy(self.opt.state_dict()))
+                    torch.save(
+                        {
+                            "epoch": epoch,
+                            "model": self.model_raw.state_dict(),
+                            "optimizer": self.opt.state_dict(),
+                            "scheduler": self.lr_scheduler.state_dict(),
+                        },
+                        checkpoint_file,
+                    )
+            exit()
             delta = (time.time_ns() - t0) / 1.00e09
             # TODO: All-Reduce mean-time or max-time zbwu(23-09-07)
             # All-Reduce max-time
@@ -363,9 +335,12 @@ class VMCOptimizer:
         t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
         del t
 
-    def summary(self, e_ref: float = None, e_lst: List[float] = None, prefix: str = "VMC"):
-        self.save(prefix)
-        self.plot_figure(e_ref, e_lst, prefix)
+    def summary(self, e_ref: float = None, e_lst: List[float] = None, prefix: str = None):
+        if prefix is None:
+            prefix = self.prefix
+        if self.rank == 0:
+            self.save(prefix)
+            self.plot_figure(e_ref, e_lst, prefix)
 
     def save(self, prefix: str = "VMC", nqs: bool = True, sample: bool = True):
         sample_file, model_file = [prefix + i for i in (".csv", ".pth")]
@@ -376,15 +351,18 @@ class VMCOptimizer:
             # TODO: using self.model_raw.state_dict()
             torch.save(
                 {
-                    "model": self.model_raw,
+                    # DDP modules
+                    "model": self.model_raw.modules,
                     "optimizer": self.opt,
-                    "lr_scheduler": self.lr_scheduler,
+                    # lambda function could not been Serialized
+                    # "lr_scheduler": self.lr_scheduler,
                     "HF_init": self.HF_init,
                     "sr": self.sr,
                     "sampler_param": self.sampler_param,
                     "h1e": self.h1e,
                     "h2e": self.h2e,
                     "model_dict": self.model_dict_lst,
+                    "opt_dict": self.opt_dict_lst,
                 },
                 model_file,
             )
@@ -428,9 +406,9 @@ class VMCOptimizer:
             ylim1 = np.max(y) + (np.min(y) - e_ref) * y_ratio
             axins.set_xlim(xlim0, xlim1)
             axins.set_ylim(ylim0, ylim1)
-            logger.info(f"Last 100th energy: {np.average(e[-100]):.9f}")
+            logger.info(f"Last 100th energy: {np.average(e[-100]):.9f}", master=True)
             logger.info(
-                f"Reference energy: {e_ref:.9f}, error: {abs((np.average(e[-100])-e_ref)/e_ref) * 100:.6f} %"
+                f"Reference energy: {e_ref:.9f}, error: {abs((np.average(e[-100])-e_ref)/e_ref) * 100:.6f}%"
             )
 
         # plot the L2-norm and max-abs of the gradients
@@ -491,3 +469,4 @@ def _gd_update(params: List[Tensor], grads: List[Tensor], lr: float, weight_deca
         if weight_decay != 0:
             dp = dp.add(param, alpha=weight_decay)
         param.data.add_(dp, alpha=-lr)
+

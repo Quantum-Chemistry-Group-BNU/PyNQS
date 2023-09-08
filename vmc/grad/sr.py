@@ -9,6 +9,7 @@ from .energy_grad import energy_grad
 __all__ = ['sr_grad']
 
 
+# TODO: DDP implement zbwu/23-09-08
 def sr_grad(nqs: nn.Module,
             states: Tensor,
             state_prob: Tensor,

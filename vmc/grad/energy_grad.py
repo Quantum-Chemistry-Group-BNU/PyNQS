@@ -144,7 +144,7 @@ def _ad_grad(nqs: nn.Module,
     # reduce_loss.backward()
 
     loss.backward()
-    logger.debug(f"rank: {dist.get_rank() } loss: {loss:.4f}")
+    logger.debug(f"loss: {loss:.4f}")
     return psi.detach()
 
 def _numerical_differentiation(nqs: nn.Module,
