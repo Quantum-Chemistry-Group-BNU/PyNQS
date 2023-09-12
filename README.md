@@ -7,18 +7,25 @@ A simple function calculates &lt;n|H|m> using the Pytorch tensor in CPU or GPU.
 
 ![process](./docs/flowchart.png)
 
+**Eloc Distributed  process**
+
+![process](./docs/eloc-dist.png)
+
+
 
 
 ## Installation
 
-####  Compile CPP sources
+#### Compile CPP sources
 ```bash
 > cd cpp_src
 > sh compile.sh -h
-# Use shell scripit to Complie CPU or GPU code with conditional compilation.
+# Use shell script to Compile CPU or GPU code with conditional compilation.
 #         sh compile.sh -s CPU or -s GPU
 > sh compile.sh -s GPU 
 > ls  # you can find the 'setup.py', Check compilers CC and CXX
+# cpu cuda common tensor compile.sh setup.py
+# set magma_DIR and torch_DIR in 'setup.py'
 > python setup.py develop # begin compile
 # ....
 > mv C_extension.so ../libs/   # move 'C_extension.so' to '../libs' 
