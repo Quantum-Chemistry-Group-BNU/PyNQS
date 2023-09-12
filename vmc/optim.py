@@ -26,7 +26,7 @@ from vmc.sample import Sampler
 from vmc.energy import total_energy
 from vmc.grad import energy_grad, sr_grad
 from ci import CITrain, CIWavefunction
-from utils.distributed import all_reduce_tensor, all_gather_tensor
+from utils.distributed import all_reduce_tensor, synchronize, get_rank, get_world_size, all_gather_tensor, scatter_tensor, gather_tensor
 
 from utils import ElectronInfo, Dtype, state_to_string
 from libs.C_extension import onv_to_tensor
@@ -67,7 +67,8 @@ class VMCOptimizer:
             dtype = Dtype()
         self.dtype = dtype.dtype
         self.device = dtype.device
-        self.rank = dist.get_rank()
+        self.rank = get_rank()
+        self.word_size = get_world_size()
         self.external_model = external_model
 
         # whether read nqs/h1e-h2e from external file
@@ -165,7 +166,7 @@ class VMCOptimizer:
         self.h2e: Tensor = state["h2e"]
 
     def dump_input(self):
-        if dist.get_rank() == 0:
+        if self.rank == 0:
             s = "System:\n"
             if hasattr(__main__, "__file__"):
                 filename = os.path.abspath(__main__.__file__)
@@ -202,13 +203,12 @@ class VMCOptimizer:
             # All_Reduce mean local energy
             eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
             logger.debug(f"eloc-mean: {eloc_mean.real:.5f}{eloc_mean.imag:+.5f}j")
-            # dist.all_reduce(eloc_mean, op=dist.ReduceOp.SUM, async_op=True)
-            # dist.barrier()
-            # eloc_mean.div_(dist.get_world_size())
-            all_reduce_tensor(eloc_mean, word_size=dist.get_world_size())
+            all_reduce_tensor(eloc_mean, word_size=self.word_size)
+            synchronize()
 
             e_total = eloc_mean.item().real + self.ecore
             if self.rank == 0:
+                logger.info(f"eloc-mean: {eloc_mean.real:.5f}{eloc_mean.imag:+.5f}j", master=True)
                 self.e_lst.append(e_total)
             # self.stats_lst.append(stats)
 
@@ -220,7 +220,6 @@ class VMCOptimizer:
             sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
 
             delta = (time.time_ns() - t0) / 1.00e06
-            # TODO: time rank
             if self.rank == 0:
                 self.time_sample.append(delta)
 
@@ -259,12 +258,19 @@ class VMCOptimizer:
                         self.grad_e_lst[i].append(np.zeros(param.numel()))
 
             t2 = time.time_ns()
+            # TODO: synchronize
             if epoch < self.max_iter - 1:
                 self.opt.step()
                 self.opt.zero_grad()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
-
+            
+            if epoch == 20:
+                if self.rank == 0:
+                    for i, param in enumerate(self.model.parameters()):
+                        if i == 2:
+                            logger.info(param.data)
+                exit()
             delta_update = (time.time_ns() - t2) / 1.00e09
 
             # save the checkpoint
@@ -283,13 +289,12 @@ class VMCOptimizer:
                         },
                         checkpoint_file,
                     )
-            exit()
             delta = (time.time_ns() - t0) / 1.00e09
             # TODO: All-Reduce mean-time or max-time zbwu(23-09-07)
             # All-Reduce max-time
             c = torch.tensor([delta_grad, delta_update, delta], device=self.device)
             all_reduce_tensor(c, op=dist.ReduceOp.MAX)
-            dist.barrier()
+            synchronize()
             if self.rank == 0:
                 logger.info(
                     f"Calculating grad: {c[0].item():.3E} s, update param: {c[1].item():.3E} s",
@@ -312,7 +317,7 @@ class VMCOptimizer:
 
         # end vmc iterations
         total_vmc_time = (time.time_ns() - begin_vmc) / 1.0e09
-        dist.barrier()
+        synchronize()
         if self.rank == 0:
             logger.info(f"End VMC iteration: {time.ctime()}", master=True)
             logger.info(

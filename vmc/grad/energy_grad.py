@@ -4,7 +4,7 @@ from typing import List, Tuple, Union
 from torch import Tensor, nn
 from loguru import logger
 
-from utils.distributed import all_reduce_tensor
+from utils.distributed import all_reduce_tensor, get_world_size, get_rank, synchronize
 
 def energy_grad(nqs: nn.Module,
                 states: Tensor,
@@ -137,11 +137,10 @@ def _ad_grad(nqs: nn.Module,
     loss2 = eloc_mean * torch.einsum("i, i ->", log_psi.conj(), state_prob)
     loss = 2 * (loss1 - loss2).real
 
-    # reduce_loss = all_reduce_tensor(loss, word_size=dist.get_world_size(), in_place=False)
-    # dist.barrier()
-    # if dist.get_rank() == 0:
-    #     logger.debug(f"Reduce-loss: {reduce_loss}", master=True)
-    # reduce_loss.backward()
+    reduce_loss = all_reduce_tensor(loss, word_size=get_world_size(), in_place=False)
+    synchronize()
+    if get_rank() == 0:
+        logger.debug(f"Reduce-loss: {reduce_loss[0].item():.4f}", master=True)
 
     loss.backward()
     logger.debug(f"loss: {loss:.4f}")

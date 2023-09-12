@@ -37,8 +37,7 @@ if __name__ == "__main__":
     local_rank = int(os.environ["LOCAL_RANK"])
     # seed = int(time.time_ns() % 2**31)
     seed = 2022
-    _ = setup_seed(seed)
-    output = "1111"
+    setup_seed(seed)
     if device == "cuda":
         torch.cuda.set_device(local_rank)
     logger.remove()
@@ -54,7 +53,7 @@ if __name__ == "__main__":
     #     sorb, nele, e_lst, fci_amp = integral_pyscf(
     #         atom, integral_file=integral_file, cisd_coeff=False, fci_coeff=True
     #     )
-    #     print(e_lst)
+    #     logger.info(e_lst)
     # h1e, h2e, ci_space, ecore, sorb = read_integral(
     #     integral_file,
     #     nele,
@@ -64,6 +63,18 @@ if __name__ == "__main__":
     #     device=device,
     #     # prefix="test-onstate",
     # )
+    # torch.save({
+    #  "h1e": h1e,
+    #  "h2e": h2e,
+    #  "sorb": sorb,
+    #  "nob": nele//2,
+    #  "noa": nele - nele//2,
+    #  "ci_space": ci_space,
+    #  "ecore": ecore,
+    #  "nele": nele,
+    #  "e_lst": e_lst,
+    #  }, "H10-1.60.pth")
+    
     e = torch.load("H6-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
@@ -91,10 +102,6 @@ if __name__ == "__main__":
     ansatz = RNNWavefunction(
         sorb, nele, num_hiddens=8, num_labels=2, rnn_type="complex", num_layers=1, device=device
     ).to(device=device)
-    if dist.get_rank() >=0 :
-        for i, param in enumerate(ansatz.parameters()):
-            if i == 2:
-                print(param.data)
     if device == "cuda":
         model = DDP(ansatz, device_ids=[local_rank], output_device=local_rank)
     else:
@@ -107,7 +114,7 @@ if __name__ == "__main__":
     # model = DDP(model, device_ids=[local_rank], output_device=local_rank)
     # torch.save({"model": model.state_dict(), "h1e": h1e, "h2e": h2e}, "test.pth")
     sampler_param = {
-        "n_sample": 40000,
+        "n_sample": 30000,
         "debug_exact": False,
         "therm_step": 10000,
         "seed": seed,
@@ -119,11 +126,11 @@ if __name__ == "__main__":
     opt_type = optim.Adam
     # opt_params = {"lr": 0.005, "weight_decay": 0.001, "betas": (0.9, 0.99)}
     opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
-    # lr_scheduler = optim.lr_scheduler.MultiStepLR
-    # lr_sch_params = {"milestones": [3000, 4500, 5500], "gamma": 0.20}
-    lr_scheduler = optim.lr_scheduler.LambdaLR
-    lambda1 = lambda step: 0.005 * (1 + step / 5000) ** -1
-    lr_sch_params = {"lr_lambda": lambda1}
+    lr_scheduler = optim.lr_scheduler.MultiStepLR
+    lr_sch_params = {"milestones": [3000, 4500, 5500], "gamma": 0.20}
+    # lr_scheduler = optim.lr_scheduler.LambdaLR
+    # lambda1 = lambda step: 0.005 * (1 + step / 5000) ** -1
+    # lr_sch_params = {"lr_lambda": lambda1}
     dtype = Dtype(dtype=torch.complex128, device=device)
     # dtype = Dtype(dtype=torch.double, device=device)
 
@@ -147,9 +154,13 @@ if __name__ == "__main__":
         pre_train_info=None,
         method_grad="AD",
         method_jacobian="vector",
+        prefix = "VMC"
     )
     # opt_vmc.pre_train(output)
-    a = opt_vmc.run()
+    opt_vmc.run()
+    e_lst = [-2.9526683640, -2.66498307507291]
+    e_ref = e_lst[0]
+    opt_vmc.summary(e_ref, e_lst)
     # psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
     # psi /= psi.norm()
     # dim = ci_space.size(0)

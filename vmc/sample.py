@@ -19,9 +19,15 @@ from memory_profiler import profile
 from line_profiler import LineProfiler
 
 from vmc.energy import total_energy
-from libs.C_extension import onv_to_tensor, spin_flip_rand, MCMC_sample
-from libs.C_extension import tensor_to_onv
-from utils import state_to_string, ElectronInfo, check_para, get_nbatch, diff_rank_seed, setup_seed
+from libs.C_extension import (
+    onv_to_tensor,
+    spin_flip_rand,
+    MCMC_sample,
+    tensor_to_onv,
+    merge_rank_sample,
+)
+from utils import state_to_string, ElectronInfo, check_para, get_nbatch, diff_rank_seed
+from utils.distributed import gather_tensor, scatter_tensor, get_rank, get_world_size, synchronize
 
 print = partial(print, flush=True)
 
@@ -59,11 +65,12 @@ class Sampler:
             raise ValueError(f"The number of sample{n_sample} should great 50")
 
         # setup random seed
-        self.rank = dist.get_rank()
+        self.rank = get_rank()
+        self.word_size = get_world_size()
         # self.seed = 22022
         # setup_seed(self.seed)
         self.seed = diff_rank_seed(seed, rank=self.rank)
-        logger.debug((self.seed, self.rank))
+        logger.info((self.seed, self.rank))
 
         self.ele_info = ele_info
         self.read_electron_info(self.ele_info)
@@ -158,7 +165,7 @@ class Sampler:
         # print local energy statistics information
         self._statistics(stats_dict, sample_counts)
 
-        if self.record_sample:
+        if self.record_sample and self.rank == 0:
             # TODO: if given sorb(not full space), this is error.
             counts = sample_counts.to("cpu").numpy()
             sample_str = state_to_string(sample_unique, self.sorb)
@@ -300,74 +307,58 @@ class Sampler:
                     # continue AR sampling, increase samples
                     self.n_sample = int(min(self.max_n_sample, self.n_sample * 10))
                     continue
-        # TODO: implement all_gather/scatter/broadcast functions, List[Tensor/int], shape:1D/2D
+        if True:
+            t0 = time.time_ns()
+            # Gather unique, counts
+            unique_all = gather_tensor(sample_unique, self.device, self.word_size, master_rank=0)
+            count_all = gather_tensor(sample_counts, self.device, self.word_size, master_rank=0)
+            # sample_all = gather_tensor(sample, self.device, self.word_size, master_rank=0)
+            synchronize()
+            t1 = time.time_ns()
+            if self.rank == 0:
+                split_idx = torch.tensor(
+                    [0] + [i.shape[0] for i in unique_all], dtype=torch.int64
+                ).cumsum(dim=0)
+                unique_all = torch.cat(unique_all)
+                merge_unique, merge_idx = torch.unique(unique_all, dim=0, return_inverse=True)
+                count_all = torch.cat(count_all)
+                # nbatch = unique_all.shape[0]
+                # merge_counts = torch.zeros(merge_unique.shape[0], dtype=torch.int64, device=self.device)
 
-        # gather_data = [torch.zeros_like(sample) for _ in range(dist.get_world_size())]
+                # merge prob
+                length = merge_unique.shape[0]
+                merge_counts = merge_rank_sample(merge_idx, count_all, split_idx, length)
+                # for i in range(nbatch):
+                #     merge_counts[merge_idx[i]] += count_all[i]
+                merge_prob = merge_counts / merge_counts.sum()
+                # _, counts_test = torch.unique(torch.cat(sample_all), dim=0, return_counts=True)
+                # assert(torch.allclose(counts_test, merge_counts))
+            else:
+                merge_counts = None
+                merge_unique = None
+                merge_prob = None
+
+            t2 = time.time_ns()
+            # Scatter unique, counts
+            unique_rank = scatter_tensor(merge_unique, self.device, torch.int64, self.word_size)
+            counts_rank = scatter_tensor(merge_counts, self.device, torch.int64, self.word_size)
+            prob_rank = scatter_tensor(merge_prob, self.device, torch.double, self.word_size)
+            synchronize()
+            t3 = time.time_ns()
+
+            if self.rank == 0:
+                delta1 = (t1 - t0) / 1.0e09
+                delta2 = (t3 - t2) / 1.0e09
+                delta3 = (t2 - t1) / 1.0e09
+                logger.debug(
+                    f"Sample-Comm, Gather: {delta1:.3E} s, Scatter: {delta2:.3E} s, merge: {delta3:.3E} s",
+                    master=True,
+                )
+            unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
+
+            return unique_rank, counts_rank, prob_rank * self.word_size
+
         sample_prob = sample_counts / sample_counts.sum()
-        # gather sample/unique
-        # TODO: different shape tensor
-        if False:
-            if dist.get_rank() == 0:
-                gather_data = [torch.zeros_like(sample) for _ in range(dist.get_world_size())]
-                dist.gather(sample, gather_list=gather_data, dst=0)
-            else:
-                dist.gather(sample, gather_list=[], dst=0)
-            dist.barrier()
-            if dist.get_rank() == 0:
-                print(f"rank: {dist.get_rank()}, sample: {torch.cat(gather_data, dim=0).shape}\n")
-
-            split_shape = torch.ones(dist.get_world_size(), device=self.device, dtype=torch.int64)
-            if dist.get_rank() == 0:
-                sample = torch.cat(gather_data, dim=0)
-                sample_unique, sample_counts = torch.unique(sample, dim=0, return_counts=True)
-                sample_prob = sample_counts / sample_counts.sum()
-                k = (sample_unique.shape[0] - 1 + dist.get_world_size()) // dist.get_world_size()
-                res = sample_unique.shape[0] - k * (dist.get_world_size() - 1)
-                # k, res = divmod(sample_unique.shape[0], dist.get_world_size())
-                split_shape.mul_(k)
-                split_shape[-1] = res
-                print(split_shape)
-            # broadcast split_shape:
-            dist.broadcast(split_shape, src=0)
-            dist.barrier()
-
-            # TODO: how to deal with res != 0;
-            # ref:https://stackoverflow.com/questions/71433507/pytorch-python-distributed-multiprocessing-gather-concatenate-tensor-arrays-of
-            # Scatter sample_unique, sample_counts, sample_prob
-            data = torch.zeros(split_shape[0], dtype=torch.double, device=self.device)
-            data1 = torch.zeros(split_shape[0], self.sorb, dtype=torch.int64, device=self.device)
-            data2 = torch.zeros(split_shape[0], dtype=torch.int64, device=self.device)
-            if dist.get_rank() == 0:
-                scatter_data = torch.cat(
-                    [sample_prob, torch.zeros(k - res, dtype=torch.double, device=self.device)],
-                    dim=0,
-                )
-                scatter_prob = list(scatter_data.split(k, dim=0))
-                scatter_data1 = torch.cat(
-                    [
-                        sample_unique,
-                        torch.zeros(k - res, self.sorb, dtype=torch.int64, device=self.device),
-                    ],
-                    dim=0,
-                )
-                scatter_unique = list(scatter_data1.split(k, dim=0))
-                scatter_data2 = torch.cat(
-                    [sample_counts, torch.zeros(k - res, dtype=torch.int64, device=self.device)],
-                    dim=0,
-                )
-                scatter_count = list(scatter_data2.split(k, dim=0))
-            else:
-                scatter_prob = None
-                scatter_unique = None
-                scatter_count = None
-            dist.scatter(data, scatter_prob, src=0)
-            dist.scatter(data1, scatter_unique, src=0)
-            dist.scatter(data2, scatter_count, src=0)
-            dist.barrier()
-            # TODO: length(sample_unique) < word_size()
-            print(f"rank: {dist.get_rank()}, prob: {data.sum():.3f}, {data.device}")
-            print(f"rank: {dist.get_rank()}, unique-sample: {data1[:10]}, {data1.device}")
-            print(f"rank: {dist.get_rank()}, count: {data2[:10]}, {data2.device}")
         # convert to onv
         sample_unique = tensor_to_onv(sample_unique.to(torch.uint8), self.sorb)
 

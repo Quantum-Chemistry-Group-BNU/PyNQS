@@ -1,6 +1,7 @@
 #include "cpu_tensor.h"
 
 #include <cassert>
+#include <cstdint>
 #include <random>
 
 Tensor tensor_to_onv_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
@@ -406,4 +407,24 @@ tuple_tensor_2d nbatch_convert_sites_cpu(
                           image2, nbatch, &data_info_ptr[i]);
   }
   return std::make_tuple(data_info, sym_break);
+}
+
+Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts, const int64_t length){
+    auto options = torch::TensorOptions()
+                     .dtype(torch::kInt64)
+                     .layout(idx.layout())
+                     .device(idx.device())
+                     .requires_grad(false);
+  auto merge_counts = torch::zeros({length}, options);
+  int64_t * merge_counts_ptr = merge_counts.data_ptr<int64_t>();
+
+  const int64_t* counts_ptr = counts.data_ptr<int64_t>();
+  const int64_t* idx_ptr = idx.data_ptr<int64_t>();
+  const int64_t batch1 = counts.size(0);
+
+  for (int64_t i = 0; i < batch1; i++) {
+    merge_counts_ptr[idx_ptr[i]] += counts_ptr[i];
+    // merge_counts[idx[i]] += counts[i];
+  }
+  return merge_counts;
 }

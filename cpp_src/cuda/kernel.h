@@ -85,3 +85,6 @@ __host__ void print_ptr_ptr_cuda(double *data_ptr, double **ptr_array,
                                  int64_t *dr, size_t nbatch);
 
 __host__ void swap_pointers_cuda(double **ptr_ptr, double **ptr_ptr_1);
+
+__host__ void merge_idx_cuda(int64_t *merge_counts, const int64_t *idx,
+                             const int64_t *counts, const int64_t batch);

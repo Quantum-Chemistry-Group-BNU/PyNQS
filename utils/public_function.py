@@ -10,7 +10,6 @@ from typing import List, Type, Tuple, Union
 from dataclasses import dataclass
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv
-from utils.distributed import N_NODES, RANK
 
 
 def check_para(bra: Tensor):
@@ -184,7 +183,7 @@ def get_fock_space(sorb: int, device=None) -> Tensor:
 
     return convert_onv(space, sorb=sorb, device=device)
 
-
+# FIXME: cuda version maybe errors
 def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     """
      find the common onv in the two different onstate

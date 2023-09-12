@@ -182,6 +182,19 @@ tuple_tensor_2d nbatch_convert_sites(
   }
 }
 
+Tensor merge_rank_sample(const Tensor &idx, const Tensor &counts,
+                    const Tensor &split_idx, const int64_t length) {
+  CHECK_CONTIGUOUS(idx);
+  CHECK_CONTIGUOUS(counts);
+  if (idx.is_cpu() && counts.is_cpu()) {
+    return merge_sample_cpu(idx, counts, length);
+#ifdef GPU
+  } else {
+    return merge_sample_cuda(idx, counts, split_idx, length);
+#endif
+  }
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
@@ -207,4 +220,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("permute_sgn", &permute_sgn, "permute_sgn");
   // m.def("convert_sites_cpu", &nbatch_convert_sites_cpu, " test");
   m.def("convert_sites", &nbatch_convert_sites, " test");
+  m.def("merge_rank_sample", &merge_rank_sample, "merge sample index");
 }

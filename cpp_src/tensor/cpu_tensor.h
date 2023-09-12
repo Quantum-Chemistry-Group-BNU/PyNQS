@@ -34,3 +34,6 @@ tuple_tensor_2d nbatch_convert_sites_cpu(
     const Tensor &qrow_qcol, const Tensor &qrow_qcol_index,
     const Tensor &qrow_qcol_shape, const Tensor &ista, const Tensor &ista_index,
     const Tensor image2);
+
+Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
+                        const int64_t length);

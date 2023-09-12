@@ -1,6 +1,5 @@
 import time
 import torch
-import torch.distributed as dist
 import numpy as np
 
 from typing import Tuple, Callable, Union
@@ -78,7 +77,7 @@ def total_energy(
     delta0 = time_lst[:, 0].sum()
     delta1 = time_lst[:, 1].sum()
     delta2 = time_lst[:, 2].sum()
-    logger.debug(
+    logger.info(
         f"Total energy cost time: {(t1-t0)/1.0E06:.3E} ms, "
         + f"Detail time: {delta0:.3E} ms {delta1:.3E} ms {delta2:.3E} ms"
     )

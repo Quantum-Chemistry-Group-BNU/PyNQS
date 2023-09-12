@@ -40,4 +40,6 @@ tuple_tensor_2d nbatch_convert_sites_cuda(Tensor &onstate, const int nphysical,
                          const Tensor &qrow_qcol_shape, const Tensor &ista,
                          const Tensor &ista_index, const Tensor image2);
 
+Tensor merge_sample_cuda(const Tensor &idx, const Tensor &counts,
+                         const Tensor &split_idx, const int64_t length);
 #endif

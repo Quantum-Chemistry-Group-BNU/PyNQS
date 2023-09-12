@@ -162,6 +162,7 @@ class CITrain:
                                  nele=electron_info.nele)
 
         # TODO: how to calculate the energy from CI or VMC
+        # TODO: dist
         self.opt.zero_grad()
         for epoch in range(self.pre_max_iter + 1):
             t0 = time.time_ns()

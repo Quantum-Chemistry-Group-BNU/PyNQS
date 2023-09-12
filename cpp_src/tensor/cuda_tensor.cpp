@@ -8,6 +8,7 @@
 #include <tuple>
 #include <vector>
 
+#include "c10/cuda/CUDAFunctions.h"
 #include "cuda/kernel.h"
 #include "interface_magma.h"
 #include "torch/types.h"
@@ -249,4 +250,32 @@ tuple_tensor_2d nbatch_convert_sites_cuda(Tensor &onstate, const int nphysical,
                      nbatch, data_info_ptr, sym_break_ptr);
   // torch::cuda::synchronize();
   return std::make_tuple(data_info, sym_break);
+}
+
+Tensor merge_sample_cuda(const Tensor &idx, const Tensor &counts,
+                         const Tensor &split_idx, const int64_t length) {
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kInt64)
+                     .layout(idx.layout())
+                     .device(idx.device())
+                     .requires_grad(false);
+  auto merge_counts = torch::zeros({length}, options);
+  int64_t *merge_counts_ptr = merge_counts.data_ptr<int64_t>();
+
+  const int64_t *counts_ptr = counts.data_ptr<int64_t>();
+  const int64_t *idx_ptr = idx.data_ptr<int64_t>();
+  const int64_t n = split_idx.size(0) - 1;
+
+  int64_t begin, end;
+  for (int64_t i = 0; i < n; i++) {
+    const int64_t begin = split_idx[i].item<int64_t>();
+    const int64_t end = split_idx[i + 1].item<int64_t>();
+    const int64_t batch = end - begin;
+    // Notice: AtomicAdd or split block.
+    merge_idx_cuda(merge_counts_ptr, &idx_ptr[begin], &counts_ptr[begin],
+                   batch);
+    c10::cuda::device_synchronize();
+  }
+
+  return merge_counts;
 }

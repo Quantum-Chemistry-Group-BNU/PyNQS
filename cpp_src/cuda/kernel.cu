@@ -368,3 +368,22 @@ __host__ void convert_sites_cuda(const int64_t *onstate, const int nphysical,
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
+
+__global__ void merge_idx_kernel(int64_t *merge_counts, const int64_t *idx,
+                                 const int64_t *counts, const int64_t batch) {
+  int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idn >= batch)
+    return;
+  // Notice: atomicadd
+  merge_counts[idx[idn]] += counts[idn];
+}
+
+__host__ void merge_idx_cuda(int64_t *merge_counts, const int64_t *idx,
+                             const int64_t *counts, const int64_t batch) {
+  dim3 blockDim(1024);
+  dim3 gridDim((batch + blockDim.x - 1) / blockDim.x);
+  merge_idx_kernel<<<gridDim, blockDim>>>(merge_counts, idx, counts, batch);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
+  cudaDeviceSynchronize();
+}

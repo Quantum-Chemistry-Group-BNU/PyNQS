@@ -217,3 +217,26 @@ def convert_sites(onstate: Tensor, nphysical: int, data_index: Tensor,
         sym_break(Tensor): bool array:(nbatch,) bool array if True, symmetry break.
 
     """
+
+def merge_rank_sample(idx: Tensor, counts: Tensor, split_idx: Tensor, length: int) ->Tensor:
+    r"""
+    merge sample counts
+    
+    Implement functions similar to the following using cpp and cuda:
+    >>> batch = idx.shape[0]
+    >>> merge_counts = torch.zeros(length)
+    >>> for i in range():
+    >>>     merge_counts[idx[i]] += counts[i]
+
+    Parameters
+    ----------
+        idx: Tensor
+        counts: Tensor: 
+        split_idx: Tensor, idx and counts split position, if use cpu, this is Placeholder
+        if use cuda, this is necessary, because of AtomicAdd.
+        length: int
+    
+    Returns:
+    -------
+        merge_counts: Tensor, shape:(length,)
+    """
