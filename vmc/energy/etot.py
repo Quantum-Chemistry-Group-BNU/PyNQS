@@ -7,6 +7,7 @@ from torch import Tensor
 from loguru import logger
 
 from .eloc import local_energy
+from utils.distributed import gather_tensor, get_world_size, synchronize, get_rank, scatter_tensor
 
 
 def total_energy(
@@ -52,7 +53,26 @@ def total_energy(
         raise ValueError(f"The Local energy exists nan")
 
     if exact:
-        state_prob = (psi_lst * psi_lst.conj()) / psi_lst.norm() ** 2
+        world_size = get_world_size()
+        rank = get_rank()
+        # gather psi_lst from all rank
+        psi_lst_all = gather_tensor(psi_lst, device, world_size, master_rank=0)
+        eloc_lst_all = gather_tensor(eloc_lst, device, world_size, master_rank=0)
+        synchronize()
+        if rank == 0:
+            psi_lst_all = torch.cat(psi_lst_all)
+            eloc_lst_all = torch.cat(eloc_lst_all)
+            state_prob_all = (psi_lst_all * psi_lst_all.conj()) / psi_lst_all.norm() ** 2
+            eloc_mean = torch.einsum("i, i ->", eloc_lst_all, state_prob_all)
+        else:
+            state_prob_all = None
+        # Scatter state_prob to very rank
+        state_prob = scatter_tensor(state_prob_all, device, dtype, world_size, master_rank=0)
+        state_prob *= world_size
+        synchronize()
+        # assure length is true.
+        assert state_prob.shape[0] == dim
+        del psi_lst_all, state_prob_all
     else:
         if state_prob is None:
             state_prob = torch.ones(dim, dtype=dtype, device=device) / dim

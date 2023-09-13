@@ -39,9 +39,9 @@ def synchronize() -> None:
 def all_reduce_tensor(
     tensors: Union[Tensor, List[Tensor]],
     op=dist.ReduceOp.SUM,
-    word_size: int = 1,
+    world_size: int = 1,
     in_place: bool = True,
-) -> Union[Tensor, None]:
+) -> Union[List[Tensor], None]:
     """
     All Reduce Tensor or List[Tensor]
     """
@@ -53,7 +53,7 @@ def all_reduce_tensor(
         raise TypeError(f"tensors must be Tensor or List[Tensor]")
 
     if get_world_size() == 1:
-        return tensors
+        return [tensors]
 
     if not in_place:
         tensors_clone: List[Tensor] = []
@@ -63,7 +63,7 @@ def all_reduce_tensor(
             tensor = tensor.clone()
         dist.all_reduce(tensor, op, async_op=True)
         dist.barrier()
-        tensor.div_(word_size)
+        tensor.div_(world_size)
 
         if not in_place:
             tensors_clone.append(tensor)
@@ -72,7 +72,7 @@ def all_reduce_tensor(
         return tensors_clone
 
 
-def scatter_tensor(tensor: Tensor, device, dtype, word_size, master_rank: int = 0) -> Tensor:
+def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int = 0) -> Tensor:
     """
     Gathers tensor(1D, 2D, ...) of different lengths across multiple gpus in master rank
     Notice: the others dims(>0) must be the same.
@@ -100,11 +100,11 @@ def scatter_tensor(tensor: Tensor, device, dtype, word_size, master_rank: int = 
         return tensor
 
     # tensor in master rank, other rank is None
-    split_batch = torch.ones(word_size, device=device, dtype=torch.int64)
+    split_batch = torch.ones(world_size, device=device, dtype=torch.int64)
     other_dim = torch.zeros(1, device=device, dtype=torch.int64)
     if dist.get_rank() == master_rank:
-        k = (tensor.shape[0] - 1 + word_size) // word_size
-        res = tensor.shape[0] - k * (word_size - 1)
+        k = (tensor.shape[0] - 1 + world_size) // world_size
+        res = tensor.shape[0] - k * (world_size - 1)
         split_batch.mul_(k)
         split_batch[-1] = res
         other_dim[0] = tensor[0].dim()
@@ -166,13 +166,15 @@ def scatter_tensor(tensor: Tensor, device, dtype, word_size, master_rank: int = 
 def gather_tensor(
     tensor: Tensor,
     device,
-    word_size: int,
+    world_size: int,
     master_rank: int = 0,
 ) -> Union[List[Tensor], None]:
     """
     Gathers tensor(1D, 2D, ...) of different lengths across multiple gpus in master rank
     Notice: the others dims(>0) must be the same.
-    this the progress is similar to the "all_gather_tensor"
+    this the progress is similar to the "all_gather_tensor",
+    support complex-tensor(complex128, complex64)
+
     Parameters
     ----------
         tensor : Tensor
@@ -189,7 +191,8 @@ def gather_tensor(
         return [tensor]
 
     local_size = torch.tensor(tensor.size()[0], device=device)
-    all_size = [torch.zeros_like(local_size) for _ in range(word_size)]
+    is_complex: bool = tensor.is_complex()
+    all_size = [torch.zeros_like(local_size) for _ in range(world_size)]
     dist.all_gather(all_size, local_size)
     dist.barrier()
     max_batch = max(all_size)
@@ -201,23 +204,29 @@ def gather_tensor(
         tensor = torch.cat((tensor, padding))
 
     if dist.get_rank() == master_rank:
-        all_tensor_padded = [torch.zeros_like(tensor) for _ in range(word_size)]
+        # gather dose not support complex-tensor
+        if is_complex:
+            tensor = torch.view_as_real(tensor)
+        all_tensor_padded = [torch.zeros_like(tensor) for _ in range(world_size)]
         dist.gather(tensor, gather_list=all_tensor_padded, dst=master_rank)
     else:
-        all_tensor_padded = []
+        if is_complex:
+            tensor = torch.view_as_real(tensor)
+        all_tensor_padded = None
         dist.gather(tensor, gather_list=[], dst=master_rank)
 
     if dist.get_rank() == master_rank:
         all_tensor = []
         for tensor, size in zip(all_tensor_padded, all_size):
+            if is_complex:
+                tensor = torch.view_as_complex(tensor)
             all_tensor.append(tensor[:size])
     else:
         all_tensor = None
-
     return all_tensor
 
 
-def all_gather_tensor(tensor: Tensor, device, word_size: int) -> List[Tensor]:
+def all_gather_tensor(tensor: Tensor, device, world_size: int) -> List[Tensor]:
     """
     All_Gathers tensor(1D, 2D, ...) of different lengths across multiple gpus
     Notice: the others dims(>0) must be the same.
@@ -245,7 +254,7 @@ def all_gather_tensor(tensor: Tensor, device, word_size: int) -> List[Tensor]:
         return [tensor]
 
     local_batch = torch.tensor(tensor.size()[0], device=device)
-    all_batch = [torch.zeros_like(local_batch) for _ in range(word_size)]
+    all_batch = [torch.zeros_like(local_batch) for _ in range(world_size)]
     dist.all_gather(all_batch, local_batch)
     max_batch = max(all_batch)
     other_shape = tuple(torch.tensor(tensor[0].shape, device=device).to("cpu").tolist())
@@ -255,7 +264,7 @@ def all_gather_tensor(tensor: Tensor, device, word_size: int) -> List[Tensor]:
         padding = torch.zeros(size_diff, *other_shape, device=device, dtype=tensor.dtype)
         tensor = torch.cat((tensor, padding))
 
-    all_tensor_padded = [torch.zeros_like(tensor) for _ in range(word_size)]
+    all_tensor_padded = [torch.zeros_like(tensor) for _ in range(world_size)]
     dist.all_gather(all_tensor_padded, tensor)
     all_tensor = []
     for tensor, size in zip(all_tensor_padded, all_batch):

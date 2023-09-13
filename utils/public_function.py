@@ -6,7 +6,7 @@ import torch.distributed as dist
 import itertools
 import numpy as np
 from torch import Tensor
-from typing import List, Type, Tuple, Union
+from typing import List, Type, Tuple, Union, Literal
 from dataclasses import dataclass
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv
@@ -183,7 +183,7 @@ def get_fock_space(sorb: int, device=None) -> Tensor:
 
     return convert_onv(space, sorb=sorb, device=device)
 
-# FIXME: cuda version maybe errors
+
 def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     """
      find the common onv in the two different onstate
@@ -198,12 +198,12 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor, Tensor, T
     union, counts = torch.cat([state1, state2]).unique(dim=0, return_counts=True)
     common = union[torch.where(counts.gt(1))]
 
-    # torch.unique does not have 'return_inverse'
+    # torch.unique does not have 'return_index'
     union = torch.cat([state1, common])
-    _, idx1, _, counts = unique_idx(union, dim=0)
+    idx1, counts = unique_idx(union, dim=0)[2:]
     idx1 = idx1[torch.where(counts > 1)[0]]
     union = torch.cat([state2, common])
-    _, idx2, _, counts = unique_idx(union, dim=0)
+    idx2, counts = unique_idx(union, dim=0)[2:]
     idx2 = idx2[torch.where(counts > 1)[0]]
 
     # check indices
@@ -212,25 +212,24 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor, Tensor, T
     return common, idx1, idx2
 
 
-def unique_idx(x: Tensor, dim: int = 0) -> None:
+def unique_idx(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """
-    This is similar to np.unique
+    This is similar to np.unique, support 'return_index'
     ref:
         https://github.com/rusty1s/pytorch_unique
         https://github.com/pytorch/pytorch/issues/36748
-    
+        https://pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html#torch.Tensor.scatter_
     Returns
     -------
         unique, indices, inverse, counts
     """
     unique, inverse, counts = torch.unique(
-        x, sorted=True, return_inverse=True, dim=dim, return_counts=True
+        x, dim=dim, sorted=True, return_inverse=True, return_counts=True
     )
-    indices = torch.arange(inverse.size(0), dtype=inverse.dtype, device=inverse.device)
-    inverse, indices = inverse.flip([0]), indices.flip([0])
-    indices = inverse.new_empty(unique.size(0)).scatter_(0, inverse, indices)
-
-    return unique, indices, inverse, counts
+    inv_sorted = inverse.argsort(stable=True) # True is slower
+    tot_counts = torch.cat((counts.new_zeros(1), counts.cumsum(dim=0)))[:-1]
+    index = inv_sorted[tot_counts]
+    return unique, inverse, index, counts
 
 
 def check_spin_multiplicity(
@@ -328,7 +327,7 @@ class ElectronInfo:
         self._memory += (self.ci_space.numel()) / 2**30  # Uint8
 
     @property
-    def __name__(self):
+    def __name__(self) -> Literal["ElectronInfo"]:
         return "ElectronInfo"
 
     @property
@@ -398,8 +397,8 @@ class ElectronInfo:
 
     def __repr__(self) -> str:
         return (
-            f"{type(self).__name__}" + "(\n"
-            f"    h1e shape: {self.h1e.shape[0]}\n"
+            f"{type(self).__name__}(\n"
+            + f"    h1e shape: {self.h1e.shape[0]}\n"
             + f"    h2e shape: {self.h2e.shape[0]}\n"
             + f"    ci shape:{tuple(self.ci_space.shape)}\n"
             + f"    ecore: {self.ecore:.8f}\n"

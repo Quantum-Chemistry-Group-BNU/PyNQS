@@ -31,8 +31,6 @@ from utils.distributed import gather_tensor, scatter_tensor, get_rank, get_world
 
 print = partial(print, flush=True)
 
-# @profile(precision=4, stream=open('MCMC_memory_profiler.log','w+'))
-
 
 class Sampler:
     """
@@ -66,10 +64,15 @@ class Sampler:
 
         # setup random seed
         self.rank = get_rank()
-        self.word_size = get_world_size()
+        self.world_size = get_world_size()
         # self.seed = 22022
         # setup_seed(self.seed)
-        self.seed = diff_rank_seed(seed, rank=self.rank)
+        if not debug_exact:
+            # if sampling, very rank have the different random seed
+            self.seed = diff_rank_seed(seed, rank=self.rank)
+        else:
+            # exact optimization does not require sampling
+            self.seed = seed
         logger.info((self.seed, self.rank))
 
         self.ele_info = ele_info
@@ -146,16 +149,18 @@ class Sampler:
         t0 = time.time_ns()
         check_para(initial_state)
         if self.debug_exact:
-            dim = len(self.ci_space)
-            e_total, eloc, stats_dict = self.calculate_energy(self.ci_space)
+            # if self.world_size >= 2:
+            #     raise NotImplementedError(f"Exact optimization distributed is not implemented")
+            ci_space_rank = scatter_tensor(self.ci_space, self.device, torch.uint8, self.world_size)
+            synchronize()
+            e_total, eloc, stats_dict = self.calculate_energy(ci_space_rank)
 
             # placeholders only
+            dim = ci_space_rank.shape[0]
             sample_prob = torch.empty(dim, dtype=torch.float64, device=self.device)
-            return self.ci_space.detach(), sample_prob, eloc, e_total, stats_dict
+            return ci_space_rank.detach(), sample_prob, eloc, e_total, stats_dict
 
         sample_unique, sample_counts, sample_prob = self.sampling(initial_state, n_sweep)
-        delta = time.time_ns() - t0
-        logger.debug(f"Completed {self.method_sample} Sampling: {delta/1.0E09:.3E} s")
         if self.method_sample == "MCMC":
             logger.debug(f"rank: {self.rank}  Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
@@ -163,7 +168,7 @@ class Sampler:
             sample_unique, state_prob=sample_prob, state_counts=sample_counts
         )
         # print local energy statistics information
-        self._statistics(stats_dict, sample_counts)
+        self._statistics(stats_dict)
 
         if self.record_sample and self.rank == 0:
             # TODO: if given sorb(not full space), this is error.
@@ -289,6 +294,7 @@ class Sampler:
         """
         Auto regressive sampling
         """
+        t0 = time.time_ns()
         while True:
             sample = self.nqs.module.ar_sampling(self.n_sample)  # (n_sample, sorb) 0/1
 
@@ -307,63 +313,88 @@ class Sampler:
                     # continue AR sampling, increase samples
                     self.n_sample = int(min(self.max_n_sample, self.n_sample * 10))
                     continue
+        delta = (time.time_ns() - t0) / 1.0e09
+
+        s = f"Completed {self.method_sample} Sampling: {delta:.3E} s, "
+        s += f"unique sample: {sample_counts.sum().item()} -> {sample_counts.size(0)}"
+        logger.info(s)
+
+        del sample
         if True:
-            t0 = time.time_ns()
-            # Gather unique, counts
-            unique_all = gather_tensor(sample_unique, self.device, self.word_size, master_rank=0)
-            count_all = gather_tensor(sample_counts, self.device, self.word_size, master_rank=0)
-            # sample_all = gather_tensor(sample, self.device, self.word_size, master_rank=0)
-            synchronize()
-            t1 = time.time_ns()
-            if self.rank == 0:
-                split_idx = torch.tensor(
-                    [0] + [i.shape[0] for i in unique_all], dtype=torch.int64
-                ).cumsum(dim=0)
-                unique_all = torch.cat(unique_all)
-                merge_unique, merge_idx = torch.unique(unique_all, dim=0, return_inverse=True)
-                count_all = torch.cat(count_all)
-                # nbatch = unique_all.shape[0]
-                # merge_counts = torch.zeros(merge_unique.shape[0], dtype=torch.int64, device=self.device)
-
-                # merge prob
-                length = merge_unique.shape[0]
-                merge_counts = merge_rank_sample(merge_idx, count_all, split_idx, length)
-                # for i in range(nbatch):
-                #     merge_counts[merge_idx[i]] += count_all[i]
-                merge_prob = merge_counts / merge_counts.sum()
-                # _, counts_test = torch.unique(torch.cat(sample_all), dim=0, return_counts=True)
-                # assert(torch.allclose(counts_test, merge_counts))
-            else:
-                merge_counts = None
-                merge_unique = None
-                merge_prob = None
-
-            t2 = time.time_ns()
-            # Scatter unique, counts
-            unique_rank = scatter_tensor(merge_unique, self.device, torch.int64, self.word_size)
-            counts_rank = scatter_tensor(merge_counts, self.device, torch.int64, self.word_size)
-            prob_rank = scatter_tensor(merge_prob, self.device, torch.double, self.word_size)
-            synchronize()
-            t3 = time.time_ns()
-
-            if self.rank == 0:
-                delta1 = (t1 - t0) / 1.0e09
-                delta2 = (t3 - t2) / 1.0e09
-                delta3 = (t2 - t1) / 1.0e09
-                logger.debug(
-                    f"Sample-Comm, Gather: {delta1:.3E} s, Scatter: {delta2:.3E} s, merge: {delta3:.3E} s",
-                    master=True,
-                )
-            unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
-
-            return unique_rank, counts_rank, prob_rank * self.word_size
-
+            # Sample-comm, gather->merge->scatter
+            return self.gather_scatter_sample(sample_unique, sample_counts)
         sample_prob = sample_counts / sample_counts.sum()
         # convert to onv
         sample_unique = tensor_to_onv(sample_unique.to(torch.uint8), self.sorb)
 
-        del sample
         return sample_unique, sample_counts, sample_prob
+
+    def gather_scatter_sample(
+        self, unique: Tensor, counts: Tensor
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        """
+        1. Gather sample-unique/counts from very rank
+        2. Merge all unique/counts in master-rank(rank0)
+        3. Scatter unique/counts/prob to very rank
+
+        Notice Scatter prob = prob * world-size
+
+        Returns
+        -------
+            unique_rank: Tensor
+            counts_rank: Tensor
+            prob_rank: Tensor, prob_rank = prob * world_size
+        """
+        t0 = time.time_ns()
+        # Gather unique, counts
+        unique_all = gather_tensor(unique, self.device, self.world_size, master_rank=0)
+        count_all = gather_tensor(counts, self.device, self.world_size, master_rank=0)
+        # sample_all = gather_tensor(sample, self.device, self.word_size, master_rank=0)
+        synchronize()
+        t1 = time.time_ns()
+        if self.rank == 0:
+            split_idx = [0] + [i.shape[0] for i in unique_all]
+            split_idx = torch.tensor(split_idx, dtype=torch.int64).cumsum(dim=0)
+            unique_all = torch.cat(unique_all)
+            merge_unique, merge_idx = torch.unique(unique_all, dim=0, return_inverse=True)
+            count_all = torch.cat(count_all)
+            # nbatch = unique_all.shape[0]
+            # merge_counts = torch.zeros(merge_unique.shape[0], dtype=torch.int64, device=self.device)
+
+            # merge prob
+            length = merge_unique.shape[0]
+            merge_counts = merge_rank_sample(merge_idx, count_all, split_idx, length)
+            # for i in range(nbatch):
+            #     merge_counts[merge_idx[i]] += count_all[i]
+            merge_prob = merge_counts / merge_counts.sum()
+            # _, counts_test = torch.unique(torch.cat(sample_all), dim=0, return_counts=True)
+            # assert(torch.allclose(counts_test, merge_counts))
+        else:
+            merge_counts = None
+            merge_unique = None
+            merge_prob = None
+
+        t2 = time.time_ns()
+        # Scatter unique, counts
+        unique_rank = scatter_tensor(merge_unique, self.device, torch.int64, self.world_size)
+        counts_rank = scatter_tensor(merge_counts, self.device, torch.int64, self.world_size)
+        prob_rank = scatter_tensor(merge_prob, self.device, torch.double, self.world_size)
+        synchronize()
+        t3 = time.time_ns()
+
+        if self.rank == 0:
+            delta1 = (t1 - t0) / 1.0e09
+            delta2 = (t3 - t2) / 1.0e09
+            delta3 = (t2 - t1) / 1.0e09
+            logger.info(
+                f"Sample-Comm, Gather: {delta1:.3E} s, Scatter: {delta2:.3E} s, merge: {delta3:.3E} s",
+                master=True,
+            )
+        # convert to onv
+        unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
+
+        del merge_unique, merge_counts, merge_prob, unique_all, count_all
+        return unique_rank, counts_rank, prob_rank * self.world_size
 
     # TODO: how to calculate batch_size;
     # calculate the max nbatch for given Max Memory
@@ -398,11 +429,13 @@ class Sampler:
 
     def __repr__(self) -> str:
         return (
-            f"{type(self).__name__}:" + " (\n"
-            f"    the number of sample: {self.n_sample}\n"
+            f"{type(self).__name__}:"
+            + " (\n"
+            + f"    Sample method: {self.method_sample}\n"
+            + f"    the number of sample: {self.n_sample}\n"
             + f"    Therm step: {self.therm_step}\n"
             + f"    Exact sampling: {self.debug_exact}\n"
-            f"    Given CI: {self.ci_space.size(0):.3E}\n"
+            + f"    Given CI: {self.ci_space.size(0):.3E}\n"
             + f"    FCI space: {self.fci_size:.3E}\n"
             + f"    Record the sample: {self.record_sample}\n"
             + f"    Singles + Doubles: {self.n_SinglesDoubles}\n"
@@ -412,7 +445,6 @@ class Sampler:
             + ")"
         )
 
-    def _statistics(self, data: dict, sample_counts: Tensor):
-        s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}], "
-        s += f"unique sample: {sample_counts.sum().item()} -> {len(sample_counts)}"
+    def _statistics(self, data: dict):
+        s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}]"
         logger.debug(s)

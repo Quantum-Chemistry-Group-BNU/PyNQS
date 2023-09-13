@@ -26,7 +26,15 @@ from vmc.sample import Sampler
 from vmc.energy import total_energy
 from vmc.grad import energy_grad, sr_grad
 from ci import CITrain, CIWavefunction
-from utils.distributed import all_reduce_tensor, synchronize, get_rank, get_world_size, all_gather_tensor, scatter_tensor, gather_tensor
+from utils.distributed import (
+    all_reduce_tensor,
+    synchronize,
+    get_rank,
+    get_world_size,
+    all_gather_tensor,
+    scatter_tensor,
+    gather_tensor,
+)
 
 from utils import ElectronInfo, Dtype, state_to_string
 from libs.C_extension import onv_to_tensor
@@ -203,7 +211,7 @@ class VMCOptimizer:
             # All_Reduce mean local energy
             eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
             logger.debug(f"eloc-mean: {eloc_mean.real:.5f}{eloc_mean.imag:+.5f}j")
-            all_reduce_tensor(eloc_mean, word_size=self.word_size)
+            all_reduce_tensor(eloc_mean, world_size=self.word_size)
             synchronize()
 
             e_total = eloc_mean.item().real + self.ecore
@@ -264,7 +272,7 @@ class VMCOptimizer:
                 self.opt.zero_grad()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
-            
+
             if epoch == 20:
                 if self.rank == 0:
                     for i, param in enumerate(self.model.parameters()):
@@ -474,4 +482,3 @@ def _gd_update(params: List[Tensor], grads: List[Tensor], lr: float, weight_deca
         if weight_decay != 0:
             dp = dp.add(param, alpha=weight_decay)
         param.data.add_(dp, alpha=-lr)
-
