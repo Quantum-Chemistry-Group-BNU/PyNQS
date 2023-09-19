@@ -145,7 +145,7 @@ class Sampler:
     # @profile(precision=4, stream=open('MCMC_memory_profiler.log','w+'))
     def run(
         self, initial_state: Tensor, n_sweep: int = None
-    ) -> Tuple[Tensor, Tensor, Tensor, complex, dict]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Union[complex, float], dict]:
         t0 = time.time_ns()
         check_para(initial_state)
         if self.debug_exact:
@@ -153,18 +153,18 @@ class Sampler:
             #     raise NotImplementedError(f"Exact optimization distributed is not implemented")
             ci_space_rank = scatter_tensor(self.ci_space, self.device, torch.uint8, self.world_size)
             synchronize()
-            e_total, eloc, stats_dict = self.calculate_energy(ci_space_rank)
+            e_total, eloc, sample_prob, stats_dict = self.calculate_energy(ci_space_rank)
 
             # placeholders only
             dim = ci_space_rank.shape[0]
-            sample_prob = torch.empty(dim, dtype=torch.float64, device=self.device)
             return ci_space_rank.detach(), sample_prob, eloc, e_total, stats_dict
 
+        # AR or MCMC sampling
         sample_unique, sample_counts, sample_prob = self.sampling(initial_state, n_sweep)
         if self.method_sample == "MCMC":
-            logger.debug(f"rank: {self.rank}  Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
+            logger.debug(f"rank: {self.rank} Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
-        e_total, eloc, stats_dict = self.calculate_energy(
+        e_total, eloc, _, stats_dict = self.calculate_energy(
             sample_unique, state_prob=sample_prob, state_counts=sample_counts
         )
         # print local energy statistics information
@@ -189,10 +189,12 @@ class Sampler:
 
         if self.is_cuda:
             torch.cuda.empty_cache()
-
         return sample_unique.detach(), sample_prob, eloc, e_total, stats_dict
 
     def sampling(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, Tensor]:
+        """
+        prob is not real prob, prob = prob * world-size
+        """
         if self.method_sample == "MCMC":
             sample_unique, sample_counts, sample_prob = self.MCMC(initial_state, n_sweep)
         elif self.method_sample == "AR":
@@ -201,6 +203,7 @@ class Sampler:
         return sample_unique, sample_counts, sample_prob
 
     def MCMC(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, Tensor]:
+        # TODO: distributed not been implemented
         # prepare sample and this only apply for MCMC sampling
         self.state_sample: Tensor = torch.empty_like(initial_state).repeat(self.n_sample, 1)
         self.current_state: Tensor = initial_state.clone()
@@ -277,16 +280,10 @@ class Sampler:
             self.nqs = self.nqs.to(self.device)
 
         # remove duplicate state
-        # torch.unique could not return unique indices in old tensor
+        # torch.unique could not return unique indices in old tensor,
+        # see: the utils/public_function.py 'unique_idx' function
         sample_unique, sample_counts = torch.unique(self.state_sample, dim=0, return_counts=True)
         sample_prob = sample_counts / sample_counts.sum()
-
-        # Numpy version:
-        # sample_unique, psi_idx, sample_counts = np.unique(
-        #   self.state_sample.numpy(), axis=0, return_counts=True, return_index=True)
-        # psi_unique = self.psi_sample[torch.from_numpy(psi_idx)]
-        # sample_unique = torch.from_numpy(sample_unique)
-        # sample_counts = torch.from_numpy(sample_counts)
 
         return sample_unique, sample_counts, sample_prob
 
@@ -386,10 +383,9 @@ class Sampler:
             delta1 = (t1 - t0) / 1.0e09
             delta2 = (t3 - t2) / 1.0e09
             delta3 = (t2 - t1) / 1.0e09
-            logger.info(
-                f"Sample-Comm, Gather: {delta1:.3E} s, Scatter: {delta2:.3E} s, merge: {delta3:.3E} s",
-                master=True,
-            )
+            s = f"Sample-Comm, Gather: {delta1:.3E} s, Scatter: {delta2:.3E} s, merge: {delta3:.3E} s\n"
+            s += f"All-Rank unique sample: {merge_unique.size(0)}"
+            logger.info(s, master=True)
         # convert to onv
         unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
 
@@ -400,7 +396,15 @@ class Sampler:
     # calculate the max nbatch for given Max Memory
     def calculate_energy(
         self, sample: Tensor, state_prob: Tensor = None, state_counts: Tensor = None
-    ) -> Tuple[Union[complex, float], Tensor, dict]:
+    ) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
+        r"""
+        Returns:
+        -------
+            e_total(complex|float): total energy(a.u.)
+            eloc(Tensor): local energy
+            placeholders(Tensor): state prob if exact optimization, else zeros tensor
+            stats_dict(dict): statistical information about sampling.
+        """
         nbatch = get_nbatch(
             self.sorb,
             len(sample),
@@ -409,7 +413,7 @@ class Sampler:
             self.alpha,
             device=self.device,
         )
-        e_total, eloc, stats_dict = total_energy(
+        e_total, eloc, placeholders, stats_dict = total_energy(
             sample,
             nbatch,
             h1e=self.h1e,
@@ -425,7 +429,7 @@ class Sampler:
             exact=self.debug_exact,
             dtype=self.dtype,
         )
-        return e_total, eloc, stats_dict
+        return e_total, eloc, placeholders, stats_dict
 
     def __repr__(self) -> str:
         return (

@@ -25,7 +25,17 @@ def total_energy(
     state_counts: Tensor = None,
     exact: bool = False,
     dtype=torch.double,
-) -> Tuple[Union[complex, float], Tensor, dict]:
+) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
+    r"""
+    
+    Return
+    ------
+        e_total: Total energy
+        eloc_lst: local energy
+        state_prob: if exact: the state-prob would be calculated again, 
+                    else zeros-tensor.
+        statistics: ... 
+    """
     dim: int = x.shape[0]
     device = x.device
     eloc_lst = torch.zeros(dim, device=device).to(dtype)
@@ -53,12 +63,14 @@ def total_energy(
         raise ValueError(f"The Local energy exists nan")
 
     if exact:
+        t_exact0 = time.time_ns()
         world_size = get_world_size()
         rank = get_rank()
         # gather psi_lst from all rank
         psi_lst_all = gather_tensor(psi_lst, device, world_size, master_rank=0)
         eloc_lst_all = gather_tensor(eloc_lst, device, world_size, master_rank=0)
         synchronize()
+        t_exact1 = time.time_ns()
         if rank == 0:
             psi_lst_all = torch.cat(psi_lst_all)
             eloc_lst_all = torch.cat(eloc_lst_all)
@@ -67,9 +79,22 @@ def total_energy(
         else:
             state_prob_all = None
         # Scatter state_prob to very rank
+        t_exact2 = time.time_ns()
         state_prob = scatter_tensor(state_prob_all, device, dtype, world_size, master_rank=0)
         state_prob *= world_size
         synchronize()
+        t_exact3 = time.time_ns()
+
+        # logger
+        if rank == 0:
+            delta_all = (t_exact3 - t_exact0) / 1.0e09
+            delta_gather = (t_exact1 - t_exact0) / 1.0e09
+            delta_scatter = (t_exact3 - t_exact2) / 1.0e09
+            delta_cal = (t_exact2 - t_exact1) / 1.0e09
+            s = f"Exact-prob: T: {delta_all:.3E} s, Calculate: {delta_cal:.3E} s, "
+            s += f"Gather: {delta_gather:.3E} s, Scatter: {delta_scatter:.3E} s"
+            logger.info(s, master=True)
+
         # assure length is true.
         assert state_prob.shape[0] == dim
         del psi_lst_all, state_prob_all
@@ -102,4 +127,8 @@ def total_energy(
         + f"Detail time: {delta0:.3E} ms {delta1:.3E} ms {delta2:.3E} ms"
     )
     del psi_lst, idx_lst
-    return e_total.item(), eloc_lst, statistics
+    if exact:
+        return e_total.item(), eloc_lst, state_prob, statistics
+    else:
+        placeholders = torch.zeros(1, device=device, dtype=dtype)
+        return e_total.item(), placeholders, eloc_lst, statistics

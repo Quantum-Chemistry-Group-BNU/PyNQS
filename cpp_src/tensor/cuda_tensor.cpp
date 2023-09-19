@@ -23,6 +23,10 @@ Tensor tensor_to_onv_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
                      .layout(bra_tensor.layout())
                      .device(bra_tensor.device())
                      .requires_grad(false);
+  // bra_tensor is empty
+  if (bra_tensor.numel() == 0) {
+    return torch::empty({0, bra_len * 8}, options);
+  }
   Tensor states = torch::zeros({nbatch, bra_len * 8}, options = options);
   const uint8_t *bra_ptr = bra_tensor.data_ptr<uint8_t>();
   uint8_t *states_ptr = states.data_ptr<uint8_t>();
@@ -40,6 +44,10 @@ Tensor onv_to_tensor_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
                      .layout(bra_tensor.layout())
                      .device(bra_tensor.device())
                      .requires_grad(false);
+  // bra_tensor is empty
+  if (bra_tensor.numel() == 0) {
+    return torch::empty({0, sorb}, options);
+  }
   comb_bit = torch::empty({nbatch, sorb}, options);
 
   const unsigned long *bra_ptr =
@@ -66,6 +74,11 @@ Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
     flag_eloc = false;
     // bra: (n, tensor_len), ket: (m, tensor_len), construct Hij matrix
     n = bra_tensor.size(0), m = ket_tensor.size(0);
+  }
+  
+  // bra or ket is empty
+  if (bra_tensor.numel() == 0 || bra_tensor.numel() == 0) {
+    return torch::empty({n, m}, h1e_tensor.options());
   }
   // torch::empty is faster than 'torch::zeros'
   Tensor Hmat = torch::empty({n, m}, h1e_tensor.options());
@@ -114,6 +127,18 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
   const int nbatch = bra_tensor.size(0);
   Tensor comb, comb_bit;
 
+  // bra is empty
+  if (bra_tensor.numel() == 0) {
+    auto device = bra_tensor.device();
+    comb = torch::empty(
+        {0, ncomb, bra_len * 8},
+        torch::TensorOptions().dtype(torch::kUInt8).device(device));
+    comb_bit = torch::empty(
+        {0, ncomb, sorb},
+        torch::TensorOptions().dtype(torch::kDouble).device(device));
+    return std::make_tuple(comb, comb_bit);
+  }
+
   // comb: (nbatch, ncomb, bra_len * 8)
   comb = bra_tensor.unsqueeze(1).repeat({1, ncomb, 1});
   if (flag_bit) {
@@ -157,13 +182,13 @@ tuple_tensor_2d mps_vbatch_tensor(const Tensor &mps_data,
   const int64_t n = data_len / batch + 1;
   int64_t start = 0;
   int64_t end = 0;
-  Tensor index_tensor = data_info[0]; //(nphysical, nbatch)
-  Tensor dr_tensor = data_info[1]; //(nphysical, nbatch)
-  Tensor dc_tensor = data_info[2]; //(nphysical, nbatch)
+  Tensor index_tensor = data_info[0];  //(nphysical, nbatch)
+  Tensor dr_tensor = data_info[1];     //(nphysical, nbatch)
+  Tensor dc_tensor = data_info[2];     //(nphysical, nbatch)
   auto flops_batch = std::vector<double>(n * nphysical, 0);
   for (int i = 0; i < n; i++) {
     end = std::min(start + batch, data_len);
-    if(start == end) break; // slice may be is empty tensor
+    if (start == end) break;  // slice may be is empty tensor
     batch = std::min(batch, end - start);
     auto flops = dgemv_vbatch_tensor(
         mps_data, index_tensor.slice(1, start, end),
@@ -194,7 +219,7 @@ Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
       torch::arange(sorb, options).unsqueeze(0).repeat({nbatch, 1});
 
   int64_t *index_ptr = index_tensor.data_ptr<int64_t>();  // tmp index
-  Tensor sgn_tensor = torch::empty(nbatch, options);  // Int64
+  Tensor sgn_tensor = torch::empty(nbatch, options);      // Int64
   int64_t *sgn_ptr = sgn_tensor.data_ptr<int64_t>();
 
   const int64_t *image2_ptr =
@@ -206,11 +231,11 @@ Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
   return sgn_tensor.to(torch::kDouble);
 }
 
-tuple_tensor_2d nbatch_convert_sites_cuda(Tensor &onstate, const int nphysical,
-                         const Tensor &data_index, const Tensor &qrow_qcol,
-                         const Tensor &qrow_qcol_index,
-                         const Tensor &qrow_qcol_shape, const Tensor &ista,
-                         const Tensor &ista_index, const Tensor image2){
+tuple_tensor_2d nbatch_convert_sites_cuda(
+    Tensor &onstate, const int nphysical, const Tensor &data_index,
+    const Tensor &qrow_qcol, const Tensor &qrow_qcol_index,
+    const Tensor &qrow_qcol_shape, const Tensor &ista, const Tensor &ista_index,
+    const Tensor image2) {
   auto options = torch::TensorOptions()
                      .dtype(torch::kInt64)
                      .layout(onstate.layout())
@@ -244,10 +269,10 @@ tuple_tensor_2d nbatch_convert_sites_cuda(Tensor &onstate, const int nphysical,
   const int64_t *ista_ptr = ista.data_ptr<int64_t>();
   const int64_t *ista_index_ptr = ista_index.data_ptr<int64_t>();
 
-  convert_sites_cuda(onstate_ptr, nphysical, data_index_ptr,
-                     qrow_qcol_ptr, qrow_qcol_index_ptr,
-                     qrow_qcol_shape_ptr, ista_ptr, ista_index_ptr, image2_ptr,
-                     nbatch, data_info_ptr, sym_break_ptr);
+  convert_sites_cuda(onstate_ptr, nphysical, data_index_ptr, qrow_qcol_ptr,
+                     qrow_qcol_index_ptr, qrow_qcol_shape_ptr, ista_ptr,
+                     ista_index_ptr, image2_ptr, nbatch, data_info_ptr,
+                     sym_break_ptr);
   // torch::cuda::synchronize();
   return std::make_tuple(data_info, sym_break);
 }

@@ -33,48 +33,54 @@ print = partial(print, flush=True)
 if __name__ == "__main__":
     # dist.init_process_group("nccl")
     dist.init_process_group("gloo")
-    device = "cpu"
-    local_rank = int(os.environ["LOCAL_RANK"])
+    device = "cuda"
+    # local_rank = int(os.environ["LOCAL_RANK"])
+    local_rank = 0
     # seed = int(time.time_ns() % 2**31)
     seed = 2022
     setup_seed(seed)
-    if device == "cuda":
-        torch.cuda.set_device(local_rank)
+    # if device == "cuda":
+    #     torch.cuda.set_device(local_rank)
     logger.remove()
     logger.add(dist_print, format="{message}", enqueue=True, level="DEBUG")
     # electronic structure information
     # if dist.get_rank() == 0:
     #     atom: str = ""
     #     bond = 1.60
-    #     for k in range(6):
+    #     for k in range(4):
     #         atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
     #     integral_file = tempfile.mkstemp()[1]
-    #     integral_file = "./dev-test/H6-1.60-fmole.info"
-    #     sorb, nele, e_lst, fci_amp = integral_pyscf(
-    #         atom, integral_file=integral_file, cisd_coeff=False, fci_coeff=True
+    #     integral_file = "./dev-test/H10-2.00-fmole.info"
+    #     sorb, nele, e_lst, fci_amp, ucisd_amp = integral_pyscf(
+    #         atom, integral_file=integral_file, cisd_coeff=True, fci_coeff=True
     #     )
     #     logger.info(e_lst)
-    # h1e, h2e, ci_space, ecore, sorb = read_integral(
-    #     integral_file,
-    #     nele,
-    #     # save_onstate=True,
-    #     # external_onstate="profiler/H12-1.50",
-    #     # given_sorb= (sorb + 2),
-    #     device=device,
-    #     # prefix="test-onstate",
-    # )
-    # torch.save({
-    #  "h1e": h1e,
-    #  "h2e": h2e,
-    #  "sorb": sorb,
-    #  "nob": nele//2,
-    #  "noa": nele - nele//2,
-    #  "ci_space": ci_space,
-    #  "ecore": ecore,
-    #  "nele": nele,
-    #  "e_lst": e_lst,
-    #  }, "H10-1.60.pth")
-    
+
+    #     h1e, h2e, ci_space, ecore, sorb = read_integral(
+    #         integral_file,
+    #         nele,
+    #         # save_onstate=True,
+    #         # external_onstate="profiler/H12-1.50",
+    #         # given_sorb= (sorb + 2),
+    #         device=device,
+    #         # prefix="test-onstate",
+    #     )
+    #     torch.save(
+    #         {
+    #             "h1e": h1e,
+    #             "h2e": h2e,
+    #             "sorb": sorb,
+    #             "nob": nele // 2,
+    #             "noa": nele - nele // 2,
+    #             "ci_space": ci_space,
+    #             "ecore": ecore,
+    #             "nele": nele,
+    #             "e_lst": e_lst,
+    #             "ucisd_amp": ucisd_amp,
+    #             "fci_amp": fci_amp,
+    #         },
+    #         "H4-1.60.pth",
+    #     )
     e = torch.load("H6-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
@@ -95,13 +101,21 @@ if __name__ == "__main__":
         "noa": noa,
         "nva": (sorb - nele) // 2,
     }
+    e_lst = e["e_lst"]
+    print(e_lst)
     electron_info = ElectronInfo(info_dict, device=device)
+
+    # pre-train wavefunction, fci_wf and ucisd_wf
+    ucisd_wf = unpack_ucisd(e["ucisd_amp"], sorb, nele, device=device)
+    fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
+    pre_train_info = {"pre_max_iter": 400, "interval": 20, "loss_type": "sample"}
+
     # objects = [electron_info]
-    sorb = 12
-    nele = 6
-    ansatz = RNNWavefunction(
-        sorb, nele, num_hiddens=8, num_labels=2, rnn_type="complex", num_layers=1, device=device
+    rnn = RNNWavefunction(
+        sorb, nele, num_hiddens=12, num_labels=2, rnn_type="complex", num_layers=1, device=device
     ).to(device=device)
+    rbm = RBMWavefunction(sorb, alpha=4, device=device, rbm_type="cos")
+    ansatz = rnn
     if device == "cuda":
         model = DDP(ansatz, device_ids=[local_rank], output_device=local_rank)
     else:
@@ -115,7 +129,7 @@ if __name__ == "__main__":
     # torch.save({"model": model.state_dict(), "h1e": h1e, "h2e": h2e}, "test.pth")
     sampler_param = {
         "n_sample": 30000,
-        "debug_exact": False,
+        "debug_exact": True,
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -126,11 +140,11 @@ if __name__ == "__main__":
     opt_type = optim.Adam
     # opt_params = {"lr": 0.005, "weight_decay": 0.001, "betas": (0.9, 0.99)}
     opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
-    lr_scheduler = optim.lr_scheduler.MultiStepLR
-    lr_sch_params = {"milestones": [3000, 4500, 5500], "gamma": 0.20}
-    # lr_scheduler = optim.lr_scheduler.LambdaLR
-    # lambda1 = lambda step: 0.005 * (1 + step / 5000) ** -1
-    # lr_sch_params = {"lr_lambda": lambda1}
+    # lr_scheduler = optim.lr_scheduler.MultiStepLR
+    # lr_sch_params = {"milestones": [3000, 4500, 5500], "gamma": 0.20}
+    lr_scheduler = optim.lr_scheduler.LambdaLR
+    lambda1 = lambda step: (1 + step / 5000) ** -1
+    lr_sch_params = {"lr_lambda": lambda1}
     dtype = Dtype(dtype=torch.complex128, device=device)
     # dtype = Dtype(dtype=torch.double, device=device)
 
@@ -146,19 +160,19 @@ if __name__ == "__main__":
         sampler_param=sampler_param,
         only_sample=False,
         electron_info=electron_info,
-        max_iter=100,
+        max_iter=3000,
         interval=10,
         HF_init=0,
         sr=False,
-        pre_CI=None,
-        pre_train_info=None,
+        pre_CI=ucisd_wf,
+        pre_train_info=pre_train_info,
         method_grad="AD",
         method_jacobian="vector",
-        prefix = "VMC"
+        prefix="VMC",
     )
-    # opt_vmc.pre_train(output)
+    opt_vmc.pre_train()
+    exit()
     opt_vmc.run()
-    e_lst = [-2.9526683640, -2.66498307507291]
     e_ref = e_lst[0]
     opt_vmc.summary(e_ref, e_lst)
     # psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))

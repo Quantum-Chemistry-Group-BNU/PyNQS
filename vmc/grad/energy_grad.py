@@ -98,9 +98,9 @@ def _analytical_grad(
     # for param in nqs.parameters():
     #     param.grad = torch.zeros_like(param)
 
-    with torch.no_grad():
-        if exact:
-            state_prob = psi * psi.conj() / psi.norm() ** 2
+    # with torch.no_grad():
+    #     if exact:
+    #         state_prob = psi * psi.conj() / psi.norm() ** 2
     state_prob = state_prob.real.to(dtype)
     eloc = eloc.to(dtype)
 
@@ -136,26 +136,26 @@ def _ad_grad(
      O* = dPsi(x)/psi(x)
     """
     psi = nqs(states.requires_grad_()).to(dtype)
-    with torch.no_grad():
-        if exact:
-            # XXX: This is pretty redundance, this is the same eloc calculation
-            world_size = get_world_size()
-            device = states.device
-            # gather psi from all rank
-            psi_all = gather_tensor(psi, device, world_size, master_rank=0)
-            synchronize()
-            if get_rank() == 0:
-                psi_all = torch.cat(psi_all)
-                state_prob_all = psi_all * psi_all.conj() / psi_all.norm() ** 2
-            else:
-                state_prob_all = None
-            # Scatter state_prob to very rank
-            state_prob = scatter_tensor(state_prob_all, device, dtype, world_size, master_rank=0)
-            state_prob *= world_size
-            synchronize()
-            # assure the length of state_prob == dim
-            assert state_prob.shape[0] == psi.shape[0]
-            del psi_all, state_prob_all
+    # with torch.no_grad():
+    #     # This is pretty redundance, this is the same eloc calculation
+    #     if exact:
+    #         world_size = get_world_size()
+    #         device = states.device
+    #         # gather psi from all rank
+    #         psi_all = gather_tensor(psi, device, world_size, master_rank=0)
+    #         synchronize()
+    #         if get_rank() == 0:
+    #             psi_all = torch.cat(psi_all)
+    #             state_prob_all = psi_all * psi_all.conj() / psi_all.norm() ** 2
+    #         else:
+    #             state_prob_all = None
+    #         # Scatter state_prob to very rank
+    #         state_prob = scatter_tensor(state_prob_all, device, dtype, world_size, master_rank=0)
+    #         state_prob *= world_size
+    #         synchronize()
+    #         # assure the length of state_prob == dim
+    #         assert state_prob.shape[0] == psi.shape[0]
+    #         del psi_all, state_prob_all
 
     state_prob = state_prob.real.to(dtype)
     eloc = eloc.to(dtype)
@@ -168,14 +168,14 @@ def _ad_grad(
     # loss2 = torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("i, i ->", log_psi.conj(), state_prob)
     loss2 = eloc_mean * torch.einsum("i, i ->", log_psi.conj(), state_prob)
     loss = 2 * (loss1 - loss2).real
+    logger.debug(f"loss: {loss:.4E}")
 
     reduce_loss = all_reduce_tensor(loss, world_size=get_world_size(), in_place=False)
     synchronize()
     if get_rank() == 0:
-        logger.debug(f"Reduce-loss: {reduce_loss[0].item():.4f}", master=True)
+        logger.debug(f"Reduce-loss: {reduce_loss[0].item():.4E}", master=True)
 
     loss.backward()
-    logger.debug(f"loss: {loss:.4f}")
     return psi.detach()
 
 

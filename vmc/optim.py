@@ -28,14 +28,10 @@ from vmc.grad import energy_grad, sr_grad
 from ci import CITrain, CIWavefunction
 from utils.distributed import (
     all_reduce_tensor,
-    synchronize,
     get_rank,
     get_world_size,
-    all_gather_tensor,
-    scatter_tensor,
-    gather_tensor,
+    synchronize,
 )
-
 from utils import ElectronInfo, Dtype, state_to_string
 from libs.C_extension import onv_to_tensor
 
@@ -122,15 +118,13 @@ class VMCOptimizer:
 
         self.dump_input()
         if self.rank == 0:
+            params_num = sum(map(torch.numel, self.model.parameters()))
             s = f"NQS model:\n{self.model}\n"
-            s += (
-                f"The number param of NQS model: {sum(map(torch.numel, self.model.parameters()))}\n"
-            )
+            s += f"The number param of NQS model: {params_num}\n"
             s += f"Optimizer:\n{self.opt}\n"
             s += f"Sampler:\n{self.sampler}\n"
             s += f"Grad method: {self.method_grad}\n"
-            if self.sr:
-                s += f"Jacobian method: {self.method_jacobian}"
+            s += f"Jacobian method: {self.method_jacobian}"
             logger.info(s, master=True)
 
         # pre-train CI wavefunction
@@ -205,9 +199,7 @@ class VMCOptimizer:
             # lp.print_stats()
             # exit()
 
-            # TODO: e_total: mean
             state, state_prob, eloc, e_total, stats = self.sampler.run(initial_state)
-
             # All_Reduce mean local energy
             eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
             logger.debug(f"eloc-mean: {eloc_mean.real:.5f}{eloc_mean.imag:+.5f}j")
@@ -257,6 +249,8 @@ class VMCOptimizer:
                 )
             delta_grad = (time.time_ns() - t1) / 1.00e09
 
+            # logger.info(f"lr: {self.opt.state_dict()['param_groups'][0]['lr']}")
+
             # save the energy grad
             if self.rank == 0:
                 for i, param in enumerate(self.model.parameters()):
@@ -273,12 +267,6 @@ class VMCOptimizer:
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
 
-            if epoch == 20:
-                if self.rank == 0:
-                    for i, param in enumerate(self.model.parameters()):
-                        if i == 2:
-                            logger.info(param.data)
-                exit()
             delta_update = (time.time_ns() - t2) / 1.00e09
 
             # save the checkpoint
@@ -288,12 +276,13 @@ class VMCOptimizer:
                     logger.info(f"Save model/opt state: -> {checkpoint_file}", master=True)
                     self.model_dict_lst.append(deepcopy(self.model_raw.state_dict()))
                     self.opt_dict_lst.append(deepcopy(self.opt.state_dict()))
+                    lr = self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
                     torch.save(
                         {
                             "epoch": epoch,
                             "model": self.model_raw.state_dict(),
                             "optimizer": self.opt.state_dict(),
-                            "scheduler": self.lr_scheduler.state_dict(),
+                            "scheduler": lr,
                         },
                         checkpoint_file,
                     )
@@ -334,6 +323,8 @@ class VMCOptimizer:
             )
 
     def pre_train(self, prefix: str = None):
+        if prefix is None:
+            prefix = self.prefix
         t = CITrain(
             self.model,
             self.opt,
@@ -344,7 +335,8 @@ class VMCOptimizer:
             self.lr_scheduler,
             self.exact,
         )
-        logger.info(t, master=True)
+        if self.rank == 0:
+            logger.info(f"pre-train:\n{t}", master=True)
         t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
         del t
 

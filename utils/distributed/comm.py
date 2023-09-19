@@ -196,7 +196,11 @@ def gather_tensor(
     dist.all_gather(all_size, local_size)
     dist.barrier()
     max_batch = max(all_size)
-    other_shape = tuple(torch.tensor(tensor[0].shape, device=device).to("cpu").tolist())
+    
+    if tensor.dim() >=2:
+        other_shape = tuple(torch.tensor(tensor.shape).tolist()[1:])
+    else:
+        other_shape = ()
 
     size_diff = max_batch.item() - local_size.item()
     if size_diff:
@@ -257,7 +261,11 @@ def all_gather_tensor(tensor: Tensor, device, world_size: int) -> List[Tensor]:
     all_batch = [torch.zeros_like(local_batch) for _ in range(world_size)]
     dist.all_gather(all_batch, local_batch)
     max_batch = max(all_batch)
-    other_shape = tuple(torch.tensor(tensor[0].shape, device=device).to("cpu").tolist())
+    
+    if tensor.dim() >=2:
+        other_shape = tuple(torch.tensor(tensor.shape).tolist()[1:])
+    else:
+        other_shape = ()
 
     size_diff = max_batch.item() - local_batch.item()
     if size_diff:
@@ -270,3 +278,23 @@ def all_gather_tensor(tensor: Tensor, device, world_size: int) -> List[Tensor]:
     for tensor, size in zip(all_tensor_padded, all_batch):
         all_tensor.append(tensor[:size])
     return all_tensor
+
+class SyncFunction(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, tensor):
+        ctx.batch_size = tensor.shape[0]
+
+        all_tensor = all_gather_tensor(tensor, tensor.device, get_world_size())
+        all_tensor = torch.cat(all_tensor)
+
+        return all_tensor
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_input = grad_output.clone()
+        torch.distributed.all_reduce(grad_input, op=torch.distributed.ReduceOp.SUM, async_op=False)
+
+        idx_from = torch.distributed.get_rank() * ctx.batch_size
+        idx_to = (torch.distributed.get_rank() + 1) * ctx.batch_size
+        return grad_input[idx_from:idx_to]

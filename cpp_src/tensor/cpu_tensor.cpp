@@ -21,7 +21,11 @@ Tensor tensor_to_onv_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
                      .layout(bra_tensor.layout())
                      .device(bra_tensor.device())
                      .requires_grad(false);
-  Tensor states = torch::zeros({nbatch, bra_len * 8}, options = options);
+  // bra_tensor is empty
+  if (bra_tensor.numel() == 0) {
+    return torch::empty({0, bra_len * 8}, options);
+  }
+  Tensor states = torch::zeros({nbatch, bra_len * 8}, options);
   uint8_t *bra_ptr = bra_tensor.data_ptr<uint8_t>();
   unsigned long *states_ptr =
       reinterpret_cast<unsigned long *>(states.data_ptr<uint8_t>());
@@ -48,7 +52,10 @@ torch::Tensor onv_to_tensor_tensor_cpu(const torch::Tensor &bra_tensor,
                      .layout(bra_tensor.layout())
                      .device(bra_tensor.device())
                      .requires_grad(false);
-
+  // bra_tensor is empty
+  if (bra_tensor.numel() == 0) {
+    return torch::empty({0, sorb}, options);
+  }
   // [nbatch, sorb]
   auto nbatch = bra_tensor.size(0);
   Tensor comb_bit = torch::empty({nbatch, sorb}, options);
@@ -121,6 +128,17 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
   const int nbatch = bra_tensor.size(0);
   Tensor comb, comb_bit;
 
+  // bra is empty
+  if (bra_tensor.numel() == 0) {
+    auto device = bra_tensor.device();
+    comb = torch::empty(
+        {0, ncomb, bra_len * 8},
+        torch::TensorOptions().dtype(torch::kUInt8).device(device));
+    comb_bit = torch::empty(
+        {0, ncomb, sorb},
+        torch::TensorOptions().dtype(torch::kDouble).device(device));
+  }
+
   // bra_tensor: (nbatch, ncomb, bra_len *8)
   comb = bra_tensor.unsqueeze(1).repeat({1, ncomb, 1});
   if (flag_bit) {
@@ -175,6 +193,10 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
     n = bra_tensor.size(0), m = ket_tensor.size(0);
   }
 
+  // bra or ket is empty
+  if (bra_tensor.numel() == 0 || bra_tensor.numel() == 0) {
+    return torch::empty({n, m}, h1e_tensor.options());
+  }
   // torch::empty is faster than 'torch::zeros'
   Tensor Hmat = torch::empty({n, m}, h1e_tensor.options());
 
@@ -209,8 +231,9 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
   return Hmat;
 }
 
-tuple_tensor_2d mps_vbatch_tensor_cpu(const Tensor &mps_data, const Tensor &data_info,
-                             const int nphysical) {
+tuple_tensor_2d mps_vbatch_tensor_cpu(const Tensor &mps_data,
+                                      const Tensor &data_info,
+                                      const int nphysical) {
   // data_index: (3, nphysical, nbatch)
   const int64_t nbatch = data_info.size(2);
   auto options = torch::TensorOptions()
@@ -252,8 +275,8 @@ Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor &onstate,
   const int64_t *onstate_ptr = onstate.data_ptr<int64_t>();
 
   for (int i = 0; i < nbatch; i++) {
-    sgn_ptr[i] = squant::permute_sgn_cpu(image2_ptr,
-                                         &onstate_ptr[i * sorb], sorb);
+    sgn_ptr[i] =
+        squant::permute_sgn_cpu(image2_ptr, &onstate_ptr[i * sorb], sorb);
   }
 
   return sgn_tensor.to(torch::kDouble);
@@ -353,7 +376,7 @@ bool convert_sites_cpu(const Tensor &onstate, const int nphysical,
     length = (end - begin) * 4;
     auto [dc, qj] =
         binary_search_1d(&qrow_qcol_ptr[begin * 4], qsym_in, length);
-  
+
     // printf("(%ld, %ld, %ld)-2-cpu\n", begin, end, length);
     // printf("(%ld %ld), (%ld, %ld)\n", dr, dc, qi, qj);
 
@@ -401,25 +424,25 @@ tuple_tensor_2d nbatch_convert_sites_cpu(
 
   int64_t *data_info_ptr = data_info.data_ptr<int64_t>();
   for (int64_t i = 0; i < nbatch; i++) {
-    sym_break[i] =
-        convert_sites_cpu(onstate[i], nphysical, data_index, qrow_qcol,
-                          qrow_qcol_index, qrow_qcol_shape, ista, ista_index,
-                          image2, nbatch, &data_info_ptr[i]);
+    sym_break[i] = convert_sites_cpu(
+        onstate[i], nphysical, data_index, qrow_qcol, qrow_qcol_index,
+        qrow_qcol_shape, ista, ista_index, image2, nbatch, &data_info_ptr[i]);
   }
   return std::make_tuple(data_info, sym_break);
 }
 
-Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts, const int64_t length){
-    auto options = torch::TensorOptions()
+Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
+                        const int64_t length) {
+  auto options = torch::TensorOptions()
                      .dtype(torch::kInt64)
                      .layout(idx.layout())
                      .device(idx.device())
                      .requires_grad(false);
   auto merge_counts = torch::zeros({length}, options);
-  int64_t * merge_counts_ptr = merge_counts.data_ptr<int64_t>();
+  int64_t *merge_counts_ptr = merge_counts.data_ptr<int64_t>();
 
-  const int64_t* counts_ptr = counts.data_ptr<int64_t>();
-  const int64_t* idx_ptr = idx.data_ptr<int64_t>();
+  const int64_t *counts_ptr = counts.data_ptr<int64_t>();
+  const int64_t *idx_ptr = idx.data_ptr<int64_t>();
   const int64_t batch1 = counts.size(0);
 
   for (int64_t i = 0; i < batch1; i++) {

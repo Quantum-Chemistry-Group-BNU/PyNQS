@@ -179,7 +179,7 @@ def integral_pyscf(atom: str,
         myuci = ci.UCISD(mf)
         e_cisd, cisd_amp = myuci.kernel()
         e_lst = [e_ref, e_cisd + e_hf, e_hf]
-        return (sorb, nele, e_lst, cisd_amp)
+        return (sorb, nele, e_lst, coeff, cisd_amp)
 
     e_lst = [e_ref, e_hf]
     if not fci_coeff:
