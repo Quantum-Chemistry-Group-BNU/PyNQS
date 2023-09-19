@@ -1,0 +1,104 @@
+% !TeX root = ./main.tex
+\section{distributed-train}
+\subsection{distributed}
+\noindent 分布式并行VMC大致流程:\\
+\textbf{方案1}-每个rank独立采样计算:
+\begin{enumerate}
+    \item 每个rank独立采样,并去重(sample-unique, smaple-counts)
+    \item 每个rank 独立计算$eloc$
+    \item \textbf{All-Reduce} 所有$eloc$得到平均值$eloc_{mean}$
+    \item 计算loss function: $loss = 2\Re\left[\braket{\ln\psi^* eloc } -\braket{\ln\psi^*}\braket{eloc}\right]$
+    \item loss.backword(), \textbf{DDP}自动\textbf{All-Reduce}平均梯度,保证每个rank梯度一致.
+\end{enumerate}
+\textbf{方案2}-每个rank独立采样, 通讯划分batch 计算$eloc$:
+\begin{enumerate}
+    \item 每个rank独立采样,并去重(sample-unique, smaple-counts)
+    \item \textcolor{darkred}{\textbf{Gather} 每个rank 的unique, counts.}
+    \item \textcolor{darkred}{合并所有unique, counts, 计算prob.}
+    \item \textcolor{darkred}{\textbf{Scatter} unique, counts, prob 到每个rank$(prob = prob * \mathrm{word-size})$.}
+    \item 剩下流程与方案一相同.
+\end{enumerate}
+\begin{equation}
+    \begin{split}
+        loss =& 2\Re\left[\sum_{i=1}^N \ln{\psi_i} p_i eloc_i + \sum_{i=1}^N p_i eloc_i \sum_{i=1}^{N}\ln{\psi_i}p_i\right] \\
+        = &2 \Re\left[\sum_{i=1}^N \ln{\psi_i} p_i eloc_i + eloc_{\mathrm{mean}} \sum_{i=1}^{N}\ln{\psi_i}p_i\right] \\
+        = &2 \Re\left[\sum_{i=1}^{\textcolor{red}{n_0}} \ln{\psi_i} p_i eloc_i + eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{red}{n_0}}\ln{\psi_i}p_i\right] \quad \textcolor{red}{\mathrm{rank_0}} \\
+        + & \textcolor{teal}{\cdots}\textnormal{(每个rank 计算不同batch)} \\
+        + & 2\left[\sum_{i=1}^{\textcolor{green}{n_p}} \ln{\psi_i} p_i eloc_i + eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{green}{n_p}}\ln{\psi_i}p_i\right] \quad \textcolor{green}{\mathrm{rank_p}}\\
+        &\mathrm{ s.t. } \sum_{l=0}^{p}n_l = N
+    \end{split}
+\end{equation}
+\subsection{pre-train}
+
+使用UCISD波函数$\ket{\psi_{ci}}$进行pre-train,与QGT(Quantum Geometric Tensor)类似, 定义$ovlp$:
+\begin{equation}
+    \begin{split}
+        ovlp & = \frac{\braket{\psi|\psi_{ci}}{\braket{\psi_{ci}|\psi}}}
+        {\braket{\psi|\psi}\braket{\psi_{ci}|\psi_{ci}}} \\
+        & = \frac{\sum_n\braket{\psi|n}\braket{n|\psi_{ci}}\braket{\psi_{ci}|\psi}}
+        {\sum_n{\braket{\psi|n}\braket{n|\psi}}} \\
+        & = \frac{\sum_n\braket{\psi|n}\braket{n|\psi}\braket{n|\psi_{ci}}\frac{\braket{\psi_{ci}|\psi}}{\braket{n|\psi}}}
+        {\sum_n \Vert \braket{\psi|n} \Vert^2} \\
+        & = \frac{\textcolor{teal}{\sum_n \Vert \braket{\psi|n} \Vert^2} \braket{n|\psi_{ci}}\frac{\braket{\psi_{ci}|\psi}}{\braket{n|\psi}}}
+        {\textcolor{teal}{\sum_n \Vert \braket{\psi|n} \Vert^2}} \\
+        & = \textcolor{teal}{p(n)}\textcolor{violet}{\braket{n|\psi_{ci}}\frac{\braket{\psi_{ci}|\psi}}{\braket{n|\psi}}} \\
+        & = \textcolor{teal}{p(n)}\textcolor{violet}{ovlp_{local}} \\
+        & = \mathbb{E}_p\left[ \textcolor{violet}{\braket{n|\psi_{ci}}\frac{\braket{\psi_{ci}|\psi}}{\braket{n|\psi}}} \right] \\
+    \end{split}
+\end{equation}
+量子几何张量QGT:
+\begin{equation}
+    \gamma(\psi, \phi) = \arccos \sqrt{\frac{\braket{\psi|\phi}\braket{\phi|\psi}}{\braket{\psi|\psi}\braket{\phi|\phi}}}
+\end{equation}
+这里$\ket{\psi_{ci}}$为pre-train的波函数,
+$p(n)$来自之前的sampling,只计算与pre-ci重叠的部分.
+在计算pre-ci和sampling中重复部分时,由于之前sampling过程中,会经历\textbf{Gather}-\textbf{merge}-\textbf{Scatter},
+merge会使用\textit{torch.unique}函数,涉及到\textbf{onstate排序}.
+因此不同rank可能会出现重叠为\textbf{0}的情况.
+如果采用分布式,需要\textbf{All-Reduce}得到$ovlp_\mathrm{mean}$.
+\begin{lstlisting}[language=Python]
+model_ci = self.model(self.ci_state).to(self.dtype)
+psi0 = torch.dot(self.pre_ci_coeff.conj(), model_ci)
+ovlp_local = -1 * self.pre_ci_coeff[idx_ci] * psi0/psi_sample[idx_sample]
+ovlp = torch.dot(ovlp_local, prob[idx_sample])
+# idx_sample/idx_ci 为pre-ci和sampling重叠部分的索引
+\end{lstlisting}
+$\textcolor{violet}{\ket{\psi_{ci}}\bra{\psi_{ci}}}\Rightarrow H $,与VMC的梯度类似, loss function为:
+\begin{equation}
+    loss = -2\Re\left[\braket{\ln\psi^* \times ovlp_{local} } -\braket{\ln\psi^*}\braket{ovlp_{local}}\right]
+\end{equation}
+
+另外一种pre-train方法,不考虑sampling, 用最小二乘法(Least Sqaure Method)拟合$\ket{\psi_{ci}}$,
+该方法目前\textbf{不支持分布式}运行(归一化ci系数时,分布式暂时无法实现带梯度的Gather),每个rank的loss都相同.
+\begin{lstlisting}[language=Python]
+psi = self.model(self.ci_state.requires_grad_())
+model_CI = psi / torch.norm(psi).flatten().to(self.dtype)
+ovlp = torch.einsum("i, i", model_CI, self.pre_ci_coeff)
+loss = 1 - ovlp.norm() ** 2
+\end{lstlisting}
+使用最小二乘法拟合\added[id=wu]{和\textit{ovlp}时},
+注意拟合能量和pre-train$\ket{\psi_{ci}}$能量.
+\deleted[id=wu,comment={采样的概率也是归一化的}]{如果使用\textit{ovlp}, 则能量参考无意义.}
+\highlight[id=wu, comment={重叠态实现}]{\textit{ovlp}计算能量, \textit{ci}系数是重叠态之间还是所有样本?}
+\begin{equation}
+    e = \frac{\braket{\psi|H|\psi}}{\braket{\psi|\psi}} = \sum_{ij}c_i\braket{i|H|j}c_j^*
+\end{equation}
+
+\begin{lstlisting}[language=Python]
+hij = get_hij_torch(onstate, onstate, h1e, h2e, sorb, nele).type_as(coeff)
+e = torch.einsum("i, ij, j", coeff.flatten(), hij, coeff.flatten().conj()) + ecore
+\end{lstlisting}
+
+\begin{figure}[htp]
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=1.0\textwidth]{H10-2.00-1-pre-train.pdf}
+        \caption{$ovlp$拟合}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=1.0\textwidth]{H10-2.00-pre-train.pdf}
+        \caption{最小二乘法拟合}
+    \end{subfigure}
+    \caption{\ce{H_10}-2.00两种不同pre-train方法}
+\end{figure}
