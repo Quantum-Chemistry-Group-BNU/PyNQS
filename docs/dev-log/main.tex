@@ -14,7 +14,6 @@
 \usepackage{chemfig}
 \usepackage{mhchem} % 化学式相关
 \usepackage{amssymb}
-
 \usepackage[authormarkup=none,
             xcolor={dvipdf,gray}]{changes} % 修订相关
 %\usepackage[final]{changes} %禁用修订
@@ -29,7 +28,7 @@
         \renewcommand\figurename{Figure}%
         \renewcommand\tablename{Table}}
 % \captionsetup[bi-second]{english}
-\captionsetup{font={small,stretch=1.5873},labelfont=bf, justification=centering}
+\captionsetup{font={small,stretch=1.25},labelfont=bf, justification=centering}
 \captionsetup{labelsep=space}
 \renewcommand{\thefigure}{\arabic{section}-\arabic{figure}}
 \renewcommand{\thetable}{\arabic{section}-\arabic{table}}
@@ -58,6 +57,25 @@
            pdftitle={Dev-log},
            pdfsubject={Dev-log},
            bookmarksnumbered=true]{hyperref}
+\usepackage[capitalize]{cleveref} % 引用相关,能多个引用
+ % 一次引用多个对象标签引用对象衔接
+\newcommand{\crefpairconjunction}{~和~}
+\newcommand{\crefmiddleconjunction}{、}
+\newcommand{\creflastconjunction}{~和~}
+\newcommand{\crefpairgroupconjunction}{~和~}
+\newcommand{\crefmiddlegroupconjunction}{、}
+\newcommand{\creflastgroupconjunction}{~和~}
+\newcommand{\crefrangeconjunction}{～}
+\crefname{figure}{图}{图}
+\crefname{table}{表}{表}
+\crefname{algorithm}{算法}{算法}
+\crefname{theorm}{定理}{定理}
+\crefname{definition}{定义}{定义}
+\crefname{lemma}{引理}{引理}
+
+% \usepackage{capption}
+% \newcommand{\figref}[1]{图\ref{#1}}
+
 \setlength{\belowcaptionskip}{3pt plus 1pt minus 2pt}
 
 \usepackage{tocloft} %目录控制

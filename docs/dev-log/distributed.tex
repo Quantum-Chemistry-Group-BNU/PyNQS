@@ -20,11 +20,11 @@
 \end{enumerate}
 \begin{equation}
     \begin{split}
-        loss =& 2\Re\left[\sum_{i=1}^N \ln{\psi_i} p_i eloc_i + \sum_{i=1}^N p_i eloc_i \sum_{i=1}^{N}\ln{\psi_i}p_i\right] \\
-        = &2 \Re\left[\sum_{i=1}^N \ln{\psi_i} p_i eloc_i + eloc_{\mathrm{mean}} \sum_{i=1}^{N}\ln{\psi_i}p_i\right] \\
-        = &2 \Re\left[\sum_{i=1}^{\textcolor{red}{n_0}} \ln{\psi_i} p_i eloc_i + eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{red}{n_0}}\ln{\psi_i}p_i\right] \quad \textcolor{red}{\mathrm{rank_0}} \\
+        loss =& 2\Re\left[\sum_{i=1}^N \ln{\psi_i} p_i eloc_i - \sum_{i=1}^N p_i eloc_i \sum_{i=1}^{N}\ln{\psi_i}p_i\right] \\
+        = &2 \Re\left[\sum_{i=1}^N \ln{\psi_i} p_i eloc_i - eloc_{\mathrm{mean}} \sum_{i=1}^{N}\ln{\psi_i}p_i\right] \\
+        = &2 \Re\left[\sum_{i=1}^{\textcolor{red}{n_0}} \ln{\psi_i} p_i eloc_i - eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{red}{n_0}}\ln{\psi_i}p_i\right] \quad \textcolor{red}{\mathrm{rank_0}} \\
         + & \textcolor{teal}{\cdots}\textnormal{(每个rank 计算不同batch)} \\
-        + & 2\left[\sum_{i=1}^{\textcolor{green}{n_p}} \ln{\psi_i} p_i eloc_i + eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{green}{n_p}}\ln{\psi_i}p_i\right] \quad \textcolor{green}{\mathrm{rank_p}}\\
+        + & 2\left[\sum_{i=1}^{\textcolor{green}{n_p}} \ln{\psi_i} p_i eloc_i - eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{green}{n_p}}\ln{\psi_i}p_i\right] \quad \textcolor{green}{\mathrm{rank_p}}\\
         &\mathrm{ s.t. } \sum_{l=0}^{p}n_l = N
     \end{split}
 \end{equation}
@@ -78,10 +78,11 @@ loss = 1 - ovlp.norm() ** 2
 \end{lstlisting}
 使用最小二乘法拟合\added[id=wu]{和\textit{ovlp}时},
 注意拟合能量和pre-train$\ket{\psi_{ci}}$能量.
-\deleted[id=wu,comment={采样的概率也是归一化的}]{如果使用\textit{ovlp}, 则能量参考无意义.}
-\highlight[id=wu, comment={重叠态实现}]{\textit{ovlp}计算能量, \textit{ci}系数是重叠态之间还是所有样本?}
+\deleted[id=wu,comment={采样的概率也是归一化的}]{如果使用\textit{ovlp}, 则能量参考无意义(???).}
+\highlight[id=wu, comment={Hilbert-space实现}]{\textit{ovlp}计算能量, \textit{ci}系数是投影到CI-space or Hilbert-space?}
 \begin{equation}
     e = \frac{\braket{\psi|H|\psi}}{\braket{\psi|\psi}} = \sum_{ij}c_i\braket{i|H|j}c_j^*
+    \label{ci}
 \end{equation}
 
 \begin{lstlisting}[language=Python]
@@ -101,4 +102,89 @@ e = torch.einsum("i, ij, j", coeff.flatten(), hij, coeff.flatten().conj()) + eco
         \caption{最小二乘法拟合}
     \end{subfigure}
     \caption{\ce{H_10}-2.00两种不同pre-train方法}
+\end{figure}
+
+\crefrange{H6-1.60-UCISD-sample-1}{H6-1.60-UCISD-exact-2}为\ce{H_6}-1.60 pre-train测试结果,
+随机数种子:$111\ 222\ 333\ 444\ 555$,\cref{H6-1.60-UCISD-sample-1,H6-1.60-UCISD-sample-2}为采样pre-train,
+$n_\mathrm{sample}=500000/rank$,
+\cref{H6-1.60-UCISD-exact-1,H6-1.60-UCISD-exact-2}为精确优化pre-train.\\
+\indent \cref{H6-1.60-UCISD-sample-2}中random-seed=333预训练完成后, 通过\cref{ci}计算能量为\textbf{2.44091829},其中$c_i$来自采样概率. 
+若$c_i$为$\ket{\psi}$在CISD-space正交归一化, 能量为\textbf{-2.85258098},
+在FCI-space空间正交归一化, 能量为\textbf{-2.83488588}.
+VMC算得初始能量(采样)$e=-2.836264472$,接近$e_{UCISD}$.
+变分优化2000步后,$e=-2.658145314$,HF能量$e_{HF}=-2.664983075$.\textbf{能量上升},这不符合变分优化原理.
+
+
+\begin{table}[htp]
+\centering
+\captionsetup{labelfont=bf,skip=0pt,font=small,labelsep=space}  
+\caption{\ce{H_6}-1.60使用UCISD波函数pre-train\tnote{d}结果,\textit{ovlp}和{能量}.}
+% \renewcommand{\arraystretch}{1.25}
+\begin{threeparttable}
+\begin{tabular}{c|*{4}{p{6em}|}} 
+\toprule
+&\multicolumn{2}{c|}{$n_{param}=522$\tnote{a}} & \multicolumn{2}{c|}{$n_{param}=1922${\tnote{b}}}\\
+\hline
+random seed & sampling\tnote{c} & exact& sampling & exact\\
+\hline 
+\multirow{2}{*}{111} & 0.7034 & 0.7035 & 0.7008 & 0.7389  \\
+& -2.65297524 & -2.65197247& -2.66497836 & -2.60799245\\
+\hline
+\multirow{2}{*}{222} & 0.7985 & 0.8653 & 0.7634 & 0.7591 \\
+ & -2.58765390 & -2.52685629 & -2.64780052 & -2.64581788 \\
+\hline
+\multirow{2}{*}{333} & 0.7648 & 0.7731 & \textcolor{blue}{\textbf{0.9457}} & \textcolor{blue}{\textbf{0.9500}} \\
+ & -2.64793674 & -2.64738522 & \textcolor{darkred}{\textbf{-2.44091829}} & \textcolor{darkred}{\textbf{-2.4548528}}\\
+\hline
+\multirow{2}{*}{444} & 0.7423 & \textcolor{blue}{\textbf{0.8506}}   & 0.7974 & 0.7822 \\
+& -2.58655099 & \textcolor{darkred}{\textbf{-2.43728032}} & -2.59276192 & -2.59365129\\
+\hline
+\multirow{2}{*}{555} & 0.7287 & 0.7031 & 0.7606 & \textcolor{blue}{\textbf{0.9078}} \\
+& -2.63931995 & -2.65291995 & -2.61340527 & \textcolor{darkred}{\textbf{-2.44117917}} \\
+\bottomrule
+% \multicolumn{5}{l}{}\\
+\end{tabular}
+\begin{tablenotes}
+\item[a,b] {RNN 隐藏层数目分别为8,16\\}
+\item[c] {$n_{sample}:500000,e_{UCISD}=-2.89603126, e_{HF}=-2.664983075$\\}
+\item[d] {opt-type: Adam, iteration-time: 5000, $lr=0.005, lr_{schedule}:(1 + step / 5000)^{-1}$}
+\end{tablenotes} 
+\end{threeparttable} 
+\end{table}
+
+\begin{figure}[htp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{H6-1.60-UCISD-sample-1.pdf}
+    \caption{\ce{H_6}-1.60使用UCISD波函数\textit{ovlp}\ pre-train,
+            param$_{\mathrm{RNN}}=530$.}
+    \label{H6-1.60-UCISD-sample-1}
+\end{figure}
+
+\begin{figure}[htp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{H6-1.60-UCISD-sample-2.pdf}
+    \caption{\ce{H_6}-1.60使用UCISD波函数\textit{ovlp}\ pre-train,
+            param$_{\mathrm{RNN}}=1922$.
+            \highlight[id=wu, comment={$e_{UCISD}=-2.89603126$}]
+            {random-seed=333,$ovlp=0.945,\ e=-2.44091829$,能量计算有误}
+            }
+    \label{H6-1.60-UCISD-sample-2}
+\end{figure}
+
+\begin{figure}[htp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{H6-1.60-UCISD-exact-1.pdf}
+    \caption{\ce{H_6}-1.60使用UCISD波函数精确优化\textit{ovlp}\ pre-train,
+            param$_{\mathrm{RNN}}=530$.}
+    \label{H6-1.60-UCISD-exact-1}
+\end{figure}
+
+\begin{figure}[htp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{H6-1.60-UCISD-exact-2.pdf}
+    \caption{\ce{H_6}-1.60使用UCISD波函数精确优化\textit{ovlp}\ pre-train,
+            param$_{\mathrm{RNN}}=1922$.
+            \highlight[id=wu]
+            {random-seed=333,$ovlp=0.949,\ e=-2.45485280$,能量计算有误}}
+    \label{H6-1.60-UCISD-exact-2}
 \end{figure}
