@@ -131,7 +131,6 @@ class RNNWavefunction(nn.Module):
                 amp_i = torch.ones(nbatch, **self.factory_kwargs)  # (nbatch)
             else:
                 amp_i = (y0_amp * x0.squeeze(1)).sum(dim=1)  # (nbatch)
-
             amp.append(amp_i)
             if self.compute_phase:
                 phase_i = (y0_phase * x0.squeeze(1)).sum(dim=1)  # (nbatch)

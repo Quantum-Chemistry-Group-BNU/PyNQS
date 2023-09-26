@@ -6,11 +6,12 @@ import warnings
 import matplotlib.pyplot as plt
 
 from functools import partial
-from typing import List, Tuple
+from typing import List, Tuple, Union
 from pyscf import fci
 from numpy import ndarray
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer
+from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
 
 from libs.C_extension import onv_to_tensor, get_hij_torch
@@ -38,7 +39,7 @@ class CIWavefunction:
     space: Tensor
     device: str
 
-    def __init__(self, coeff: Tensor, onstate: Tensor, device: str = None) -> None:
+    def __init__(self, coeff: Union[Tensor, ndarray], onstate: Tensor, device: str = None) -> None:
         self.device = device
         self._check_type(coeff, onstate)
 
@@ -47,10 +48,11 @@ class CIWavefunction:
         assert isinstance(onstate, Tensor)
         check_para(onstate)
         if isinstance(coeff, ndarray):
-            self.coeff = torch.from_numpy(coeff).to(self.device)
+            self.coeff = torch.from_numpy(coeff).clone().to(self.device)
         else:
-            self.coeff = coeff.to(self.device)
-        self.coeff.div_(torch.norm(self.coeff))
+            self.coeff = coeff.clone().to(self.device)
+        # self.coeff.div_(torch.norm(self.coeff))
+        self.coeff = self.coeff / self.coeff.norm()
         self.space = onstate.to(self.device)
 
     def energy(self, e: ElectronInfo) -> float:
@@ -73,12 +75,16 @@ def energy_CI(
     e = <psi|H|psi>/<psi|psi>
       <psi|H|psi> = \sum_{ij}c_i<i|H|j>c_j*
     """
-    if abs(coeff.norm().to("cpu").item() - 1.00) >= 1.0e-06:
-        raise ValueError(f"Normalization CI coefficient")
+    # if abs(coeff.norm().to("cpu").item() - 1.00) >= 1.0e-06:
+    #     raise ValueError(f"Normalization CI coefficient")
 
     # TODO:how block calculate energy, matrix block
     hij = get_hij_torch(onstate, onstate, h1e, h2e, sorb, nele).type_as(coeff)
-    e = torch.einsum("i, ij, j", coeff.flatten(), hij, coeff.flatten().conj()) + ecore
+    e = (
+        torch.einsum("i, ij, j", coeff.flatten(), hij, coeff.flatten().conj())
+        / (torch.norm(coeff) ** 2)
+        + ecore
+    )
 
     return e.real.item()
 
@@ -96,7 +102,7 @@ class CITrain:
 
     def __init__(
         self,
-        model: nn.Module,
+        model: DDP,
         opt: Optimizer,
         pre_CI: CIWavefunction,
         pre_train_info: dict,
@@ -220,13 +226,7 @@ class CITrain:
                 loss, ovlp, model_coeff = self.sqaure_loss()
                 onstate = self.onstate
             elif self.loss_type == "sample":
-                loss, ovlp, model_coeff, ovlp_onstate = self.QGT_loss(sampler)
-                onstate = ovlp_onstate
-                # all-gather from very rank, because ovlp-onstate is different in very rank
-                # onstate is applied for calculating energy use 'energy_CI' functions
-                # ovlp_onstate = all_gather_tensor(ovlp_onstate, self.device, self.world_size)
-                # synchronize()
-                # onstate = torch.cat(ovlp_onstate)
+                loss, ovlp, sample_unique, sample_counts, state_prob = self.QGT_loss(sampler)
 
             if epoch <= self.pre_max_iter:
                 loss.backward()
@@ -253,38 +253,68 @@ class CITrain:
                 self.ovlp_list.append(reduce_ovlp.norm().detach().to("cpu").item())
                 self.loss_list.append(reduce_loss.detach().to("cpu").item())
 
-            # calculate energy from CI coefficient
+            # calculate energy from CI coefficient or local-energy
             # notice, the shape of model_CI maybe not equal of self.pre_ci if using "sample"
-            if epoch == 0:
-                if flag_energy and self.rank == 0:
-                    eCI_begin = get_energy(model_coeff, onstate)
-                    eCI_ref = self.eCI_ref
-            elif epoch == self.pre_max_iter:
-                if flag_energy and self.rank == 0:
-                    eCI_end = get_energy(model_coeff, onstate)
+            if (epoch == 0) or (epoch == self.pre_max_iter):
+                if flag_energy:
+                    if self.loss_type == "onstate":
+                        e_total = get_energy(model_coeff, onstate)
+                    else:
+                        e_rank = self.sampler.calculate_energy(
+                            sample_unique, state_prob, sample_counts
+                        )[0]
+                        e_rank = torch.tensor(e_rank, dtype=self.dtype, device=self.device)
+                        all_reduce_tensor(e_rank, world_size=self.world_size)
+                        synchronize()
+                        e_total = e_rank.item().real
+                    if epoch == 0:
+                        eCI_begin = e_total
+                    else:
+                        eCI_end = e_total
+
             # print logging
-            if (epoch % self.nprt) == 0:
+            if (epoch % self.nprt) == 0 or epoch == self.pre_max_iter:
                 logger.info(f"loss: {loss.norm().item():.4E}, ovlp: {ovlp.norm().item():.4E}")
                 if self.rank == 0:
                     delta = (time.time_ns() - t0) / 1.0e06
                     s = f"The {epoch:<5d} training, loss = {reduce_loss.norm().item():.4E}, "
                     s += f"ovlp = {reduce_ovlp.norm().item():.4E}, delta = {delta:.3E} ms"
                     logger.info(s, master=True)
-        if False:
-            full_space = onv_to_tensor(electron_info.ci_space, self.sorb)
-            psi = self.model(full_space)
-            psi /= psi.norm()
-            x, idx_ci, idx_sample = find_common_state(self.onstate, electron_info.ci_space.clone())
-            # <psi|psi_CI> = <psi|n><n|psi_CI>
-            ovlp_end = torch.dot(psi[idx_sample], self.pre_ci_coeff[idx_ci])
-            print(f"<psi|psi_CI>: {ovlp_end.detach().item():.8f}")
 
+                    checkpoint_file = f"{prefix}-pre-train-checkpoint.pth"
+                    lr = self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
+                    # self.model or self.model.module
+                    torch.save(
+                        {
+                            "epoch": epoch,
+                            "model": self.model.state_dict(),
+                            "optimizer": self.opt.state_dict(),
+                            "scheduler": lr,
+                        },
+                        checkpoint_file,
+                    )
+            
+            # if epoch == 50:
+            #     torch.save(
+            #             {
+            #                 "epoch": epoch,
+            #                 "model": self.model.state_dict(),
+            #                 "optimizer": self.opt.state_dict(),
+            #                 "scheduler": lr,
+            #             },
+            #             "AR-RBM-checkpoint.pth",
+            #         )
+            #     exit()
+            
         if self.rank == 0:
             s = f"Pre-train finished, cost time: {(time.time_ns() - begin)/1.E09:.3E}s, "
             s += f"Max ovlp: {np.max(self.ovlp_list):.4E}\n"
             if flag_energy:
-                s += f"Energy ref, begin and end : {eCI_ref:.8f} {eCI_begin:.8f}, {eCI_end:.8f}"
+                s += (
+                    f"Energy ref, begin and end : {self.eCI_ref:.8f} {eCI_begin:.8f}, {eCI_end:.8f}"
+                )
             logger.info(s, master=True)
+            logger.info("*" * 100, master=True)
             self.plot_figure(prefix)
 
     def sqaure_loss(self) -> Tuple[Tensor, Tensor, Tensor]:
@@ -299,7 +329,7 @@ class CITrain:
         loss = 1 - ovlp.norm() ** 2
         return (loss, ovlp.detach(), model_CI.detach())
 
-    def QGT_loss(self, sampler: Sampler) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    def QGT_loss(self, sampler: Sampler) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         r"""
         Quantum geometric tensor(QGT):
             d(psi, phi) = arccos\sqrt((<psi|phi><phi|psi>)/(<psi|psi><phi|phi>))
@@ -327,6 +357,9 @@ class CITrain:
                 # fci-space isn't pre-ci space
                 fci_space = self.sampler.ele_info.ci_space
                 sample_unique = scatter_tensor(fci_space, self.device, torch.uint8, self.world_size)
+                sample_counts = torch.ones(
+                    sample_unique.size(0), dtype=torch.int64, device=self.device
+                )
                 synchronize()
                 # sample_unique = self.sampler.ele_info.ci_space.clone()
             else:
@@ -380,17 +413,17 @@ class CITrain:
 
         # NOTICE: tensor may be is empty
         # gather counts/common-state from very rank for calculating energy
-        all_ovlp_prob = gather_tensor(state_prob[idx_sample], self.device, self.world_size)
-        all_ovlp_states = gather_tensor(sample_unique[idx_sample], self.device, self.world_size)
-        synchronize()
-        if self.rank == 0:
-            all_ovlp_prob = torch.cat(all_ovlp_prob)
-            all_ovlp_states = torch.cat(all_ovlp_states)
-            model_CI = (all_ovlp_prob / all_ovlp_prob.sum()).sqrt()
-        else:
-            model_CI = None
-
-        return (loss, ovlp, model_CI, all_ovlp_states)
+        # all_prob = gather_tensor(state_prob, self.device, self.world_size)
+        # all_states = gather_tensor(sample_unique, self.device, self.world_size)
+        # synchronize()
+        # if self.rank == 0:
+        #     all_prob = torch.cat(all_prob)
+        #     all_states = torch.cat(all_states)
+        #     # model_CI = (all_prob / all_prob.sum()).sqrt()
+        #     # torch.save(all_states, "FCI-state-unique.pth")
+        # else:
+        #     all_prob = None
+        return (loss, ovlp, sample_unique, sample_counts, state_prob)
 
     def get_local_ovlp(
         self, prob, psi_sample: Tensor, idx_sample: Tensor, idx_ci: Tensor
@@ -398,8 +431,8 @@ class CITrain:
         """
         local_ovlp = <n|psi_ci><psi_ci|psi>/<n|psi>
         """
-        model_ci = self.model(self.ci_state).to(self.dtype)
-        psi0 = torch.dot(self.pre_ci_coeff.conj(), model_ci)
+        model_psi = self.model(self.ci_state).to(self.dtype)
+        psi0 = torch.dot(self.pre_ci_coeff.conj(), model_psi)
         ovlp_local = -1 * self.pre_ci_coeff[idx_ci] * psi0 / psi_sample[idx_sample]
         ovlp = torch.dot(ovlp_local, prob[idx_sample])
 

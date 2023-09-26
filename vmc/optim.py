@@ -72,7 +72,7 @@ class VMCOptimizer:
         self.dtype = dtype.dtype
         self.device = dtype.device
         self.rank = get_rank()
-        self.word_size = get_world_size()
+        self.world_size = get_world_size()
         self.external_model = external_model
 
         # whether read nqs/h1e-h2e from external file
@@ -203,7 +203,7 @@ class VMCOptimizer:
             # All_Reduce mean local energy
             eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
             logger.debug(f"eloc-mean: {eloc_mean.real:.5f}{eloc_mean.imag:+.5f}j")
-            all_reduce_tensor(eloc_mean, world_size=self.word_size)
+            all_reduce_tensor(eloc_mean, world_size=self.world_size)
             synchronize()
 
             e_total = eloc_mean.item().real + self.ecore

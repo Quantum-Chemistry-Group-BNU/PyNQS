@@ -44,8 +44,10 @@ def local_energy(
     check_para(x)
 
     dim: int = x.dim()
+    assert dim == 2
     batch: int = x.shape[0]
     t0 = time.time_ns()
+    device = h1e.device
 
     # x1: [batch, comb, sorb], comb_x: [batch, comb, bra_len]
     comb_x, x1 = get_comb_tensor(x, sorb, nele, noa, nob, True)
@@ -62,7 +64,11 @@ def local_energy(
         # unique, index = torch.unique(comb_x.reshape(-1, bra_len), dim=0, return_inverse=True)
         # unique_x1 = onv_to_tensor(unique, sorb)
         # psi_x1 = torch.index_select(ansatz(unique_x1), 0, index).reshape(batch, -1)
-        psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
+        if x1.numel() != 0:
+            psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
+        else:
+            comb = comb_hij.size(1)
+            psi_x1 = torch.zeros(batch, comb, device=device, dtype=dtype)
     # print(torch.cuda.mem_get_info())
     # print(prof.table())
     # exit()
@@ -71,9 +77,9 @@ def local_energy(
         torch.cuda.synchronize(h1e.device)
     t3 = time.time_ns()
 
-    if dim == 2 and batch == 1:
+    if batch == 1:
         eloc = torch.sum(comb_hij * psi_x1 / psi_x1[..., 0])  # scalar
-    elif dim == 2 and batch > 1:
+    else:
         eloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * comb_hij, -1)  # (batch)
 
     delta0 = (t1 - t0) / 1.0e06

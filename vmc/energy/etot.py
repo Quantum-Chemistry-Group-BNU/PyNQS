@@ -56,6 +56,7 @@ def total_energy(
         eloc_lst[idx], psi_lst[idx], x_time = local_energy(
             ons, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype=dtype
         )
+        y = torch.zeros(0, ons.shape[1], dtype=torch.uint8, device=ons.device)
         time_lst.append(x_time)
 
     # check local energy
@@ -91,7 +92,7 @@ def total_energy(
             delta_gather = (t_exact1 - t_exact0) / 1.0e09
             delta_scatter = (t_exact3 - t_exact2) / 1.0e09
             delta_cal = (t_exact2 - t_exact1) / 1.0e09
-            s = f"Exact-prob: T: {delta_all:.3E} s, Calculate: {delta_cal:.3E} s, "
+            s = f"Exact-prob: {delta_all:.3E} s, Calculate: {delta_cal:.3E} s, "
             s += f"Gather: {delta_gather:.3E} s, Scatter: {delta_scatter:.3E} s"
             logger.info(s, master=True)
 
