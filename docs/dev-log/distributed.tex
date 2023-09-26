@@ -108,7 +108,7 @@ e = torch.einsum("i, ij, j", coeff.flatten(), hij, coeff.flatten().conj()) + eco
 随机数种子:$111\ 222\ 333\ 444\ 555$,\cref{H6-1.60-UCISD-sample-1,H6-1.60-UCISD-sample-2}为采样pre-train,
 $n_\mathrm{sample}=500000/rank$,
 \cref{H6-1.60-UCISD-exact-1,H6-1.60-UCISD-exact-2}为精确优化pre-train.\\
-\indent \cref{H6-1.60-UCISD-sample-2}中random-seed=333预训练完成后, 通过\cref{ci}计算能量为\textbf{2.44091829},其中$c_i$来自采样概率. 
+\indent \cref{H6-1.60-UCISD-sample-2}中random-seed=333预训练完成后, 通过\cref{ci}计算能量为\textbf{-2.44091829},其中$c_i$来自采样概率. 
 若$c_i$为$\ket{\psi}$在CISD-space正交归一化, 能量为\textbf{-2.85258098},
 在FCI-space空间正交归一化, 能量为\textbf{-2.83488588}.
 VMC算得初始能量(采样)$e=-2.836264472$,接近$e_{UCISD}$.

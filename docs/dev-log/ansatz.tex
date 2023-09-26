@@ -1,0 +1,89 @@
+% !TeX root = ./main.tex
+\section{ansatz}
+\subsection{Recurrent Neural Network}
+\begin{equation}
+    \begin{split}
+    \Psi(\mathbf{x}) = \sum_{\mathbf{x}}\psi(\mathbf{x})\ket{\mathbf{x}} &= \sum_{\mathbf{x}}\sqrt{P(\mathbf{x})}\ket{\mathbf{x}} \quad \text{Real} \\
+    \text{or} & = \sum_{\mathbf{x}}\exp{[i\phi(\mathbf{x})]}\sqrt{P(\mathbf{x})}\ket{\mathbf{x}} \quad \text{Complex}
+    \end{split}
+\end{equation}
+Conditional probability\cite{HibatAllah2020} $P_i$:
+\begin{equation}
+    \begin{split}
+    P_i& = y_i^{(1)} \cdot x_i \\
+    y_i^{(1)} & = \mathbf{softmax}(\underbrace{U^{(1)}\mathbf{h}_i + \mathbf{c}^{(1)}}_{\text{Linear Layers-1}}) \\
+    \mathbf{softmax}(v_n) & = \frac{\exp{(v_n)}}{\sum_i \exp{(v_i)}}
+    \end{split}
+\end{equation}
+phase:
+\begin{equation}
+    \begin{split}
+    \phi_i & = y_i^{(2)} \cdot x_i \\
+    y_i^{(2)} & = \pi \mathbf{softsign}(\underbrace{U^{(2)}\mathbf{h}_i + \mathbf{c}^{(2)}}_{\text{Linear Layers-2}}) \\
+    \mathbf{softsign}(x) & = \frac{x}{1 + x} \in (-1, 1)
+    \end{split}
+\end{equation}
+这里Linear Layers-1和Linear Layers-2可以共用同一套参数.\\
+$x_i$是\textbf{ont-hot encoding}, 对于spin $\frac{1}{2}$体系:
+\begin{equation}
+    x_i \in (1, 0) \ or \ (0, 1)
+\end{equation}
+对于有\textit{N}个轨道的体系有
+\begin{equation}
+    \begin{split}
+    P(\mathbf{x}) & = \prod_{i=1}^N P_i\\
+    \phi(\mathbf{x}) &= \sum_{i=1}^N \phi_i
+    \end{split}
+\end{equation}
+
+\subsection{Restricted Boltzmann Machine}
+\begin{equation}
+    \begin{split}
+    \psi_{\theta}(\mathbf{x}) & = \textcolor{teal}{\exp}{\sum_{j=1}^{N_v}a_jx_j} \times 
+        \prod_i^{N_h}\textcolor{violet}{2\cosh}(b_i + \sum_{j=1}^{N_v}W_{ij}x_j) \\
+        \text{or} & = \prod_i^{N_h}\textcolor{violet}{2\cos}(b_i + \sum_{j=1}^{N_v}W_{ij}x_j) \quad 
+        \textbf{cos-type}\\
+        \text{or} & = \textcolor{teal}{\tanh}{\sum_{j=1}^{N_v}a_jx_j} \times 
+        \prod_i^{N_h}\textcolor{violet}{2\cosh}(b_i + \sum_{j=1}^{N_v}W_{ij}x_j) \quad
+        \textbf{tanh-type}
+    \end{split}
+\end{equation}
+where $x_j$ represents the visible spin, $h_i$ the hidden spin and $W_{ij}$ weight parameters.
+$N_v$, $N_h$ are the number of visible , hidden spins and weight respectively.\\
+default:
+\begin{equation}
+    \alpha = N_h/N_v
+\end{equation}
+
+\subsubsection{AR-RBM}
+\textit{K}-th sites\ ($0 < K < n_{sorb}=N_v$), $\mathbf{W}_K : (N_h, K)$\cite{bortone2023impact}
+\begin{equation}
+    \begin{split}
+    \mathbf{x}_{K1} & = (x_0, \cdots, x_{K-1}, 1) \\
+    \mathbf{x}_{K2} & = (x_0, \cdots, x_{K-1}, -1) \\
+    \end{split}
+\end{equation}
+
+\begin{equation}
+    \begin{split}
+    \psi_{\theta}(\mathbf{x}_{K1}) & = \prod_{i}^{N_h}\textcolor{violet}{2\cos}
+    (b_i + \sum_{\textcolor{blue}{k}=1}^{\textcolor{blue}{K}}W_{i\textcolor{blue}{k}}x_{\textcolor{blue}{k}}) \\
+    \psi_{\theta}(\mathbf{x}_{K2}) & = \prod_{i}^{N_h}\textcolor{violet}{2\cos}
+    (b_i + \sum_{\textcolor{blue}{k}=1}^{\textcolor{blue}{K}}W_{i\textcolor{blue}{k}}x_{\textcolor{blue}{k}}) \\
+    \Theta & = (b_i + \sum_{\textcolor{blue}{k}=1}^{\textcolor{blue}{K}}W_{i\textcolor{blue}{k}}x_{\textcolor{blue}{k}})
+    \end{split}
+\end{equation}
+Normalized $\psi_{\theta}(\mathbf{x}_{K1}), \psi_{\theta}(\mathbf{x}_{K2})$
+to $\widetilde{\psi}_{\theta}(\mathbf{x}_{K1}), \widetilde{\psi}_{\theta}(\mathbf{x}_{K2})$
+
+\begin{equation}
+    \psi_{\theta}(\mathbf{x}) = \prod_{i=1}^{N_v}\frac{\widetilde{\psi}_i(x_i|\mathbf{x}_{<i})}
+    {\sqrt{\sum_{x^\prime = 0}^{D-1}\vert \widetilde{\psi}_i(x^\prime |\mathbf{x}_{<i})\vert^2}}
+    \enskip \mathrm{s.t.} ~ D = 2
+\end{equation}
+
+\begin{figure}[htp]
+    \centering
+    \includegraphics[width=0.5\textwidth]{AR-RBM.pdf}
+    \caption{AR-RBM测试:\ce{H4}-1.40, $\alpha = 2, \mathrm{random\ seed} = 112123, AE= 0.00001$}
+\end{figure}

@@ -8,7 +8,7 @@
             headheight=12mm]
             {geometry}
 \usepackage[super,comma,square,sort&compress]{natbib}
-%\CTEXoptions[bibname={\bfseries\zihao{-2}参考文献：}]
+\CTEXoptions[bibname={\bfseries\zihao{-4}Refenrece}]
 \linespread{1.6667} %文字间行距为24pt
 \usepackage{multirow}
 \usepackage{chemfig}
@@ -36,6 +36,7 @@
 \usepackage{booktabs}
 \usepackage{graphics}
 \usepackage{graphicx}
+\counterwithin{figure}{section} %图片按章节编号1.x 2.x..
 \usepackage{textcomp} % 摄氏度\textcelsius%打法
 \usepackage{pdfpages}
 \renewcommand{\arraystretch}{2} %表格数学公式
@@ -43,11 +44,14 @@
 \newcolumntype{Y}{>{\centering\arraybackslash}X} %表格对齐
 \usepackage{xcolor}
 \colorlet{darkred}{red!50!black}
-\newcommand\diff{\, \mathrm{d}}  
+\definecolor{tiffany}{rgb}{0.505882, 0.847059, 0.815686}
+\newcommand\diff{\, \mathrm{d}}
 \usepackage{amsmath,mathrsfs}
+\numberwithin{equation}{section} %公式按照章节编号1.x
 \usepackage{braket}
 %\usepackage{tabularx}
 \setlength{\bibsep}{0pt} %设置文献之间的距离
+\bibliographystyle{abbrv}
 % \setmainfont{Times New Roman} %英文字体选择times new roman
 \graphicspath{{figure/}} 
 \usepackage{fancyhdr}
@@ -151,7 +155,8 @@
 \fancyhead[RE]{\zihao{5}\href{https://github.com/1996wu}{zbwu1996@gmail.com}}
 \fancyhead[RO,LE]{\includegraphics[height=10mm]{bnu-logo.pdf}}
 \pagenumbering{arabic}
+\include{ansatz}
 \include{distributed}
-% \bibliography{bib/cite.bib} 
-% \addcontentsline{toc}{section}{参考文献} 
+\bibliography{cite.bib}
+\addcontentsline{toc}{section}{Refenrece} 
 \end{document}
