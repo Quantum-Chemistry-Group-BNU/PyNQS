@@ -4,7 +4,7 @@
 \noindent 分布式并行VMC大致流程:\\
 \textbf{方案1}-每个rank独立采样计算:
 \begin{enumerate}
-    \item 每个rank独立采样,并去重(sample-unique, smaple-counts)
+    \item 每个rank独立采样,并去重(sample-unique, sample-counts)
     \item 每个rank 独立计算$eloc$
     \item \textbf{All-Reduce} 所有$eloc$得到平均值$eloc_{mean}$
     \item 计算loss function: $loss = 2\Re\left[\braket{\ln\psi^* eloc } -\braket{\ln\psi^*}\braket{eloc}\right]$
@@ -12,7 +12,7 @@
 \end{enumerate}
 \textbf{方案2}-每个rank独立采样, 通讯划分batch 计算$eloc$:
 \begin{enumerate}
-    \item 每个rank独立采样,并去重(sample-unique, smaple-counts)
+    \item 每个rank独立采样,并去重(sample-unique, sample-counts)
     \item \textcolor{darkred}{\textbf{Gather} 每个rank 的unique, counts.}
     \item \textcolor{darkred}{合并所有unique, counts, 计算prob.}
     \item \textcolor{darkred}{\textbf{Scatter} unique, counts, prob 到每个rank$(prob = prob * \mathrm{word-size})$.}
@@ -20,11 +20,17 @@
 \end{enumerate}
 \begin{equation}
     \begin{split}
-        loss =& 2\Re\left[\sum_{i=1}^N \ln{\psi_i} p_i eloc_i - \sum_{i=1}^N p_i eloc_i \sum_{i=1}^{N}\ln{\psi_i}p_i\right] \\
-        = &2 \Re\left[\sum_{i=1}^N \ln{\psi_i} p_i eloc_i - eloc_{\mathrm{mean}} \sum_{i=1}^{N}\ln{\psi_i}p_i\right] \\
-        = &2 \Re\left[\sum_{i=1}^{\textcolor{red}{n_0}} \ln{\psi_i} p_i eloc_i - eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{red}{n_0}}\ln{\psi_i}p_i\right] \quad \textcolor{red}{\mathrm{rank_0}} \\
+        loss =& 2\Re\left[\sum_{i=1}^N \ln{(\psi_i^*)} p_i eloc_i -
+            \sum_{i=1}^N p_i eloc_i \sum_{i=1}^{N}\ln{(\psi_i^*)}p_i\right] \\
+        = &2 \Re\left[\sum_{i=1}^N \ln{(\psi_i^*)} p_i eloc_i -
+            eloc_{\mathrm{mean}} \sum_{i=1}^{N}\ln{(\psi_i^*)}p_i\right] \\
+        = &2 \Re\left[\sum_{i=1}^{\textcolor{red}{n_0}} \ln{(\psi_i^*)} p_i eloc_i - 
+            eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{red}{n_0}}\ln{(\psi_i^*)}p_i\right]
+             \quad \textcolor{red}{\mathrm{rank_0}} \\
         + & \textcolor{teal}{\cdots}\textnormal{(每个rank 计算不同batch)} \\
-        + & 2\left[\sum_{i=1}^{\textcolor{green}{n_p}} \ln{\psi_i} p_i eloc_i - eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{green}{n_p}}\ln{\psi_i}p_i\right] \quad \textcolor{green}{\mathrm{rank_p}}\\
+        + & 2\left[\sum_{i=1}^{\textcolor{green}{n_p}} \ln{(\psi_i^*)} p_i eloc_i -
+            eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{green}{n_p}}\ln{(\psi_i^*)}p_i\right] 
+            \quad \textcolor{green}{\mathrm{rank_p}}\\
         &\mathrm{ s.t. } \sum_{l=0}^{p}n_l = N
     \end{split}
 \end{equation}
@@ -57,15 +63,21 @@ merge会使用\textit{torch.unique}函数,涉及到\textbf{onstate排序}.
 因此不同rank可能会出现重叠为\textbf{0}的情况.
 如果采用分布式,需要\textbf{All-Reduce}得到$ovlp_\mathrm{mean}$.
 \begin{lstlisting}[language=Python]
-model_ci = self.model(self.ci_state).to(self.dtype)
-psi0 = torch.dot(self.pre_ci_coeff.conj(), model_ci)
-ovlp_local = -1 * self.pre_ci_coeff[idx_ci] * psi0/psi_sample[idx_sample]
-ovlp = torch.dot(ovlp_local, prob[idx_sample])
+nbatch = psi_sample.size(0)
+oloc = torch.zeros(nbatch, dtype=self.dtype, device=self.device)
+model_psi = self.model(self.ci_state).to(self.dtype)  # <n|psi_ci>
+psi0 = torch.dot(self.pre_ci_coeff.conj(), model_psi)  # <psi_ci|psi>
+# <n|psi_ci><psi_ci|psi>/<n|psi>
+oloc_nonzero = -1 * self.pre_ci_coeff[idx_ci] * psi0 / psi_sample[idx_sample]
+# ovlp part is non-zero, other part is zeros
+oloc[idx_sample] = oloc_nonzero
+ovlp = torch.dot(oloc_nonzero, prob[idx_sample])
 # idx_sample/idx_ci 为pre-ci和sampling重叠部分的索引
 \end{lstlisting}
-$\textcolor{violet}{\ket{\psi_{ci}}\bra{\psi_{ci}}}\Rightarrow H $,与VMC的梯度类似, loss function为:
+$\textcolor{violet}{\ket{\psi_{ci}}\bra{\psi_{ci}}}\Rightarrow H $,与VMC的梯度类似, 梯度为:
 \begin{equation}
-    loss = -2\Re\left[\braket{\ln\psi^* \times ovlp_{local} } -\braket{\ln\psi^*}\braket{ovlp_{local}}\right]
+    \nabla_{\theta}ovlp = -2\Re\left[\braket{\nabla_{\theta}\ln(\psi_{\theta}^*) \times ovlp_{local}}
+                        -\braket{\nabla_{\theta}\ln(\psi_{\theta}^*)}\braket{ovlp_{local}}\right]
 \end{equation}
 
 另外一种pre-train方法,不考虑sampling, 用最小二乘法(Least Sqaure Method)拟合$\ket{\psi_{ci}}$,
