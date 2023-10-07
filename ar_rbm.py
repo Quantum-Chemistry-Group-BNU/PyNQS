@@ -17,13 +17,6 @@ from utils.public_function import get_fock_space
 from libs.C_extension import onv_to_tensor
 from vmc.ansatz import RNNWavefunction
 
-device="cpu"
-sorb = 4
-fock_space = onv_to_tensor(get_fock_space(sorb), sorb)
-length = fock_space.shape[0]
-random_order = random.sample(list(range(length)), length)
-fock_space = fock_space[random_order]
-
 # %%
 class RBMSites(nn.Module):
     def __init__(
@@ -48,8 +41,11 @@ class RBMSites(nn.Module):
         )  # (Nh, Nv(Nv + 1)/2)
 
     def effective_theta(self, x: Tensor, weights_k: Tensor) -> Tensor:
+        return self.effective_theta_1(x, weights_k) + self.hidden_bias
+    
+    def effective_theta_1(self, x: Tensor, weights_k: Tensor) -> Tensor:
         # return torch.mm(x, self.weights.T) + self.hidden_bias
-        return torch.einsum("ij, ...j ->...i", weights_k, x) + self.hidden_bias
+        return torch.einsum("ij, ...j ->...i", weights_k, x) 
 
     def weights_index(self, k: int) -> Tensor:
         start = k * (k + 1) // 2
@@ -61,8 +57,11 @@ class RBMSites(nn.Module):
         value = torch.zeros(x.size(0), 2, **self.factory_kwargs)  # (nbatch, 2)
         ax = 1.00
         w = self.weights_index(k)
-        value[..., 0] = ax * (2 * self.effective_theta(x[..., 0], w).cos()).prod(-1)
-        value[..., 1] = ax * (2 * self.effective_theta(x[..., 1], w).cos()).prod(-1)
+        theta_before = self.effective_theta(x[:, :k-1, 0], w[:, :k-1]) # (nbatch, num_hidden)
+        theta0 = self.effective_theta_1(x[:, k-1:, 0], w[:, k-1:])
+        theta1 = self.effective_theta_1(x[:, k-1:, 1], w[:, k-1:])
+        value[..., 0] = ax * (2 * ((theta_before + theta0).cos())).prod(-1)
+        value[..., 1] = ax * (2 * ((theta_before + theta1).cos())).prod(-1)
         return F.normalize(value, dim=1, eps=1e-12)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -93,17 +92,24 @@ class RBMSites(nn.Module):
 
 # %%
 
-ar_rbm = RBMSites(sorb, alpha=2, init_weight=0.005)
-rnn = RNNWavefunction(sorb, 2, sorb, num_labels=2, num_layers=1,rnn_type="real", device=device)
-model = ar_rbm
-x = torch.load("AR-RBM-checkpoint.pth", map_location="cpu")
-model.hidden_bias.data = x["model"]["module.hidden_bias"].to(device)
-model.weights.data = x["model"]["module.weights"].to(device)
-
-print(sum(map(torch.numel, model.parameters())))
-fock_space = (fock_space + 1)/2
-print(fock_space)
-psi = ar_rbm(fock_space)
-print((psi * psi.conj()).sum().item())
+if __name__ == "__main__":
+    device="cpu"
+    sorb = 4
+    fock_space = onv_to_tensor(get_fock_space(sorb), sorb)
+    length = fock_space.shape[0]
+    # random_order = random.sample(list(range(length)), length)
+    # fock_space = fock_space[random_order]
+    ar_rbm = RBMSites(sorb, alpha=2, init_weight=0.005)
+    rnn = RNNWavefunction(sorb, 2, sorb, num_labels=2, num_layers=1,rnn_type="real", device=device)
+    model = ar_rbm
+    x = torch.load("AR-RBM-checkpoint.pth", map_location="cpu")
+    model.hidden_bias.data = x["model"]["module.hidden_bias"].to(device)
+    model.weights.data = x["model"]["module.weights"].to(device)
+    
+    print(sum(map(torch.numel, model.parameters())))
+    fock_space = (fock_space + 1)/2
+    print(fock_space)
+    psi = ar_rbm(fock_space)
+    print((psi * psi.conj()).sum().item())
 # psi = rnn(fock_space, symmetry=False) 
 # print((psi * psi.conj()).sum().item())
