@@ -195,6 +195,16 @@ Tensor merge_rank_sample(const Tensor &idx, const Tensor &counts,
   }
 }
 
+Tensor constrain_make_charts(const Tensor &sym_index) {
+  if (sym_index.is_cpu()) {
+    return constrain_make_charts_cpu(sym_index);
+  } else {
+    const auto device = sym_index.device();
+    const auto sym_index_0 = sym_index.to(torch::kCPU);
+    return constrain_make_charts(sym_index_0).to(device);
+  }
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
@@ -221,4 +231,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // m.def("convert_sites_cpu", &nbatch_convert_sites_cpu, " test");
   m.def("convert_sites", &nbatch_convert_sites, " test");
   m.def("merge_rank_sample", &merge_rank_sample, "merge sample index");
+  m.def("constrain_make_charts", &constrain_make_charts, "make charts for two sites");
 }

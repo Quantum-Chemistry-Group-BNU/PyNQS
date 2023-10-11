@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <random>
+#include <unordered_map>
 
 Tensor tensor_to_onv_tensor_cpu(const Tensor &bra_tensor, const int sorb) {
   // bra_tensor(nbatch, sorb)uint8: [1, 1, 0, 0] -> 0b0011 uint8
@@ -450,4 +451,30 @@ Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
     // merge_counts[idx[i]] += counts[i];
   }
   return merge_counts;
+}
+
+Tensor constrain_make_charts_cpu(const Tensor &sym_index) {
+  const int64_t nbatch = sym_index.size(0);
+  const int64_t *sym_ptr = sym_index.data_ptr<int64_t>();
+  auto result = std::vector<double>(nbatch * 4, 0.0);
+
+  std::vector<int64_t> cond_array = {10, 6, 14, 9, 5, 13, 11, 7, 15};
+  std::vector<std::vector<double>> merge_array = {
+      {1, 0, 0, 0}, {0, 0, 1, 0}, {1, 0, 1, 0}, {0, 1, 0, 0}, {0, 0, 0, 1},
+      {0, 1, 0, 1}, {1, 1, 0, 0}, {0, 0, 1, 1}, {1, 1, 1, 1}};
+  std::unordered_map<int64_t, std::vector<double>> index_map;
+  for (int64_t i = 0; i < 9; i++) {
+    index_map[cond_array[i]] = merge_array[i];
+  }
+
+  for (int64_t i = 0; i < nbatch; i++) {
+    int64_t offset = i * 4;
+    std::copy_n(index_map[sym_ptr[i]].data(), 4, &result[offset]);
+  }
+  Tensor result_tensor =
+      torch::from_blob(
+          result.data(), nbatch * 4,
+          torch::TensorOptions().dtype(torch::kDouble).requires_grad(true))
+          .reshape({nbatch, 4});
+  return std::move(result_tensor.clone());
 }

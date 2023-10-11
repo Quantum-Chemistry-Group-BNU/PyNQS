@@ -303,12 +303,6 @@ class VMCOptimizer:
                 logger.info(f"{epoch} iteration end {time.ctime()}", master=True)
                 logger.info("=" * 100, master=True)
                 self.time_iter.append(c[2].item())
-            # psi /= psi.norm()
-            # dim = self.onstate.shape[0]
-            # for i in range(dim):
-            #     s = state_to_string(self.onstate[i], self.sorb)
-            #     print(f"{s[0]}  {psi[i].norm()**2:.6f}")
-            # print(eloc)
 
             del sample_state, eloc, state, psi, c
 
@@ -433,7 +427,7 @@ class VMCOptimizer:
         ax.set_xlabel("Iteration Time")
         ax.set_yscale("log")
         ax.set_ylabel("Gradients")
-        plt.title(prefix)
+        plt.title(os.path.split(prefix)[1]) # remove path
         plt.legend(loc="best")
 
         plt.subplots_adjust(wspace=0, hspace=0.5)

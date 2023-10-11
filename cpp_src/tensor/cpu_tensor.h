@@ -37,3 +37,5 @@ tuple_tensor_2d nbatch_convert_sites_cpu(
 
 Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
                         const int64_t length);
+
+Tensor constrain_make_charts_cpu(const Tensor &sym_index);

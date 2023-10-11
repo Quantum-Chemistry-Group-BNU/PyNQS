@@ -81,7 +81,7 @@ def state_to_string(state: Tensor, sorb: int = None, vcc_one: bool = False) -> L
     >>> output
     ['1001', '0011']
     >>> states = torch.tensor([[ 1., 0., 0., 1.], [ 1., 1., 0., 0.]], dtype=torch.float64)
-    >>> output = state_to_string(states, vcc_one = false)
+    >>> output = state_to_string(states, vcc_one = False)
     >>> output
     ['1001', '0011']
     """

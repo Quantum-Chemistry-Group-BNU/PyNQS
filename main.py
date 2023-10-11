@@ -26,7 +26,7 @@ from libs.C_extension import onv_to_tensor
 from qubic import MPS_c, mps_CIcoeff, mps_sample, RunQubic
 from qubic.qmatrix import convert_mps
 
-torch.set_default_dtype(torch.double)
+# torch.set_default_dtype(torch.double)
 torch.set_printoptions(precision=6)
 print = partial(print, flush=True)
 
@@ -36,8 +36,8 @@ if __name__ == "__main__":
     device = "cuda"
     # local_rank = int(os.environ["LOCAL_RANK"])
     local_rank = 0
-    # seed = int(time.time_ns() % 2**31)
-    seed = 112123
+    # seed =int(time.time_ns() % 2**31)
+    seed = 333
     setup_seed(seed)
     # if device == "cuda":
     #     torch.cuda.set_device(local_rank)
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     # if dist.get_rank() == 0:
     #     atom: str = ""
     #     bond = 1.60
-    #     for k in range(4):
+    #     for k in range(6):
     #         atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
     #     integral_file = tempfile.mkstemp()[1]
     #     integral_file = "./dev-test/H10-2.00-fmole.info"
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     #             "ucisd_amp": ucisd_amp,
     #             "fci_amp": fci_amp,
     #         },
-    #         "H4-1.60.pth",
+    #         "H6-1.60.pth",
     #     )
     e = torch.load("H4-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
@@ -109,19 +109,19 @@ if __name__ == "__main__":
     ucisd_wf = unpack_ucisd(e["ucisd_amp"], sorb, nele, device=device)
     fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
     fci_wf_1 = ucisd_to_fci(e["ucisd_amp"], ci_space, sorb, nele, device=device)
-    pre_train_info = {"pre_max_iter": 2000, "interval": 10, "loss_type": "onstate"}
+    pre_train_info = {"pre_max_iter": 1000, "interval": 10, "loss_type": "sample"}
 
     # objects = [electron_info]
     rnn = RNNWavefunction(
         sorb, nele, num_hiddens=sorb * 2, num_labels=2, rnn_type="complex", num_layers=1, device=device
     ).to(device=device)
-    rbm = RBMWavefunction(sorb, alpha=2, device=device, rbm_type="cos")
+    rbm = RBMWavefunction(sorb, alpha= 2, device=device, rbm_type="cos")
     from ar_rbm import RBMSites
-    ar_rbm = RBMSites(sorb, alpha=2, device=device)
+    ar_rbm = RBMSites(sorb, nele, alpha=2, device=device, symmetry=True, common_weight=True)
     x = torch.load("./H6-1.60-333-checkpoint.pth", map_location=device)
     # x = torch.load("./H6-1.60-111-pre-train-checkpoint.pth", map_location=device)
     # rnn.load_state_dict(x["model"])
-    ansatz = ar_rbm
+    ansatz = rbm
     if device == "cuda":
         model = DDP(ansatz, device_ids=[local_rank], output_device=local_rank)
         # model.load_state_dict(x["model"])
@@ -146,7 +146,6 @@ if __name__ == "__main__":
     }
     opt_type = optim.Adam
     opt_params = {"lr": 0.005, "weight_decay": 0.001, "betas": (0.9, 0.99)}
-    # opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
     # lr_scheduler = optim.lr_scheduler.MultiStepLR
     # lr_sch_params = {"milestones": [3000, 4500, 5500], "gamma": 0.20}
     lr_scheduler = optim.lr_scheduler.LambdaLR
@@ -154,7 +153,6 @@ if __name__ == "__main__":
     lr_sch_params = {"lr_lambda": lambda1}
     dtype = Dtype(dtype=torch.complex128, device=device)
     # dtype = Dtype(dtype=torch.double, device=device)
-
     # print(f"rank: {dist.get_rank()}, size: {dist.get_world_size()}")
     opt_vmc = VMCOptimizer(
         nqs=model,
@@ -167,27 +165,48 @@ if __name__ == "__main__":
         sampler_param=sampler_param,
         only_sample=False,
         electron_info=electron_info,
-        max_iter=4000,
+        max_iter=2000,
         interval=10,
         HF_init=0,
         sr=False,
-        pre_CI=ucisd_wf,
+        pre_CI=fci_wf_1,
         pre_train_info=pre_train_info,
         method_grad="AD",
         method_jacobian="vector",
-        prefix="VMC",
+        prefix="./tmp/VMC-" + str(seed),
     )
     if dist.get_rank() == 0:
         ...
+        # ucisd_wf_dict = {}
+        # ucisd_space = ucisd_wf.space
+        # ucisd_coeff = ucisd_wf.coeff
+        # dim_ucisd = ucisd_space.size(0)
+        # for i in range(dim_ucisd):
+        #     s = state_to_string(ucisd_space[i], sorb)[0]
+        #     ucisd_wf_dict[s] = ucisd_coeff[i].item()
+
+        # ucisd_fci_wf_dict = {}
+        # fci_space = fci_wf_1.space
+        # ucisd_fci_coeff = fci_wf_1.coeff
+        # dim_fci = fci_space.size(0)
+        # for i in range(dim_fci):
+        #     s = state_to_string(fci_space[i], sorb)[0]
+        #     ucisd_fci_wf_dict[s] = ucisd_fci_coeff[i].item()
+        
+        # for key, value in ucisd_fci_wf_dict.items():
+        #     if key in ucisd_wf_dict:
+        #         delta = abs(ucisd_fci_wf_dict[key] - ucisd_wf_dict[key])
+        #         if delta >= 1.0E-20:
+        #             print(f"{key}, delta: {delta}, {ucisd_fci_wf_dict[key]:.10f}, {ucisd_wf_dict[key]:.10f}")
         # ucisd_state = ucisd_wf.space
         # psi = opt_vmc.model(onv_to_tensor(ucisd_state, sorb))
         # ucisd_coeff = ucisd_wf.coeff.to(torch.complex128)
         # ucisd_space = onv_to_tensor(((ucisd_state + 1)//2).to(torch.uint8), sorb)
         # dim = ucisd_state.shape[0]
         # # print(f"ONV pyscf model")
-        # # for i in range(dim):
-        # #     s = state_to_string(ucisd_space[i], sorb)
-        # #     print(f"{s[0]} {ucisd_wf.coeff[i]**2:.6f} {psi[i].norm()**2:.6f}")
+        # for i in range(dim):
+        #     s = state_to_string(ucisd_space[i], sorb)
+        #     print(f"{s[0]} {ucisd_wf.coeff[i]**2:.6f} {psi[i].norm()**2:.6f}")
 
         # from ci import CIWavefunction
         # ucisd_wf_model = CIWavefunction(psi, ucisd_state, device=device)
@@ -211,7 +230,7 @@ if __name__ == "__main__":
     # opt_vmc.pre_train()
     opt_vmc.run()
     e_ref = e_lst[0]
-    print(e_lst)
+    print(e_lst, seed)
     opt_vmc.summary(e_ref, e_lst)
     # psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
     # psi /= psi.norm()

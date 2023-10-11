@@ -16,6 +16,7 @@ class RNNWavefunction(nn.Module):
                  num_layers: int,
                  num_labels: int,
                  rnn_type: str = "complex",
+                 symmetry: bool = True,
                  device: str = None):
         super(RNNWavefunction, self).__init__()
         self.device = device
@@ -24,6 +25,7 @@ class RNNWavefunction(nn.Module):
         self.nele = nele
         self.num_hiddens = num_hiddens
         self.num_layers = num_layers
+        self.symmetry = symmetry
         if rnn_type == "complex":
             self.compute_phase = True
         elif rnn_type == "real":
@@ -66,7 +68,7 @@ class RNNWavefunction(nn.Module):
         sign = torch.sign(torch.sign(x) + 0.1)
         return 0.5 * (sign + 1.0)
 
-    def forward(self, x: Tensor, symmetry: bool = True) -> Tensor:
+    def forward(self, x: Tensor) -> Tensor:
 
         assert (x.dim()
                 in (1, 2)), f"GRU: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
@@ -96,17 +98,17 @@ class RNNWavefunction(nn.Module):
         for i in range(dim):
             # x0: (nbatch, 1, 2)
             y0, hidden_state = self.rnn(x0, hidden_state)  # (nbatch, 2)
-            if symmetry and i >= dim - 2:
-                # placeholders only
-                y0_amp = torch.empty(nbatch, 2, **self.factory_kwargs) # (nbatch, 2)
-            else:
-                y0_amp = self.amp_impl(y0)  # (nbatch, 2)
-            # breakpoint()
+            # if symmetry and i >= dim - 2:
+            #     # placeholders only
+            #     y0_amp = torch.empty(nbatch, 2, **self.factory_kwargs) # (nbatch, 2)
+            # else:
+            y0_amp = self.amp_impl(y0)  # (nbatch, 2)
             if self.compute_phase:
                 y0_phase = self.phase_impl(y0)  # (nbatch, 2)
 
             # Constraints Fock space -> FCI space, and the prob of the last two orbital must be is 1.0
-            if symmetry and self.nele // 2 <= i < dim - 2:
+            # if symmetry and self.nele // 2 <= i < dim - 2:
+            if self.symmetry and self.nele // 2 <= i:
                 lower_up = baseline_up + i // 2
                 lower_down = baseline_down + i // 2
                 if i % 2 == 0:
@@ -127,10 +129,10 @@ class RNNWavefunction(nn.Module):
             x0 = F.one_hot(x[..., i], num_classes=2).to(self.factory_kwargs["dtype"])
 
             # if using Constraints, the the prob of the last two orbital must be is 1.0
-            if symmetry and i >= dim -2:
-                amp_i = torch.ones(nbatch, **self.factory_kwargs)  # (nbatch)
-            else:
-                amp_i = (y0_amp * x0.squeeze(1)).sum(dim=1)  # (nbatch)
+            # if symmetry and i >= dim -2:
+            #     amp_i = torch.ones(nbatch, **self.factory_kwargs)  # (nbatch)
+            # else:
+            amp_i = (y0_amp * x0.squeeze(1)).sum(dim=1)  # (nbatch)
             amp.append(amp_i)
             if self.compute_phase:
                 phase_i = (y0_phase * x0.squeeze(1)).sum(dim=1)  # (nbatch)
@@ -175,7 +177,8 @@ class RNNWavefunction(nn.Module):
             y0_amp = self.amp_impl(y0)  # (n_sample, 2)
             lower_up = baseline_up + i // 2
             lower_down = baseline_down + i // 2
-            if i >= self.nele // 2:
+            
+            if self.symmetry and i >= self.nele // 2:
                 if i % 2 == 0:
                     activations_occ = torch.logical_and(alpha > num_up, activations).long()
                     activations_unocc = torch.logical_and(lower_up < num_up, activations).long()

@@ -75,7 +75,8 @@ def total_energy(
         if rank == 0:
             psi_lst_all = torch.cat(psi_lst_all)
             eloc_lst_all = torch.cat(eloc_lst_all)
-            state_prob_all = (psi_lst_all * psi_lst_all.conj()) / psi_lst_all.norm() ** 2
+            state_prob_all = (psi_lst_all * psi_lst_all.conj()).real / psi_lst_all.norm() ** 2
+            state_prob_all =state_prob_all.to(dtype)
             eloc_mean = torch.einsum("i, i ->", eloc_lst_all, state_prob_all)
         else:
             state_prob_all = None
@@ -127,7 +128,11 @@ def total_energy(
         f"Total energy cost time: {(t1-t0)/1.0E06:.3E} ms, "
         + f"Detail time: {delta0:.3E} ms {delta1:.3E} ms {delta2:.3E} ms"
     )
+
     del psi_lst, idx_lst
+    if x.is_cuda:
+        torch.cuda.empty_cache()
+
     if exact:
         return e_total.item(), eloc_lst, state_prob, statistics
     else:

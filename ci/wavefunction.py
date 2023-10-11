@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import time
@@ -182,17 +183,10 @@ class CITrain:
             sampler: the Sampler class, if 'loss function is 'sample', this is necessary. default: "None"
              if exist, 'electron_info' will be read from the 'sampler'.
         """
-        if False:
-            dim = self.onstate.shape[0]
-            print(f"State   ci^2")
-            for i in range(dim):
-                print(
-                    f"{state_to_string(self.onstate[i], self.sorb)}  {self.pre_ci_coeff[i]**2:.8f}"
-                )
         self.ovlp_list: List[float] = []
         self.loss_list: List[float] = []
 
-        eCI_begin = eCI_end = eCI_ref = 0.00
+        eCI_begin = eCI_end = 0.00
 
         if sampler is not None:
             electron_info = sampler.ele_info
@@ -234,21 +228,29 @@ class CITrain:
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
 
-            # save the energy grad
+            # save the ovlp grad
             if self.rank == 0:
+                grad_sum = 0.0
+                param_sum = 0.0
                 for i, param in enumerate(self.model.parameters()):
                     if param.grad is not None:
+                        grad_sum += np.abs(param.grad.reshape(-1).detach().to("cpu").numpy()).sum()
+                        param_sum += param.data.reshape(-1).detach().to("cpu").abs().numpy().sum()
                         self.grad_lst[i].append(param.grad.reshape(-1).detach().to("cpu").numpy())
                     else:
                         self.grad_lst[i].append(np.zeros(param.numel()))
             self.opt.zero_grad()
 
+            # if self.rank == 0:
+            #     print(f"grad-abs-sum: {grad_sum:.20f}")
+            #     print(f"param-abs-sum: {param_sum:.20f}")
             # save ovlp and loss-functions
             # logger.info(f"ovlp: {ovlp.norm().item():.5f}, loss: {loss.item():.5f}")
 
             reduce_loss = all_reduce_tensor(loss, world_size=self.world_size, in_place=False)[0]
             reduce_ovlp = all_reduce_tensor(ovlp, world_size=self.world_size, in_place=False)[0]
             synchronize()
+            # logger.info(f"epoch: {epoch}, ovlp: {reduce_ovlp.norm().detach().item():.10f}")
             if self.rank == 0:
                 self.ovlp_list.append(reduce_ovlp.norm().detach().to("cpu").item())
                 self.loss_list.append(reduce_loss.detach().to("cpu").item())
@@ -293,21 +295,11 @@ class CITrain:
                         },
                         checkpoint_file,
                     )
-            
-            # if epoch == 50:
-            #     torch.save(
-            #             {
-            #                 "epoch": epoch,
-            #                 "model": self.model.state_dict(),
-            #                 "optimizer": self.opt.state_dict(),
-            #                 "scheduler": lr,
-            #             },
-            #             "AR-RBM-checkpoint.pth",
-            #         )
-            #     exit()
-            
+
+        # END-pre-train
         if self.rank == 0:
-            s = f"Pre-train finished, cost time: {(time.time_ns() - begin)/1.E09:.3E}s, "
+            delta = (time.time_ns() - begin) / 1.0e09
+            s = f"Pre-train finished, cost time: {delta:.3E}s, in {time.ctime()}"
             s += f"Max ovlp: {np.max(self.ovlp_list):.4E}\n"
             if flag_energy:
                 s += (
@@ -365,94 +357,80 @@ class CITrain:
             else:
                 sample_unique, sample_counts, state_prob = self.sampler.sampling(initial_state)
 
-            # XXX: This is little redundance, psi_unique have been calculated when sampling
-            psi_unique = self.model(onv_to_tensor(sample_unique, self.sorb)).to(self.dtype)
-            if self.exact:
-                # Gather all psi from very rank
-                all_psi = gather_tensor(psi_unique, self.device, self.world_size)
-                synchronize()
-                if self.rank == 0:
-                    all_psi = torch.cat(all_psi)
-                    all_prob = all_psi * all_psi.conj() / all_psi.norm() ** 2
-                else:
-                    all_prob = None
-                # Scatter prob to very rank
-                state_prob = scatter_tensor(all_prob, self.device, self.dtype, self.world_size)
-                state_prob.mul_(self.world_size)
+        # XXX: This is little redundance, psi_unique have been calculated when sampling
+        psi = self.model(onv_to_tensor(sample_unique, self.sorb).requires_grad_()).to(self.dtype)
+        psi_detach = psi.clone().detach()
+        if self.exact:
+            # Gather all psi from very rank
+            all_psi = gather_tensor(psi_detach, self.device, self.world_size)
+            synchronize()
+            if self.rank == 0:
+                all_psi = torch.cat(all_psi)
+                all_prob = (all_psi * all_psi.conj()).real / all_psi.norm() ** 2
+                all_prob = all_prob.to(self.dtype)
+            else:
+                all_prob = None
+            # Scatter prob to very rank
+            state_prob = scatter_tensor(all_prob, self.device, self.dtype, self.world_size)
+            state_prob.mul_(self.world_size)
 
-                # state_prob = psi_unique * psi_unique.conj() / psi_unique.norm() ** 2
+        # NOTICE: idx_ci and idx_sample maybe empty tensor
+        # find ovlp-onv, idx_ci, idx_sample between pre-ci-onv and sampling-onv
+        idx_ci, idx_sample = find_common_state(self.onstate, sample_unique)[1:]
+        state_prob = state_prob.to(self.dtype)
 
-            # NOTICE: idx_ci and idx_sample maybe empty tensor
-            # find ovlp-onv, idx_ci, idx_sample between pre-ci-onv and sampling-onv
-            idx_ci, idx_sample = find_common_state(self.onstate, sample_unique)[1:]
-            state_prob = state_prob.to(self.dtype)
+        # calculate local ovlp
+        ovlp, oloc = self.get_local_ovlp(state_prob, psi_detach, idx_sample, idx_ci)
+        ovlp_mean = all_reduce_tensor(ovlp, world_size=self.world_size, in_place=False)[0]
 
-            # calculate local ovlp
-            ovlp, oloc = self.get_local_ovlp(state_prob, psi_unique, idx_sample, idx_ci)
-            ovlp_mean = all_reduce_tensor(ovlp, world_size=self.world_size, in_place=False)[0]
-
-            state_sample = onv_to_tensor(sample_unique[idx_sample], self.sorb)
-
-        # if distribution, idx_ci, idx_sample maybe is empty in different rank.
-        # but gather idx_ci should not be empty.
-        # if len(idx_ci) == 0:
-        #     raise ValueError(f"There is no common states between in pre-ci states and sample-states")
-
-        psi = self.model(state_sample.requires_grad_()).to(self.dtype)
         log_psi = psi.log()
         if torch.any(torch.isnan(log_psi)):
             raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
 
         # NOTICE: idx_sample maybe is empty
-        # loss1 = torch.einsum("i, i, i ->", oloc, log_psi.conj(), state_prob[idx_sample])
-        # loss2 = ovlp_mean * torch.einsum("i, i->", log_psi.conj(), state_prob[idx_sample])
-        loss1 = torch.sum(oloc * log_psi.conj() * state_prob[idx_sample])
-        loss2 = ovlp_mean * torch.sum(log_psi.conj() * state_prob[idx_sample])
+        loss1 = torch.sum(oloc * log_psi.conj() * state_prob)
+        loss2 = ovlp_mean * torch.sum(log_psi.conj() * state_prob)
         loss = 2 * (loss1 - loss2).real
+        # print(f"loss: {loss.item():.15f}")
         # logger.info(f"ovlp: {ovlp}, loss: {loss}")
 
-        # NOTICE: tensor may be is empty
-        # gather counts/common-state from very rank for calculating energy
-        # all_prob = gather_tensor(state_prob, self.device, self.world_size)
-        # all_states = gather_tensor(sample_unique, self.device, self.world_size)
-        # synchronize()
-        # if self.rank == 0:
-        #     all_prob = torch.cat(all_prob)
-        #     all_states = torch.cat(all_states)
-        #     # model_CI = (all_prob / all_prob.sum()).sqrt()
-        #     # torch.save(all_states, "FCI-state-unique.pth")
-        # else:
-        #     all_prob = None
+        del all_prob, idx_ci, idx_sample, oloc
+        if loss.is_cuda:
+            torch.cuda.empty_cache()
+
         return (loss, ovlp, sample_unique, sample_counts, state_prob)
 
+    @torch.no_grad()
     def get_local_ovlp(
         self, prob, psi_sample: Tensor, idx_sample: Tensor, idx_ci: Tensor
     ) -> Tuple[Tensor, Tensor]:
         """
         local_ovlp = <n|psi_ci><psi_ci|psi>/<n|psi>
         """
-        model_psi = self.model(self.ci_state).to(self.dtype)
-        psi0 = torch.dot(self.pre_ci_coeff.conj(), model_psi)
-        ovlp_local = -1 * self.pre_ci_coeff[idx_ci] * psi0 / psi_sample[idx_sample]
-        ovlp = torch.dot(ovlp_local, prob[idx_sample])
-
-        # Testing optimization
-        if False:
-            # print(sample_unique)
-            full_space = onv_to_tensor(self.mc.ele_info.ci_space, self.sorb)
-            psi = self.model(full_space)
-            psi /= psi.norm()
-            sorb = self.sorb
-            nele = self.sorb // 2
-            occslstA = fci.cistring._gen_occslst(range(sorb // 2), nele // 2)
-            occslstB = fci.cistring._gen_occslst(range(sorb // 2), nele // 2)
-            dim = len(occslstA)
-            print(f"State:  sample^2     ")
-            for i, occsa in enumerate(occslstA):
-                for j, occsb in enumerate(occslstB):
-                    print(f"{state_to_string(full_space[dim*i+j], sorb)} {psi[dim*i+j]**2:.8f} ")
-            print(ovlp.real.item())
-        return ovlp, ovlp_local.to(self.dtype)
+        nbatch = psi_sample.size(0)
+        oloc = torch.zeros(nbatch, dtype=self.dtype, device=self.device)
+        model_psi = self.model(self.ci_state).to(self.dtype)  # <n|psi_ci>
+        psi0 = torch.dot(self.pre_ci_coeff.conj(), model_psi)  # <psi_ci|psi>
+        # print(f"<psi_ci|psi>: {psi0.norm().item():.20f}")
+        # <n|psi_ci><psi_ci|psi>/<n|psi>
+        oloc_nonzero = -1 * (self.pre_ci_coeff[idx_ci] * psi0) / psi_sample[idx_sample]
+        # print(f"oloc: {oloc_nonzero.norm():.20f}")
+        # ovlp part is non-zero, other part is zeros
+        oloc[idx_sample] = oloc_nonzero
+        ovlp = torch.dot(oloc, prob)
+        # torch.save({
+        #     "oloc": oloc,
+        #     "prob": prob,
+        #     "oloc_nonzero": oloc_nonzero,
+        #     "psi_sample": psi_sample,
+        #     "idx_ci": idx_ci,
+        #     "idx_sample": idx_sample,
+        #     "ci_coeff": self.pre_ci_coeff,
+        #     "psi0": psi0,
+        # }, "oloc-prob-ucisd.pth")
+        # print(f"ovlp: {ovlp.norm().item():.20f}")
+        del oloc_nonzero
+        return ovlp, oloc
 
     def plot_figure(self, prefix: str = None):
         prefix = prefix if prefix is not None else "CI"
@@ -487,11 +465,14 @@ class CITrain:
         ax2.set_xlabel("Iteration Time")
         ax2.set_yscale("log")
         ax2.set_ylabel("Gradients")
-        plt.title(prefix)
+        plt.title(os.path.split(prefix)[1])  # remove path
         plt.legend(loc="best")
 
         fig.subplots_adjust(wspace=0, hspace=0.5)
         fig.savefig(prefix + "-pre-train.png", format="png", dpi=1000, bbox_inches="tight")
+        np.savez(
+            prefix + "-pre-train", np.asarray(self.loss_list), np.asarray(self.ovlp_list), param_L2
+        )
 
     def __repr__(self) -> str:
         return (
