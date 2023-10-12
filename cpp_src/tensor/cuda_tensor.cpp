@@ -304,3 +304,19 @@ Tensor merge_sample_cuda(const Tensor &idx, const Tensor &counts,
 
   return merge_counts;
 }
+
+Tensor constrain_make_charts_cuda(const Tensor &sym_index) {
+  const int64_t nbatch = sym_index.size(0);
+  const int64_t *sym_ptr = sym_index.data_ptr<int64_t>();
+
+  auto options = torch::TensorOptions()
+                     .dtype(torch::kDouble)
+                     .device(sym_index.device())
+                     .requires_grad(true);
+
+  Tensor result = torch::zeros({nbatch, 4}, options);
+  double *result_ptr = result.data_ptr<double>();
+
+  constrain_lookup_table(sym_ptr, result_ptr, nbatch);
+  return result;
+}

@@ -387,3 +387,73 @@ __host__ void merge_idx_cuda(int64_t *merge_counts, const int64_t *idx,
   HANDLE_ERROR(cudaStatus);
   cudaDeviceSynchronize();
 }
+
+__device__ void constrain_charts(const int64_t key, double *result) {
+  // {10, 6, 14, 9, 5, 13, 11, 7, 15};
+  if (key == 10) {
+    result[0] = 1;
+    result[1] = 0;
+    result[2] = 0;
+    result[3] = 0;
+  } else if (key == 6) {
+    result[0] = 0;
+    result[1] = 0;
+    result[2] = 1;
+    result[3] = 0;
+  } else if (key == 14) {
+    result[0] = 1;
+    result[1] = 0;
+    result[2] = 1;
+    result[3] = 0;
+  } else if (key == 9) {
+    result[0] = 0;
+    result[1] = 1;
+    result[2] = 0;
+    result[3] = 0;
+  } else if (key == 5) {
+    result[0] = 0;
+    result[1] = 0;
+    result[2] = 0;
+    result[3] = 1;
+  } else if (key == 13) {
+    result[0] = 0;
+    result[1] = 1;
+    result[2] = 0;
+    result[3] = 1;
+  } else if (key == 11) {
+    result[0] = 1;
+    result[1] = 1;
+    result[2] = 0;
+    result[3] = 0;
+  } else if (key == 7) {
+    result[0] = 0;
+    result[1] = 0;
+    result[2] = 1;
+    result[3] = 1;
+  } else if (key == 15) {
+    result[0] = 1;
+    result[1] = 1;
+    result[2] = 1;
+    result[3] = 1;
+  }
+}
+
+__global__ void constrain_lookup_table_kernel(const int64_t *sym_index,
+                                              double *result,
+                                              const int64_t nbatch) {
+  int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idn >= nbatch)
+    return;
+  constrain_charts(sym_index[idn], &result[idn * 4]);
+}
+
+__host__ void constrain_lookup_table(const int64_t *sym_index, double *result,
+                                     const int64_t nbatch) {
+  dim3 blockDim(1024);
+  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
+  constrain_lookup_table_kernel<<<gridDim, blockDim>>>(sym_index, result,
+                                                       nbatch);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
+  cudaDeviceSynchronize();
+}

@@ -42,4 +42,6 @@ tuple_tensor_2d nbatch_convert_sites_cuda(Tensor &onstate, const int nphysical,
 
 Tensor merge_sample_cuda(const Tensor &idx, const Tensor &counts,
                          const Tensor &split_idx, const int64_t length);
+
+Tensor constrain_make_charts_cuda(const Tensor &sym_index);
 #endif

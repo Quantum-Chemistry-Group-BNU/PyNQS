@@ -198,11 +198,14 @@ Tensor merge_rank_sample(const Tensor &idx, const Tensor &counts,
 Tensor constrain_make_charts(const Tensor &sym_index) {
   if (sym_index.is_cpu()) {
     return constrain_make_charts_cpu(sym_index);
+#ifdef GPU
   } else {
-    const auto device = sym_index.device();
-    const auto sym_index_0 = sym_index.to(torch::kCPU);
-    return constrain_make_charts(sym_index_0).to(device);
+    // const auto device = sym_index.device();
+    // const auto sym_index_0 = sym_index.to(torch::kCPU);
+    // return constrain_make_charts(sym_index_0).to(device);
+    return constrain_make_charts_cuda(sym_index);
   }
+#endif
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
