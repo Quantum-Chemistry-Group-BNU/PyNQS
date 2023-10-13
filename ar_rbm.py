@@ -63,7 +63,7 @@ def get_cond_idx(x: Tensor):
 
 # %%
 class RBMSites(nn.Module):
-    ACTIVATION_TYPE = ("cos", "coslinear")
+    ACTIVATION_TYPE = ("cos", "coslinear", "sinc")
 
     def __init__(
         self,
@@ -172,6 +172,8 @@ class RBMSites(nn.Module):
             return torch.cos
         elif dtype == "coslinear":
             return self.cos_linear
+        elif dtype == "sinc":
+            return torch.sinc
 
     def psi_one_sites(self, x: Tensor, k: int) -> Tensor:
         # x: (nbatch, k)
@@ -352,7 +354,6 @@ class RBMSites(nn.Module):
             
             # [0]/[1]
             value = torch.multinomial(y0.pow(2).clamp_min(1e-12), 1).squeeze()  # (n_sample)
-            # TODO:
             sample[:, k] = value
             
             if k % 2 == 0:
@@ -462,10 +463,12 @@ def _numerical_differentiation(
 # %%
 
 if __name__ == "__main__":
-    device = "cpu"
+    from utils.public_function import setup_seed
+    setup_seed(333)
+    device = "cuda:0"
     sorb = 8
     nele = 4
-    alpha = 2
+    alpha = 1
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb)
     length = fock_space.shape[0]
     fci_space = onv_to_tensor(given_onstate(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2), sorb)
