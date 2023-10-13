@@ -294,7 +294,7 @@ class RBMSites(nn.Module):
                     [activations_occ0, activations_unocc0, activations_occ1, activations_unocc1],
                     dim=1,
                 )
-                sym_index = (sym_index * torch.tensor([1, 2, 4, 8])).sum(dim=1).long()
+                sym_index = (sym_index * torch.tensor([1, 2, 4, 8], device=self.device)).sum(dim=1).long()
                 sym_index = constrain_make_charts(sym_index)
                 # sym_index = get_cond_idx(sym_index)
                 # assert (torch.allclose(sym_index.to(torch.double), sym_index1))
@@ -329,7 +329,7 @@ class RBMSites(nn.Module):
         num_down = torch.zeros(n_sample, **self.factory_kwargs)
         activations = torch.ones(n_sample, device=self.device).to(torch.bool)
         
-        for k in range(sorb):
+        for k in range(self.sorb):
             x0 = sample[:, :k]  # (nbatch, k)
             y0 = self.psi_one_sites(x0, k)  # (nbatch, 2)
             lower_up = baseline_up + k // 2
@@ -374,9 +374,9 @@ class RBMSites(nn.Module):
         num_down = torch.zeros(n_sample, **self.factory_kwargs)
         activations = torch.ones(n_sample, device=self.device).to(torch.bool)
 
-        for k in range(0, sorb, 2):
+        for k in range(0, self.sorb, 2):
             x0 = sample[:, :k]  # (n_sample, k)
-            y0 = self.psi(x0, k)  # (n_sample, 4)
+            y0 = self.psi_two_sites(x0, k)  # (n_sample, 4)
             lower_up = baseline_up + k // 2
             lower_down = baseline_down + k // 2
 
@@ -389,7 +389,7 @@ class RBMSites(nn.Module):
                     [activations_occ0, activations_unocc0, activations_occ1, activations_unocc1],
                     dim=1,
                 )
-                sym_index = (sym_index * torch.tensor([1, 2, 4, 8])).sum(dim=1)
+                sym_index = (sym_index * torch.tensor([1, 2, 4, 8], device=self.device)).sum(dim=1)
                 sym_index = constrain_make_charts(sym_index)
                 # sym_index = get_cond_idx(sym_index)
                 # assert (torch.allclose(sym_index.to(torch.double), sym_index1))
@@ -465,7 +465,7 @@ if __name__ == "__main__":
     device = "cpu"
     sorb = 8
     nele = 4
-    alpha = 1
+    alpha = 2
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb)
     length = fock_space.shape[0]
     fci_space = onv_to_tensor(given_onstate(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2), sorb)
@@ -479,8 +479,8 @@ if __name__ == "__main__":
         init_weight=0.005,
         symmetry=True,
         common_weight=True,
-        ar_sites=1,
-        activation_type="coslinear"
+        ar_sites=2,
+        activation_type="cos"
     )
     rnn = RNNWavefunction(
         sorb,
@@ -494,7 +494,7 @@ if __name__ == "__main__":
     )
     rbm = RBMWavefunction(sorb, alpha=alpha, init_weight=0.005, rbm_type="cos")
     model = ar_rbm
-    # x = torch.load("AR-RBM-H4-checkpoint.pth", map_location="cpu")
+    # x = torch.load("./tmp/VMC-547795319-checkpoint.pth", map_location="cpu")
     # model.hidden_bias.data = x["model"]["module.hidden_bias"].to(device)
     # model.weights.data = x["model"]["module.weights"].to(device)
 

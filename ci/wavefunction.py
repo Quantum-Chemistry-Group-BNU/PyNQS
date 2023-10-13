@@ -394,7 +394,7 @@ class CITrain:
         # print(f"loss: {loss.item():.15f}")
         # logger.info(f"ovlp: {ovlp}, loss: {loss}")
 
-        del all_prob, idx_ci, idx_sample, oloc
+        del idx_ci, idx_sample, oloc
         if loss.is_cuda:
             torch.cuda.empty_cache()
 
