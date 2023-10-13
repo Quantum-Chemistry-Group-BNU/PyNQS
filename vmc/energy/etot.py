@@ -27,14 +27,14 @@ def total_energy(
     dtype=torch.double,
 ) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
     r"""
-    
+
     Return
     ------
         e_total: Total energy
         eloc_lst: local energy
-        state_prob: if exact: the state-prob would be calculated again, 
+        state_prob: if exact: the state-prob would be calculated again,
                     else zeros-tensor.
-        statistics: ... 
+        statistics: ...
     """
     dim: int = x.shape[0]
     device = x.device
@@ -56,7 +56,7 @@ def total_energy(
         eloc_lst[idx], psi_lst[idx], x_time = local_energy(
             ons, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype=dtype
         )
-        y = torch.zeros(0, ons.shape[1], dtype=torch.uint8, device=ons.device)
+        # y = torch.zeros(0, ons.shape[1], dtype=torch.uint8, device=ons.device)
         time_lst.append(x_time)
 
     # check local energy
@@ -76,7 +76,7 @@ def total_energy(
             psi_lst_all = torch.cat(psi_lst_all)
             eloc_lst_all = torch.cat(eloc_lst_all)
             state_prob_all = (psi_lst_all * psi_lst_all.conj()).real / psi_lst_all.norm() ** 2
-            state_prob_all =state_prob_all.to(dtype)
+            state_prob_all = state_prob_all.to(dtype)
             eloc_mean = torch.einsum("i, i ->", eloc_lst_all, state_prob_all)
         else:
             state_prob_all = None
@@ -137,4 +137,4 @@ def total_energy(
         return e_total.item(), eloc_lst, state_prob, statistics
     else:
         placeholders = torch.zeros(1, device=device, dtype=dtype)
-        return e_total.item(), placeholders, eloc_lst, statistics
+        return e_total.item(), eloc_lst, placeholders, statistics
