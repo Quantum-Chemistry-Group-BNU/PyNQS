@@ -114,6 +114,7 @@ class RBMSites(nn.Module):
             raise TypeError(
                 f"Activate type : Expected {self.ACTIVATION_TYPE} but received {activation_type}"
             )
+        self.activation_type = activation_type
         self.activation_functions = self.activation(activation_type)
 
         # Two-sites
@@ -125,6 +126,12 @@ class RBMSites(nn.Module):
         # One-sites:
         self.occupied = torch.tensor([1.0], **self.factory_kwargs)
         self.unoccupied = torch.tensor([0.0], **self.factory_kwargs)
+
+    def extra_repr(self) -> str:
+        s = f"sites, {self.ar_sites}, common weights: {self.common_weight}, "
+        s += f"activations: {self.activation_type},\n"
+        s += f"num_visible: {self.num_visible}, num_hidden: {self.num_hidden}, shape weights: {tuple(self.weights.shape)}"
+        return s
 
     def effective_theta(self, x: Tensor, weights_k: Tensor) -> Tensor:
         return self.effective_theta_1(x, weights_k) + self.hidden_bias
@@ -296,7 +303,9 @@ class RBMSites(nn.Module):
                     [activations_occ0, activations_unocc0, activations_occ1, activations_unocc1],
                     dim=1,
                 )
-                sym_index = (sym_index * torch.tensor([1, 2, 4, 8], device=self.device)).sum(dim=1).long()
+                sym_index = (
+                    (sym_index * torch.tensor([1, 2, 4, 8], device=self.device)).sum(dim=1).long()
+                )
                 sym_index = constrain_make_charts(sym_index)
                 # sym_index = get_cond_idx(sym_index)
                 # assert (torch.allclose(sym_index.to(torch.double), sym_index1))
@@ -320,7 +329,7 @@ class RBMSites(nn.Module):
         return prob
 
     @torch.no_grad()
-    def ar_sampling_one_sites(self, n_sample: int) ->Tensor:
+    def ar_sampling_one_sites(self, n_sample: int) -> Tensor:
         sample = torch.zeros(n_sample, self.sorb, **self.factory_kwargs)
 
         alpha = self.nele // 2
@@ -330,13 +339,13 @@ class RBMSites(nn.Module):
         num_up = torch.zeros(n_sample, **self.factory_kwargs)
         num_down = torch.zeros(n_sample, **self.factory_kwargs)
         activations = torch.ones(n_sample, device=self.device).to(torch.bool)
-        
+
         for k in range(self.sorb):
             x0 = sample[:, :k]  # (nbatch, k)
             y0 = self.psi_one_sites(x0, k)  # (nbatch, 2)
             lower_up = baseline_up + k // 2
             lower_down = baseline_down + k // 2
-            
+
             if self.symmetry and self.nele // 2 <= k:
                 lower_up = baseline_up + k // 2
                 lower_down = baseline_down + k // 2
@@ -351,18 +360,18 @@ class RBMSites(nn.Module):
                 sym_index = torch.stack([activations_unocc, activations_occ], dim=1).long()
                 y0.mul_(sym_index)
                 y0 = F.normalize(y0, dim=1, eps=1e-12)
-            
+
             # [0]/[1]
             value = torch.multinomial(y0.pow(2).clamp_min(1e-12), 1).squeeze()  # (n_sample)
             sample[:, k] = value
-            
+
             if k % 2 == 0:
                 num_up.add_(value)
             else:
                 num_down.add_(value)
-        
+
         return sample
-    
+
     @torch.no_grad()
     def ar_sampling_two_sites(self, n_sample: int) -> Tensor:
         sample = torch.zeros(n_sample, self.sorb, **self.factory_kwargs)
@@ -422,6 +431,7 @@ class RBMSites(nn.Module):
         elif self.ar_sites == 1:
             return self.ar_sampling_one_sites(n_sample)
 
+
 from typing import Tuple
 
 
@@ -464,6 +474,7 @@ def _numerical_differentiation(
 
 if __name__ == "__main__":
     from utils.public_function import setup_seed
+
     setup_seed(333)
     device = "cuda:0"
     sorb = 8
@@ -483,7 +494,7 @@ if __name__ == "__main__":
         symmetry=True,
         common_weight=True,
         ar_sites=2,
-        activation_type="cos"
+        activation_type="cos",
     )
     rnn = RNNWavefunction(
         sorb,
