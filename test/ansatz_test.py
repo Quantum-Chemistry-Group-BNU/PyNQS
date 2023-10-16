@@ -2,12 +2,14 @@ import os
 import subprocess
 import sys
 import glob
+import numpy as np
 import time
 import torch
 import torch.distributed as dist
 
 from functools import partial
 from loguru import logger
+from typing import List
 
 print = partial(print, flush=True)
 
@@ -50,6 +52,8 @@ for mol in molecule:
         break
 
     begin = time.time_ns()
+    e_abs: List[float] = []
+    e_rel: List[float] = []
     for i, seed in enumerate(random_seed_lst):
         save_file_prefix = save_path + filename + "-"
 
@@ -85,7 +89,7 @@ for mol in molecule:
         logger.remove()
         logger.add(dist_print, format="{message}", enqueue=True, level="DEBUG")
         t0 = time.time_ns()
-        vmc_process(
+        e1, e2 = vmc_process(
             molecule_file=path + mol,
             ansatz=ar_rbm,
             sampler_param=sampler_param,
@@ -97,6 +101,9 @@ for mol in molecule:
             # backend="gloo",
             seed=seed,
         )
+        # save the energy
+        e_rel.append(e1)
+        e_abs.append(e2)
         t1 = time.time_ns()
         # remove stdout/stderr
         sys.stdout.log.close()
@@ -107,9 +114,15 @@ for mol in molecule:
         if device == "cuda":
             torch.cuda.empty_cache()
         delta = (t1 - t0) / 1.0e09
-        print(f"{i}-th test end, cost {delta/60:.3E} min")
+        print(f"{i}-th test end, e_rel: {e1 * 100:.6f}%, e_abs: {e2:.6f}, cost {delta/60:.3E} min")
     end = time.time_ns()
     delta_total = (end - begin) / 1.0e09
+
+    e_rel = np.asarray(e_rel)
+    e_abs = np.asarray(e_abs)
+    s = f"{len(random_seed_lst)} times optimizations, Relative Error = {np.average(e_rel) * 100:.6f}% "
+    s += f"Absolute Error = {np.average(e_abs):.6f}"
+    print(s)
     print(
         f"End ****{filename}**** test {time.ctime()}, cost {delta_total/60:.3E} min {delta_total/3600:.3E} h"
     )

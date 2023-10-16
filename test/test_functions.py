@@ -5,8 +5,10 @@ import torch
 import numpy as np
 import torch.distributed as dist
 
+
 from functools import partial
 from line_profiler import LineProfiler
+from typing import Tuple
 from loguru import logger
 from torch import optim, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -35,9 +37,13 @@ def vmc_process(
     pre_train: bool = False,
     save_prefix: str = "./tmp/vmc-",
     device: str = "cpu",
-    backend: str = "gloo",
     seed: int = "111",
-) -> None:
+) -> Tuple[float, float]:
+    """
+    Returns:
+        relative_error,
+        abs_error
+    """
     # local_rank = 0
     local_rank = int(os.environ["LOCAL_RANK"])
     setup_seed(seed)
@@ -114,3 +120,7 @@ def vmc_process(
         print(e_lst, seed)
     e_ref = e_lst[0]
     opt_vmc.summary(e_ref, e_lst)
+    e = np.asarray(opt_vmc.e_lst)
+    relative_error = abs(np.average(e[-100:]- e_ref)/e_ref)
+    abs_error = abs(np.average(e[-100:] - e_ref))
+    return relative_error, abs_error

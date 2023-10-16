@@ -405,9 +405,9 @@ class VMCOptimizer:
             ylim1 = np.max(y) + (np.min(y) - e_ref) * y_ratio
             axins.set_xlim(xlim0, xlim1)
             axins.set_ylim(ylim0, ylim1)
-            logger.info(f"Last 100th energy: {np.average(e[-100]):.9f}", master=True)
+            logger.info(f"Last 100th energy: {np.average(e[-100:]):.9f}", master=True)
             logger.info(
-                f"Reference energy: {e_ref:.9f}, error: {abs((np.average(e[-100])-e_ref)/e_ref) * 100:.6f}%"
+                f"Reference energy: {e_ref:.9f}, error: {abs((np.average(e[-100:])-e_ref)/e_ref) * 100:.6f}%"
             )
 
         # plot the L2-norm and max-abs of the gradients
