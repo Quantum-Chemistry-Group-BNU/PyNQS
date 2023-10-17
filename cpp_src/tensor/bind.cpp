@@ -204,7 +204,6 @@ Tensor constrain_make_charts(const Tensor &sym_index) {
     // const auto sym_index_0 = sym_index.to(torch::kCPU);
     // return constrain_make_charts(sym_index_0).to(device);
     return constrain_make_charts_cuda(sym_index);
-  }
 #endif
   }
 }
