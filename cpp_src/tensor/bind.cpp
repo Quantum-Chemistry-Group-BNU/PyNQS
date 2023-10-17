@@ -206,6 +206,7 @@ Tensor constrain_make_charts(const Tensor &sym_index) {
     return constrain_make_charts_cuda(sym_index);
   }
 #endif
+  }
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
