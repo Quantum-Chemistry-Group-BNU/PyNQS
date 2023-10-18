@@ -1,67 +1,15 @@
 # %%
 import random
 import torch
-from typing import Union, List, Callable
-from torch import nn, Tensor
-
 import torch.nn.functional as F
 
-# %%
-# the k-th sites:
-# Nv = k+1 (0<k < sorb), W (Nh, k+1)
-# normalization:
-# x: (..., 0), (.., 1) shape: (nbatch, k, 2)
+from typing import Union, List, Callable, Tuple
+from torch import nn, Tensor
 
-# %%
-from utils.public_function import get_fock_space, given_onstate, state_to_string
+from utils.public_function import get_fock_space, given_onstate, state_to_string, multinomial_tensor
 from libs.C_extension import onv_to_tensor, constrain_make_charts
 from vmc.ansatz import RNNWavefunction, RBMWavefunction
 
-cond_array = torch.tensor(
-    [
-        [0, 1, 0, 1],
-        [0, 1, 1, 0],
-        [0, 1, 1, 1],
-        [1, 0, 0, 1],
-        [1, 0, 1, 0],
-        [1, 0, 1, 1],
-        [1, 1, 0, 1],
-        [1, 1, 1, 0],
-        [1, 1, 1, 1],
-    ],
-    dtype=torch.int64,
-).reshape(-1, 4)
-
-# tensor([10, 6, 14, 9, 5, 13, 11, 7, 15])
-cond_array = (cond_array * torch.tensor([1, 2, 4, 8])).sum(dim=1)
-
-merge_array = torch.tensor(
-    [
-        [[1, 0, 0, 0], [0, 0, 1, 0], [1, 0, 1, 0]],
-        [[0, 1, 0, 0], [0, 0, 0, 1], [0, 1, 0, 1]],
-        [[1, 1, 0, 0], [0, 0, 1, 1], [1, 1, 1, 1]],
-    ],
-    dtype=torch.double,
-).reshape(-1, 4)
-
-
-cond_dict = {}
-for i in range(9):
-    # print(cond_array[i].item(), merge_array[i].tolist())
-    cond_dict[cond_array[i].item()] = tuple(merge_array[i].tolist())
-
-
-def get_cond_idx(x: Tensor):
-    x0 = (x.long() * torch.tensor([1, 2, 4, 8])).sum(dim=1)
-    nbatch = x.size(0)
-    result = torch.zeros(nbatch, 4, dtype=torch.double)
-    for i in range(nbatch):
-        result[i] = torch.tensor(cond_dict[x0[i].item()])
-
-    return result
-
-
-# %%
 class RBMSites(nn.Module):
     ACTIVATION_TYPE = ("cos", "coslinear", "sinc")
 
@@ -174,6 +122,53 @@ class RBMSites(nn.Module):
         )
         return y.to(torch.double)
 
+    def _joint_next_sample_two_sites(self, tensor: Tensor) -> Tensor:
+        """
+        tensor: (nbatch, k)
+        return: x: (nbatch * 4, k + 2)
+        """
+        nbatch, k = tuple(tensor.shape)
+        maybe = [self.empty, self.a, self.b, self.full]
+        x = torch.empty(nbatch * 4, k + 2, **self.factory_kwargs)
+        for i in range(4):
+            x[i * nbatch : (i + 1) * nbatch, -2:] = maybe[i].repeat(nbatch, 1)
+
+        x[:, :-2] = tensor.repeat(4, 1)
+
+        return x
+
+    def _joint_next_sample_one_sites(self, tensor: Tensor) -> Tensor:
+        """
+        tensor: (nbatch, k)
+        return: x: (nbatch * 2, k + 1)
+        """
+        nbatch, k = tuple(tensor.shape)
+        maybe = [self.unoccupied, self.occupied]
+        x = torch.empty(nbatch * 2, k + 1, **self.factory_kwargs)
+        for i in range(2):
+            x[i * nbatch : (i + 1) * nbatch, -1:] = maybe[i].repeat(nbatch, 1)
+
+        x[:, :-1] = tensor.repeat(2, 1)
+
+        return x
+
+    def joint_next_samples(self, unique_sample: Tensor) -> Tensor:
+        """
+        Creative the next possible unique sample
+        unique_sample: (nbatch, k)
+        repeat method: [u1, u1, u1, u1] / [u1, u1]
+        Returns:
+            the next uniques_sample:
+                (nbatch * 2, k +1) if self.ar_sites = 1
+                (nbatch * 4, k + 2) if self.ar_sites = 2
+        """
+        if self.ar_sites == 2:
+            return self._joint_next_sample_two_sites(unique_sample)
+        elif self.ar_sites == 1:
+            return self._joint_next_sample_one_sites(unique_sample)
+        else:
+            raise NotImplementedError
+
     def activation(self, dtype: str) -> Callable[[Tensor], Tensor]:
         if dtype == "cos":
             return torch.cos
@@ -194,7 +189,7 @@ class RBMSites(nn.Module):
 
         value[..., 0] = (self.activation_functions(theta_common + theta0)).prod(-1)
         value[..., 1] = (self.activation_functions(theta_common + theta1)).prod(-1)
-        return F.normalize(value, dim=1, eps=1e-12)
+        return F.normalize(value, dim=1, eps=1e-14)
 
     def forward_one_sites(self, x: Tensor):
         assert x.dim() in (1, 2)
@@ -233,7 +228,7 @@ class RBMSites(nn.Module):
                 # adapt prob
                 sym_index = torch.stack([activations_unocc, activations_occ], dim=1).long()
                 y0.mul_(sym_index)
-                y0 = F.normalize(y0, dim=1, eps=1e-12)
+                y0 = F.normalize(y0, dim=1, eps=1e-14)
 
             # 0 -> [1, 0], 1 -> [0, 1]
             index = F.one_hot(x[:, k].long(), num_classes=2).to(torch.double)
@@ -264,7 +259,7 @@ class RBMSites(nn.Module):
         value[..., 1] = (self.activation_functions(theta_common + theta1)).prod(-1)
         value[..., 2] = (self.activation_functions(theta_common + theta2)).prod(-1)
         value[..., 3] = (self.activation_functions(theta_common + theta3)).prod(-1)
-        return F.normalize(value, dim=1, eps=1e-12)
+        return F.normalize(value, dim=1, eps=1e-14)
 
     def forward_two_sites(self, x: Tensor) -> Tensor:
         assert x.dim() in (1, 2)
@@ -307,10 +302,8 @@ class RBMSites(nn.Module):
                     (sym_index * torch.tensor([1, 2, 4, 8], device=self.device)).sum(dim=1).long()
                 )
                 sym_index = constrain_make_charts(sym_index)
-                # sym_index = get_cond_idx(sym_index)
-                # assert (torch.allclose(sym_index.to(torch.double), sym_index1))
                 y0.mul_(sym_index)
-                y0 = F.normalize(y0, dim=1, eps=1e-12)
+                y0 = F.normalize(y0, dim=1, eps=1e-14)
 
             # if self.symmetry and k == sorb - 2:
             #     prob_k = torch.ones(nbatch, **self.factory_kwargs)
@@ -329,111 +322,112 @@ class RBMSites(nn.Module):
         return prob
 
     @torch.no_grad()
-    def ar_sampling_one_sites(self, n_sample: int) -> Tensor:
-        sample = torch.zeros(n_sample, self.sorb, **self.factory_kwargs)
+    def ar_sampling_one_sites(self, n_sample: int) -> Tuple[Tensor, Tensor]:
+        sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
+        sample_unique = torch.ones(1, 0, dtype=torch.int64, device=self.device)
 
         alpha = self.nele // 2
         beta = self.nele // 2
         baseline_up = alpha - self.sorb // 2
         baseline_down = beta - self.sorb // 2
-        num_up = torch.zeros(n_sample, **self.factory_kwargs)
-        num_down = torch.zeros(n_sample, **self.factory_kwargs)
-        activations = torch.ones(n_sample, device=self.device).to(torch.bool)
 
         for k in range(self.sorb):
-            x0 = sample[:, :k]  # (nbatch, k)
-            y0 = self.psi_one_sites(x0, k)  # (nbatch, 2)
+            x0 = sample_unique  # (n_unique, k)
+            y0 = self.psi_one_sites(x0, k)  # (n_unique, 2)
             lower_up = baseline_up + k // 2
             lower_down = baseline_down + k // 2
 
             if self.symmetry and self.nele // 2 <= k:
-                lower_up = baseline_up + k // 2
-                lower_down = baseline_down + k // 2
+                n_unique = sample_unique.size(0)
+                activations = torch.ones(n_unique, device=self.device).to(torch.bool)
                 if k % 2 == 0:
+                    num_up = sample_unique[:, ::2].sum(dim=1)
                     activations_occ = torch.logical_and(alpha > num_up, activations)
                     activations_unocc = torch.logical_and(lower_up < num_up, activations)
                 else:
+                    num_down = sample_unique[:, 1::2].sum(dim=1)
                     activations_occ = torch.logical_and(beta > num_down, activations)
                     activations_unocc = torch.logical_and(lower_down < num_down, activations)
 
                 # adapt prob
                 sym_index = torch.stack([activations_unocc, activations_occ], dim=1).long()
                 y0.mul_(sym_index)
-                y0 = F.normalize(y0, dim=1, eps=1e-12)
+                y0 = F.normalize(y0, dim=1, eps=1e-14)
 
-            # [0]/[1]
-            value = torch.multinomial(y0.pow(2).clamp_min(1e-12), 1).squeeze()  # (n_sample)
-            sample[:, k] = value
+            counts_i = multinomial_tensor(sample_counts, y0.pow(2)).T.flatten()  # (n_unique * 2,)
+            idx_count = counts_i > 0
+            sample_counts = counts_i[idx_count]
+            sample_unique = self.joint_next_samples(sample_unique)[idx_count]
 
-            if k % 2 == 0:
-                num_up.add_(value)
-            else:
-                num_down.add_(value)
-
-        return sample
+        return sample_unique, sample_counts
 
     @torch.no_grad()
-    def ar_sampling_two_sites(self, n_sample: int) -> Tensor:
-        sample = torch.zeros(n_sample, self.sorb, **self.factory_kwargs)
+    def ar_sampling_two_sites(self, n_sample: int) -> Tuple[Tensor, Tensor]:
+        sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
+        sample_unique = torch.ones(1, 0, dtype=torch.int64, device=self.device)
 
         alpha = self.nele // 2
         beta = self.nele // 2
         baseline_up = alpha - self.sorb // 2
         baseline_down = beta - self.sorb // 2
-        num_up = torch.zeros(n_sample, **self.factory_kwargs)
-        num_down = torch.zeros(n_sample, **self.factory_kwargs)
-        activations = torch.ones(n_sample, device=self.device).to(torch.bool)
 
         for k in range(0, self.sorb, 2):
-            x0 = sample[:, :k]  # (n_sample, k)
-            y0 = self.psi_two_sites(x0, k)  # (n_sample, 4)
+            x0 = sample_unique  # (n_unique, k)
+            y0 = self.psi_two_sites(x0, k)  # (n_unique, 4)
             lower_up = baseline_up + k // 2
             lower_down = baseline_down + k // 2
 
             if self.symmetry and self.nele // 2 <= k:
-                activations_occ0 = torch.logical_and(alpha > num_up, activations).long()
-                activations_unocc0 = torch.logical_and(lower_up < num_up, activations).long()
-                activations_occ1 = torch.logical_and(beta > num_down, activations).long()
-                activations_unocc1 = torch.logical_and(lower_down < num_down, activations).long()
+                n_unique = sample_unique.size(0)
+                num_up = sample_unique[:, ::2].sum(dim=1)
+                num_down = sample_unique[:, 1::2].sum(dim=1)
+                activations = torch.ones(n_unique, device=self.device).to(torch.bool)
+
+                activations_occ0 = torch.logical_and(alpha > num_up, activations)
+                activations_unocc0 = torch.logical_and(lower_up < num_up, activations)
+                activations_occ1 = torch.logical_and(beta > num_down, activations)
+                activations_unocc1 = torch.logical_and(lower_down < num_down, activations)
                 sym_index = torch.stack(
                     [activations_occ0, activations_unocc0, activations_occ1, activations_unocc1],
                     dim=1,
-                )
+                ).long()
                 sym_index = (sym_index * torch.tensor([1, 2, 4, 8], device=self.device)).sum(dim=1)
                 sym_index = constrain_make_charts(sym_index)
-                # sym_index = get_cond_idx(sym_index)
-                # assert (torch.allclose(sym_index.to(torch.double), sym_index1))
                 y0.mul_(sym_index)
-                y0 = F.normalize(y0, dim=1, eps=1e-12)
-
-            # [0]/[1]/[2]/[3]
-            value = torch.multinomial(y0.pow(2).clamp_min(1e-12), 1).squeeze()  # (n_sample)
+                y0 = F.normalize(y0, dim=1, eps=1e-14)
 
             # 0 => (0, 0), 1 =>(1, 0), 2 =>(0, 1), 3 => (1, 1)
-            sample_i = torch.stack([value % 2, value // 2], dim=1).to(torch.double)  # (n_sample, 2)
-            sample[:, k : k + 2] = sample_i
+            counts_i = multinomial_tensor(sample_counts, y0.pow(2)).T.flatten()  # (n_unique * 4)
+            idx_count = counts_i > 0
+            sample_counts = counts_i[idx_count]
+            sample_unique = self.joint_next_samples(sample_unique)[idx_count]
 
-            num_up.add_(sample_i[:, 0])
-            num_down.add_(sample_i[:, 1])
-
-        return sample
+        return sample_unique, sample_counts
 
     def forward(self, x: Tensor) -> Tensor:
         if self.ar_sites == 2:
             return self.forward_two_sites(x)
         elif self.ar_sites == 1:
             return self.forward_one_sites(x)
+        else:
+            raise NotImplementedError
 
     @torch.no_grad()
-    def ar_sampling(self, n_sample: int):
+    def ar_sampling(self, n_sample: int) -> Tuple[Tensor, Tensor]:
+        r"""
+        ar sample
+
+        Returns:
+        --------
+            sample_unique: the unique of sample
+            sample_counts: the counts of unique sample, s.t. sum(sample_counts) = n_sample
+        """
         if self.ar_sites == 2:
             return self.ar_sampling_two_sites(n_sample)
         elif self.ar_sites == 1:
             return self.ar_sampling_one_sites(n_sample)
-
-
-from typing import Tuple
-
+        else:
+            raise NotImplementedError
 
 @torch.no_grad()
 def _numerical_differentiation(
@@ -476,7 +470,7 @@ if __name__ == "__main__":
     from utils.public_function import setup_seed
 
     setup_seed(333)
-    device = "cuda:0"
+    device = "cpu"
     sorb = 8
     nele = 4
     alpha = 1
@@ -493,8 +487,8 @@ if __name__ == "__main__":
         init_weight=0.005,
         symmetry=True,
         common_weight=True,
-        ar_sites=2,
-        activation_type="cos",
+        ar_sites=1,
+        activation_type="coslinear",
     )
     rnn = RNNWavefunction(
         sorb,
@@ -539,8 +533,7 @@ if __name__ == "__main__":
         s = state_to_string(fci_space[i], vcc_one=True)[0]
         dict1[s] = psi[i].detach().norm().item() ** 2
 
-    sample = model.ar_sampling(500000)
-    sample_unique, sample_counts = torch.unique(sample, dim=0, return_counts=True)
+    sample_unique, sample_counts = model.ar_sampling(int(1e12))
     prob = sample_counts / sample_counts.sum()
     dict2 = {}
     for i in range(sample_unique.size(0)):

@@ -6,6 +6,7 @@ import torch.distributed as dist
 import itertools
 import numpy as np
 from torch import Tensor
+from torch.distributions import Binomial
 from typing import List, Type, Tuple, Union, Literal
 from dataclasses import dataclass
 
@@ -425,6 +426,41 @@ class EnterDir:
     def __exit__(self, exc_type, exc_val, exc_tb):
         os.chdir(self.before_path)
 
+def multinomial_tensor(counts_all: Tensor, probs: Tensor, eps: float = 1e-14) -> Tensor:
+    r"""
+    torch.distributions.Multinomial parallel version
+
+    Parameters
+    ----------
+        counts_all (Tensor): sample number, (nbatch)
+        probs (Tensor): probs, (nbatch, length)
+        eps (float): default: 1e-14
+
+    Returns:
+    --------
+        counts (Tensor): the number of unique samples, (nbatch, length)
+    """
+    assert counts_all.dim() == 1
+    nbatch, length = tuple(probs.size())
+    assert nbatch == counts_all.size(0) 
+
+    # [N, length]
+    probs_re = probs / probs.sum(dim=1, keepdim=True)
+    probs_re.div_(probs_re.cumsum(dim=1).clamp_min(eps))
+    counts = torch.ones(probs.shape, dtype=torch.int64, device=probs.device)
+
+    count_others = torch.zeros(nbatch, dtype=torch.int64, device=probs.device)
+    for i in range(length - 1, 0, -1):
+        x = Binomial(counts_all - count_others, probs_re[..., i])
+        count_i = x.sample().to(torch.int64)
+        count_others.add_(count_i)
+        counts[..., i] = count_i
+
+    counts[..., 0] = counts_all - count_others
+
+    del count_others, probs_re
+
+    return counts
 
 if __name__ == "__main__":
     # print(given_onstate(12, 12, 3, 3)) # H20
