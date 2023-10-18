@@ -240,3 +240,30 @@ def merge_rank_sample(idx: Tensor, counts: Tensor, split_idx: Tensor, length: in
     -------
         merge_counts: Tensor, shape:(length,)
     """
+
+def constrain_make_charts(sym_idex: Tensor):
+    r"""
+    Lookup-table about symmetries constrain, see docs/dev-log/ansatz.tex.
+
+    Parameters
+    ----------
+        sym_index: Tensor, nbatch
+    
+    Return:
+    ------
+        values: Tensor (nbatch, 4)
+    """
+    # cond_array = torch.tensor(
+    #     [[0, 1, 0, 1], [0, 1, 1, 0], [0, 1, 1, 1],
+    #     [1, 0, 0, 1], [1, 0, 1, 0], [1, 0, 1, 1],
+    #     [1, 1, 0, 1], [1, 1, 1, 0], [1, 1, 1, 1]], dtype=torch.int64,
+    # ).reshape(-1, 4)
+
+    # # tensor([10, 6, 14, 9, 5, 13, 11, 7, 15])
+    # cond_array = (cond_array * torch.tensor([1, 2, 4, 8])).sum(dim=1)
+
+    # merge_array = torch.tensor(
+    #     [[1, 0, 0, 0], [0, 0, 1, 0], [1, 0, 1, 0],
+    #     [0, 1, 0, 0], [0, 0, 0, 1], [0, 1, 0, 1],
+    #     [1, 1, 0, 0], [0, 0, 1, 1], [1, 1, 1, 1]], dtype=torch.double,
+    # ).reshape(-1, 4)
