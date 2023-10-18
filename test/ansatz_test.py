@@ -10,12 +10,13 @@ import torch.distributed as dist
 from functools import partial
 from loguru import logger
 from typing import List
+from torch import optim
 
 print = partial(print, flush=True)
 
 from test_functions import vmc_process
 
-from utils import Logger
+from utils import Logger, Dtype
 from utils.loggings import dist_print
 from vmc.ansatz import RBMWavefunction, RNNWavefunction, MPSWavefunction
 from ar_rbm import RBMSites
@@ -24,6 +25,7 @@ molecule = [
     "H4-1.20.pth",
     "H4-1.60.pth",
     # "H4-2.00.pth",
+    # "H6-1.20.pth",
     # "H6-1.60.pth",
     # "H6-2.00.pth",
     # "H8-1.20.pth",
@@ -44,6 +46,8 @@ backend = "gloo"
 path = "./molecule/"
 save_path = "./tmp/ansatz-tmp/"
 dist.init_process_group(backend)
+
+
 for mol in molecule:
     if os.path.exists(path + mol):
         filename = os.path.splitext(mol)[0]
@@ -54,6 +58,7 @@ for mol in molecule:
     begin = time.time_ns()
     e_abs: List[float] = []
     e_rel: List[float] = []
+    print(f"Temporary file save path: {save_path}")
     for i, seed in enumerate(random_seed_lst):
         save_file_prefix = save_path + filename + "-"
 
@@ -73,7 +78,7 @@ for mol in molecule:
         )
         sampler_param = {
             "n_sample": 500000,
-            "debug_exact": False,
+            "debug_exact": True,
             "therm_step": 10000,
             "seed": seed,
             "record_sample": False,
@@ -83,6 +88,14 @@ for mol in molecule:
         }
         pre_train_info = {"pre_max_iter": 1000, "interval": 10, "loss_type": "sample"}
 
+        # Optimizer
+        opt_type = optim.AdamW
+        opt_params = {"lr": 0.001, "betas": (0.9, 0.99), "weight_decay": 0.0001}
+        lr_scheduler = optim.lr_scheduler.LambdaLR
+        lambda1 = lambda step: (1 + step / 5000) ** -1
+        lr_sch_params = {"lr_lambda": lambda1}
+        dtype = Dtype(dtype=torch.complex128, device=device)
+
         w1 = open(os.devnull, "w")
         sys.stdout = Logger(save_file_prefix + str(seed) + ".log", w1)
         sys.stderr = Logger(save_file_prefix + str(seed) + ".log", w1)
@@ -91,6 +104,11 @@ for mol in molecule:
         t0 = time.time_ns()
         e1, e2 = vmc_process(
             molecule_file=path + mol,
+            opt_type=opt_type,
+            opt_params=opt_params,
+            lr_scheduler=lr_scheduler,
+            lr_sch_params=lr_sch_params,
+            dtype=dtype,
             ansatz=ar_rbm,
             sampler_param=sampler_param,
             max_iter=200,

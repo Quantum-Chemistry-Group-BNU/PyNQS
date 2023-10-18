@@ -418,17 +418,6 @@ class CITrain:
         # ovlp part is non-zero, other part is zeros
         oloc[idx_sample] = oloc_nonzero
         ovlp = torch.dot(oloc, prob)
-        # torch.save({
-        #     "oloc": oloc,
-        #     "prob": prob,
-        #     "oloc_nonzero": oloc_nonzero,
-        #     "psi_sample": psi_sample,
-        #     "idx_ci": idx_ci,
-        #     "idx_sample": idx_sample,
-        #     "ci_coeff": self.pre_ci_coeff,
-        #     "psi0": psi0,
-        # }, "oloc-prob-ucisd.pth")
-        # print(f"ovlp: {ovlp.norm().item():.20f}")
         del oloc_nonzero
         return ovlp, oloc
 

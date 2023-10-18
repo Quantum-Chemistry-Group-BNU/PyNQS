@@ -12,6 +12,7 @@ from typing import Tuple
 from loguru import logger
 from torch import optim, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim import Optimizer
 from pyscf import fci
 
 from utils import EnterDir
@@ -29,9 +30,14 @@ torch.set_printoptions(precision=6)
 
 def vmc_process(
     molecule_file: str,
+    opt_type: Optimizer,
+    opt_params: dict,
     ansatz: nn.Module,
     sampler_param: dict,
     pre_train_info: dict = None,
+    lr_scheduler = None,
+    lr_sch_params: dict = None,
+    dtype: Dtype = None,
     max_iter: int = 1000,
     interval = 10,
     pre_train: bool = False,
@@ -84,14 +90,15 @@ def vmc_process(
     else:
         model = DDP(ansatz)
         
-    opt_type = optim.Adam
-    opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
+    # opt_type = optim.Adam
+    # opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
     # lr_scheduler = optim.lr_scheduler.MultiStepLR
     # lr_sch_params = {"milestones": [3000, 4500, 5500], "gamma": 0.20}
-    lr_scheduler = optim.lr_scheduler.LambdaLR
-    lambda1 = lambda step: (1 + step / 5000) ** -1
-    lr_sch_params = {"lr_lambda": lambda1}
-    dtype = Dtype(dtype=torch.complex128, device=device)
+    # lr_scheduler = optim.lr_scheduler.LambdaLR
+    # lambda1 = lambda step: (1 + step / 5000) ** -1
+    # lr_sch_params = {"lr_lambda": lambda1}
+    if dtype is None:
+        dtype = Dtype(dtype=torch.complex128, device=device)
     opt_vmc = VMCOptimizer(
         nqs=model,
         opt_type=opt_type,
