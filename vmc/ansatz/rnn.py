@@ -1,26 +1,30 @@
 import torch
 import numpy as np
 import math
+import torch.nn.functional as F
+
 from typing import Optional, Tuple, List
 from torch import nn, Tensor
-
-import torch.nn.functional as F
 from torch.nn.parameter import Parameter
+
+from utils.public_function import multinomial_tensor
 
 
 class RNNWavefunction(nn.Module):
-    def __init__(self,
-                 sorb: int,
-                 nele: int,
-                 num_hiddens: int,
-                 num_layers: int,
-                 num_labels: int,
-                 rnn_type: str = "complex",
-                 symmetry: bool = True,
-                 device: str = None):
+    def __init__(
+        self,
+        sorb: int,
+        nele: int,
+        num_hiddens: int,
+        num_layers: int,
+        num_labels: int,
+        rnn_type: str = "complex",
+        symmetry: bool = True,
+        device: str = None,
+    ):
         super(RNNWavefunction, self).__init__()
         self.device = device
-        self.factory_kwargs = {'device': self.device, "dtype": torch.double}
+        self.factory_kwargs = {"device": self.device, "dtype": torch.double}
         self.sorb = sorb
         self.nele = nele
         self.num_hiddens = num_hiddens
@@ -34,16 +38,20 @@ class RNNWavefunction(nn.Module):
             raise TypeError(f"RNN-nqs types{rnn_type} must be in ('complex', 'real')")
 
         # input_size: spin 1/2
-        self.GRU = nn.GRU(input_size=2,
-                          hidden_size=num_hiddens,
-                          num_layers=num_layers,
-                          batch_first=True,
-                          bias=False,
-                          **self.factory_kwargs)
+        self.GRU = nn.GRU(
+            input_size=2,
+            hidden_size=num_hiddens,
+            num_layers=num_layers,
+            batch_first=True,
+            bias=False,
+            **self.factory_kwargs,
+        )
         # self.GRU = nn.GRUCell(input_size=2, hidden_size=num_hiddens, **self.factory_kwargs)
         self.linear = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
 
         # self.reset_parameter()
+        self.occupied = torch.tensor([1.0], **self.factory_kwargs)
+        self.unoccupied = torch.tensor([0.0], **self.factory_kwargs)
 
     def rnn(self, x: Tensor, hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
         output, hidden_state = self.GRU(x, hidden_state)
@@ -68,10 +76,24 @@ class RNNWavefunction(nn.Module):
         sign = torch.sign(torch.sign(x) + 0.1)
         return 0.5 * (sign + 1.0)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def joint_next_sample(self, tensor: Tensor) -> Tensor:
+        """
+        tensor: (nbatch, k)
+        return: x: (nbatch * 2, k + 1)
+        """
+        nbatch, k = tuple(tensor.shape)
+        maybe = [self.unoccupied, self.occupied]
+        x = torch.empty(nbatch * 2, k + 1, dtype=torch.int64, device=self.device)
+        for i in range(2):
+            x[i * nbatch : (i + 1) * nbatch, -1:] = maybe[i].long().repeat(nbatch, 1)
+        x[:, :-1] = tensor.repeat(2, 1)
+        return x
 
-        assert (x.dim()
-                in (1, 2)), f"GRU: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
+    def forward(self, x: Tensor) -> Tensor:
+        assert x.dim() in (
+            1,
+            2,
+        ), f"GRU: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
         if x.dim() == 1:
             x = x.reshape(1, 1, -1)
         else:
@@ -82,8 +104,8 @@ class RNNWavefunction(nn.Module):
 
         alpha = self.nele // 2
         beta = self.nele // 2
-        baseline_up = (alpha - self.sorb // 2)
-        baseline_down = (beta - self.sorb // 2)
+        baseline_up = alpha - self.sorb // 2
+        baseline_down = beta - self.sorb // 2
         num_up = torch.zeros(nbatch, **self.factory_kwargs)
         num_down = torch.zeros(nbatch, **self.factory_kwargs)
         activations = torch.ones(nbatch, device=self.device).to(torch.bool)
@@ -155,46 +177,59 @@ class RNNWavefunction(nn.Module):
         return wf
 
     @torch.no_grad()
-    def ar_sampling(self, n_sample: int) -> Tensor:
+    def ar_sampling(self, n_sample: int) -> Tuple[Tensor, Tensor]:
         # auto-regressive samples
-        hidden_state = torch.zeros(self.num_layers, n_sample, self.num_hiddens, **self.factory_kwargs)
-        x0 = torch.zeros(n_sample, 1, 2, **self.factory_kwargs)
+        # maintain sample_unique and sample_counts in each iteration.
+        hidden_state = torch.zeros(self.num_layers, 1, self.num_hiddens, **self.factory_kwargs)
+        x0 = torch.zeros(1, 1, 2, **self.factory_kwargs)
+        sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
+        sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
         # x0, hidden_state is constant values
 
         # Constraints Fock space -> FCI space
-        # ref: https://doi.org/10.48550/arXiv.2208.05637, 
+        # ref: https://doi.org/10.48550/arXiv.2208.05637,
         alpha = self.nele // 2
         beta = self.nele // 2
-        baseline_up = (alpha - self.sorb // 2)
-        baseline_down = (beta - self.sorb // 2)
-        num_up = torch.zeros(n_sample, **self.factory_kwargs)
-        num_down = torch.zeros(n_sample, **self.factory_kwargs)
-        sample: List[Tensor] = []  # (n_sample, sorb)
-        activations = torch.ones(n_sample, device=self.device).to(torch.bool)
+        baseline_up = alpha - self.sorb // 2
+        baseline_down = beta - self.sorb // 2
 
         for i in range(self.sorb):
+            # x0: (n_unique, 1, 2)
+            # hidden_state: (num_layers, n_unique, num_hiddens)
+            # y0: (n_unique, 2)
             y0, hidden_state = self.rnn(x0, hidden_state)
-            y0_amp = self.amp_impl(y0)  # (n_sample, 2)
+            y0_amp = self.amp_impl(y0)  # (n_unique, 2)
             lower_up = baseline_up + i // 2
             lower_down = baseline_down + i // 2
-            
+
             if self.symmetry and i >= self.nele // 2:
+                n_unique = sample_unique.size(0)
+                activations = torch.ones(n_unique, device=self.device).to(torch.bool)
                 if i % 2 == 0:
-                    activations_occ = torch.logical_and(alpha > num_up, activations).long()
-                    activations_unocc = torch.logical_and(lower_up < num_up, activations).long()
+                    num_up = sample_unique[:, ::2].sum(dim=1)
+                    activations_occ = torch.logical_and(alpha > num_up, activations)
+                    activations_unocc = torch.logical_and(lower_up < num_up, activations)
                     y0_amp = y0_amp * torch.stack([activations_unocc, activations_occ], dim=1)
                 else:
-                    activations_occ = torch.logical_and(beta > num_down, activations).long()
-                    activations_unocc = torch.logical_and(lower_down < num_down, activations).long()
-                    y0_amp = y0_amp * torch.stack([activations_unocc, activations_occ], dim=1)
+                    num_down = sample_unique[:, 1::2].sum(dim=1)
+                    activations_occ = torch.logical_and(beta > num_down, activations)
+                    activations_unocc = torch.logical_and(lower_down < num_down, activations)
+                # adapt prob
+                sym_idex = torch.stack([activations_unocc, activations_occ], dim=1).long()
+                y0_amp.mul_(sym_idex)
                 y0_amp = F.normalize(y0_amp, dim=1, eps=1e-12)
 
-            sample_i = torch.multinomial(y0_amp.pow(2).clamp_min(1e-12), 1).squeeze()  # (n_sample)
-            sample.append(sample_i)
-            x0 = F.one_hot(sample_i.to(torch.int64),
-                           num_classes=2).to(**self.factory_kwargs).unsqueeze(1)  # (n_sample, 1, 2)
-            if i % 2 == 0:
-                num_up.add_(sample_i)
-            else:
-                num_down.add_(sample_i)
-        return torch.stack(sample, dim=1)
+            counts_i = multinomial_tensor(sample_counts, y0_amp.pow(2)).T.flatten()  # (unique * 2)
+            idx_count = counts_i > 0
+            sample_counts = counts_i[idx_count]
+            sample_unique = self.joint_next_sample(sample_unique)[idx_count]
+
+            # update hidden_state, from: (.., n_unique, ...) to (...,n_unique_next, ...)
+            hidden_state = hidden_state.repeat(1, 2, 1)[:, idx_count]
+            x0 = (
+                F.one_hot(sample_unique[..., i], num_classes=2)
+                .to(**self.factory_kwargs)
+                .unsqueeze(1)
+            )  # (n_unique, 1, 2)
+
+        return sample_unique, sample_counts

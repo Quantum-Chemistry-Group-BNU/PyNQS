@@ -10,6 +10,7 @@ from utils.public_function import get_fock_space, given_onstate, state_to_string
 from libs.C_extension import onv_to_tensor, constrain_make_charts
 from vmc.ansatz import RNNWavefunction, RBMWavefunction
 
+
 class RBMSites(nn.Module):
     ACTIVATION_TYPE = ("cos", "coslinear", "sinc")
 
@@ -176,6 +177,8 @@ class RBMSites(nn.Module):
             return self.cos_linear
         elif dtype == "sinc":
             return torch.sinc
+        else:
+            raise NotImplementedError
 
     def psi_one_sites(self, x: Tensor, k: int) -> Tensor:
         # x: (nbatch, k)
@@ -324,7 +327,7 @@ class RBMSites(nn.Module):
     @torch.no_grad()
     def ar_sampling_one_sites(self, n_sample: int) -> Tuple[Tensor, Tensor]:
         sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
-        sample_unique = torch.ones(1, 0, dtype=torch.int64, device=self.device)
+        sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
 
         alpha = self.nele // 2
         beta = self.nele // 2
@@ -364,7 +367,7 @@ class RBMSites(nn.Module):
     @torch.no_grad()
     def ar_sampling_two_sites(self, n_sample: int) -> Tuple[Tensor, Tensor]:
         sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
-        sample_unique = torch.ones(1, 0, dtype=torch.int64, device=self.device)
+        sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64, )
 
         alpha = self.nele // 2
         beta = self.nele // 2
@@ -402,7 +405,7 @@ class RBMSites(nn.Module):
             sample_counts = counts_i[idx_count]
             sample_unique = self.joint_next_samples(sample_unique)[idx_count]
 
-        return sample_unique, sample_counts
+        return sample_unique.long(), sample_counts
 
     def forward(self, x: Tensor) -> Tensor:
         if self.ar_sites == 2:
@@ -428,6 +431,7 @@ class RBMSites(nn.Module):
             return self.ar_sampling_one_sites(n_sample)
         else:
             raise NotImplementedError
+
 
 @torch.no_grad()
 def _numerical_differentiation(
@@ -465,18 +469,19 @@ def _numerical_differentiation(
 
 
 # %%
-
 if __name__ == "__main__":
     from utils.public_function import setup_seed
 
     setup_seed(333)
-    device = "cpu"
+    device = "cuda"
     sorb = 8
     nele = 4
     alpha = 1
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb)
     length = fock_space.shape[0]
-    fci_space = onv_to_tensor(given_onstate(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2), sorb)
+    fci_space = onv_to_tensor(
+        given_onstate(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb
+    )
     dim = fci_space.size(0)
     # random_order = random.sample(list(range(length)), length)
     # fock_space = fock_space[random_order]
@@ -487,8 +492,9 @@ if __name__ == "__main__":
         init_weight=0.005,
         symmetry=True,
         common_weight=True,
-        ar_sites=1,
+        ar_sites=2,
         activation_type="coslinear",
+        device=device,
     )
     rnn = RNNWavefunction(
         sorb,
@@ -535,6 +541,7 @@ if __name__ == "__main__":
 
     sample_unique, sample_counts = model.ar_sampling(int(1e12))
     prob = sample_counts / sample_counts.sum()
+    print(f"n sample: {sample_counts.sum().item():.4E}")
     dict2 = {}
     for i in range(sample_unique.size(0)):
         s = state_to_string(sample_unique[i], vcc_one=False)[0]
@@ -543,4 +550,4 @@ if __name__ == "__main__":
     print(f"ONV     psi^2   sample-prob")
     for key in dict1.keys():
         if key in dict2.keys():
-            print(f"{key} {dict1[key]:.6f}  {dict2[key]:.6f}")
+            print(f"{key} {dict1[key]:.7f}  {dict2[key]:.7f}")

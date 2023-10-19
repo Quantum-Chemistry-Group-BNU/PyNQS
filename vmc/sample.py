@@ -293,10 +293,8 @@ class Sampler:
         """
         t0 = time.time_ns()
         while True:
-            sample = self.nqs.module.ar_sampling(self.n_sample)  # (n_sample, sorb) 0/1
-
-            # remove duplicate state
-            sample_unique, sample_counts = torch.unique(sample, dim=0, return_counts=True)
+            #  0/1
+            sample_unique, sample_counts = self.nqs.module.ar_sampling(self.n_sample)
 
             if sample_unique.size(0) >= self.max_unique_sample:
                 # reach lower limit of samples or decreased samples times
@@ -316,7 +314,6 @@ class Sampler:
         s += f"unique sample: {sample_counts.sum().item()} -> {sample_counts.size(0)}"
         logger.info(s)
 
-        del sample
         if True:
             # Sample-comm, gather->merge->scatter
             return self.gather_scatter_sample(sample_unique, sample_counts)
