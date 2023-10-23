@@ -59,7 +59,9 @@ def local_energy(
 
     t2 = time.time_ns()
     # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
-    # FIXME: What time remove duplicate onstate, memory consuming.
+    # FIXME: What time remove duplicate onstate, memory consuming,
+    # and has been implemented in wavefunction ansatz,
+    # if testing, use keyword: 'use_unique = False/True'.
     with torch.no_grad():
         # unique, index = torch.unique(comb_x.reshape(-1, bra_len), dim=0, return_inverse=True)
         # unique_x1 = onv_to_tensor(unique, sorb)

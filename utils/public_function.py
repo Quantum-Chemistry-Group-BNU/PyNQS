@@ -232,6 +232,22 @@ def unique_idx(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]
     index = inv_sorted[tot_counts]
     return unique, inverse, index, counts
 
+def unique_consecutive_idx(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """
+    This is similar to np.unique, support 'return_index'
+    XXX: NOT Fully testing
+
+    Returns
+    -------
+        unique, indices, inverse, counts
+    """
+    unique, inverse, counts = torch.unique_consecutive(
+        x, dim=dim, return_inverse=True, return_counts=True
+    )
+    inv_sorted = inverse.argsort() # True is slower
+    tot_counts = torch.cat((counts.new_zeros(1), counts.cumsum(dim=0)))[:-1]
+    index = inv_sorted[tot_counts]
+    return unique, inverse, index, counts
 
 def check_spin_multiplicity(
     state: Tensor, sorb: int, ms: Union[Tuple[int], List[int]] = None

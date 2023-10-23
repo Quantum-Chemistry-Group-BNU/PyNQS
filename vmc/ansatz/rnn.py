@@ -7,7 +7,7 @@ from typing import Optional, Tuple, List
 from torch import nn, Tensor
 from torch.nn.parameter import Parameter
 
-from utils.public_function import multinomial_tensor
+from utils.public_function import multinomial_tensor, unique_consecutive_idx
 
 
 class RNNWavefunction(nn.Module):
@@ -89,18 +89,27 @@ class RNNWavefunction(nn.Module):
         x[:, :-1] = tensor.repeat(2, 1)
         return x
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, use_unique: bool = None) -> Tensor:
         assert x.dim() in (
             1,
             2,
         ), f"GRU: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
+
+        if use_unique is None:
+            use_unique = not x.requires_grad
         if x.dim() == 1:
-            x = x.reshape(1, 1, -1)
+            x = x.unsqueeze(0)
+
+        if use_unique:
+            # remove duplicate onstate, dose not support auto-backward
+            x_unique, inverse = torch.unique(x, dim=0, return_inverse=True)
         else:
-            x = x.unsqueeze(1)
-        x = ((x + 1) / 2).to(torch.int64)  # 1/-1 -> 1/0
+            x_unique = x
+            inverse = None
+        x_unique = x_unique.unsqueeze(1)
+        x_unique = ((x_unique + 1) / 2).to(torch.int64)  # 1/-1 -> 1/0
         # (nbatch, seq_len, sorb), seq_len = 1, 1: occupied, 0: unoccupied
-        nbatch, _, dim = tuple(x.size())
+        nbatch, _, dim = tuple(x_unique.size())
 
         alpha = self.nele // 2
         beta = self.nele // 2
@@ -111,15 +120,55 @@ class RNNWavefunction(nn.Module):
         activations = torch.ones(nbatch, device=self.device).to(torch.bool)
 
         # Initialize the RNN hidden state
-        hidden_state = torch.zeros(self.num_layers, nbatch, self.num_hiddens, **self.factory_kwargs)
+        if use_unique:
+            hidden_state: Tensor = None
+        else:
+            hidden_state = torch.zeros(
+                self.num_layers, nbatch, self.num_hiddens, **self.factory_kwargs
+            )
         x0 = torch.zeros(nbatch, 1, 2, **self.factory_kwargs)
         # x0, hidden_state is constant values
-        phase: List[Tensor] = []
-        amp: List[Tensor] = []
+        # phase: List[Tensor] = []
+        # amp: List[Tensor] = []
+        amp = torch.ones(nbatch, **self.factory_kwargs)
+        phase = torch.zeros(nbatch, **self.factory_kwargs)
 
+        inverse_before: Tensor = None
         for i in range(dim):
-            # x0: (nbatch, 1, 2)
-            y0, hidden_state = self.rnn(x0, hidden_state)  # (nbatch, 2)
+            if use_unique:
+                # notice, the shape of hidden_state is different in i-th cycle,
+                # so, hidden_state must be indexed using inverse_before[index_i] or inverse_i
+                # coming from the torch.unique. this process is pretty convoluted.
+                if i <= self.sorb // 2:
+                    # x0: (n_unique, 2), inverse_i: (nbatch), index_i: (unique)
+                    if i == 0:
+                        x0 = torch.zeros(1, 1, 2, **self.factory_kwargs)
+                        inverse_i = torch.zeros(nbatch, dtype=torch.int64, device=self.device)
+                    else:
+                        # input tensor is already sorted, torch.unique_consecutive is faster.
+                        inverse_i, index_i = unique_consecutive_idx(
+                            x_unique[..., :i].squeeze(1), dim=0
+                        )[1:3]
+                        x0 = x0[index_i]
+                    if i == 0:
+                        hidden_state = torch.zeros(
+                            self.num_layers, x0.size(0), self.num_hiddens, **self.factory_kwargs
+                        )
+                    else:
+                        # change hidden_state shape
+                        # hidden_state: (n_layers, n_unique, n_hiddens)
+                        hidden_state = hidden_state[:, inverse_before[index_i]]
+                    inverse_before = inverse_i
+                # change (n_layers, n_unique, n_hidden) => (n_layers, nbatch, n_hidden)
+                if i == self.sorb // 2 + 1:
+                    hidden_state = hidden_state[:, inverse_i]
+                y0, hidden_state = self.rnn(x0, hidden_state)
+                if i <= self.sorb // 2:
+                    y0 = y0[inverse_i]
+            # not use unique
+            else:
+                # x0: (nbatch, 1, 2)
+                y0, hidden_state = self.rnn(x0, hidden_state)  # (nbatch, 2)
             # if symmetry and i >= dim - 2:
             #     # placeholders only
             #     y0_amp = torch.empty(nbatch, 2, **self.factory_kwargs) # (nbatch, 2)
@@ -144,37 +193,36 @@ class RNNWavefunction(nn.Module):
                 y0_amp = F.normalize(y0_amp, dim=1, eps=1e-12)
 
             if i % 2 == 0:
-                num_up.add_(x[..., i].squeeze(1))
+                num_up.add_(x_unique[..., i].squeeze(1))
             else:
-                num_down.add_(x[..., i].squeeze(1))
+                num_down.add_(x_unique[..., i].squeeze(1))
 
-            x0 = F.one_hot(x[..., i], num_classes=2).to(self.factory_kwargs["dtype"])
+            x0 = F.one_hot(x_unique[..., i], num_classes=2).to(self.factory_kwargs["dtype"])
 
             # if using Constraints, the the prob of the last two orbital must be is 1.0
             # if symmetry and i >= dim -2:
             #     amp_i = torch.ones(nbatch, **self.factory_kwargs)  # (nbatch)
             # else:
             amp_i = (y0_amp * x0.squeeze(1)).sum(dim=1)  # (nbatch)
-            amp.append(amp_i)
+            amp.mul_(amp_i)
+            # amp.append(amp_i)
             if self.compute_phase:
                 phase_i = (y0_phase * x0.squeeze(1)).sum(dim=1)  # (nbatch)
-                phase.append(phase_i)
-
-        # breakpoint()
-        # torch.set_printoptions(linewidth=200)
-        # print(f"prob.sqrt():\n {torch.stack(amp, dim=1)}")
-        # print(x.squeeze(1))
+                phase.add_(phase_i)
 
         # Complex |psi> = \exp(i phase) * \sqrt(prob)
         # Real positive |psi> = \sqrt(prob)
-        amp = torch.stack(amp, dim=1).prod(dim=1)  # (nbatch)
+        # amp = torch.stack(amp, dim=1).prod(dim=1)  # (nbatch)
         if self.compute_phase:
-            phase = torch.stack(phase, dim=1).sum(dim=1)  # (nbatch)
+            # phase = torch.stack(phase, dim=1).sum(dim=1)  # (nbatch)
             wf = torch.complex(torch.zeros_like(phase), phase).exp() * amp
         else:
             wf = amp
 
-        return wf
+        if use_unique:
+            return wf[inverse]
+        else:
+            return wf
 
     @torch.no_grad()
     def ar_sampling(self, n_sample: int) -> Tuple[Tensor, Tensor]:

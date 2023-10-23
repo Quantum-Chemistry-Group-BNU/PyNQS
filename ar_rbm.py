@@ -194,13 +194,21 @@ class RBMSites(nn.Module):
         value[..., 1] = (self.activation_functions(theta_common + theta1)).prod(-1)
         return F.normalize(value, dim=1, eps=1e-14)
 
-    def forward_one_sites(self, x: Tensor):
+    def forward_one_sites(self, x: Tensor, use_unique: bool = None) -> Tensor:
         assert x.dim() in (1, 2)
 
         if x.dim() == 1:
             x = x.unsqueeze(0)
 
         x = (x + 1) / 2  # 1/-1 -> 1/0
+        if use_unique is None:
+            use_unique = not x.requires_grad
+        if use_unique:
+            # remove duplicate onstate, dose not support auto-backward
+            x_unique, index_unique = torch.unique(x, dim=0, return_inverse=True)
+        else:
+            x_unique = x
+            index_unique = None
         nbatch, sorb = tuple(x.size())  # (nbatch, sorb)
 
         prob_lst: List[Tensor] = []
@@ -215,8 +223,27 @@ class RBMSites(nn.Module):
         activations = torch.ones(nbatch, device=self.device).to(torch.bool)
 
         for k in range(sorb):
-            x0 = x[:, :k]  # (nbatch, k)
-            y0 = self.psi_one_sites(x0, k)  # (nbatch, 2)
+            if use_unique:
+                if k == 0:
+                    x0 = x_unique[:1, :k]  # empty tensor, shape: [1, 0]
+                    index_unique_i = torch.zeros(nbatch, dtype=torch.int64, device=self.device)
+                elif 1 <= k <= sorb // 2:
+                    # x0: (n_unique, 2), index_unique_i: (nbatch)
+                    # input tensor is already sorted, torch.unique_consecutive is faster.
+                    x0, index_unique_i = torch.unique_consecutive(
+                        x_unique[:, :k], dim=0, return_inverse=True
+                    )
+                else:
+                    # Repeated states may be sparse, so not unique
+                    x0 = x_unique[:, :k]
+                    index_unique_i = None
+                if k <= sorb // 2:
+                    y0 = self.psi_one_sites(x0, k)[index_unique_i]  # (nbatch, 2)
+                else:
+                    y0 = self.psi_one_sites(x0, k)  # (nbatch, 2)
+            else:
+                x0 = x_unique[:, :k]  # (nbatch, k)
+                y0 = self.psi_one_sites(x0, k)
 
             if self.symmetry and self.nele // 2 <= k:
                 lower_up = baseline_up + k // 2
@@ -234,17 +261,20 @@ class RBMSites(nn.Module):
                 y0 = F.normalize(y0, dim=1, eps=1e-14)
 
             # 0 -> [1, 0], 1 -> [0, 1]
-            index = F.one_hot(x[:, k].long(), num_classes=2).to(torch.double)
+            index = F.one_hot(x_unique[:, k].long(), num_classes=2).to(torch.double)
             prob_k = (y0 * index).sum(dim=1)
             prob.mul_(prob_k)
             prob_lst.append(prob_k)
 
             if k % 2 == 0:
-                num_up.add_(x[..., k])
+                num_up.add_(x_unique[..., k])
             else:
-                num_down.add_(x[..., k])
+                num_down.add_(x_unique[..., k])
         # print(torch.stack(prob_lst, dim=1))
-        return prob
+        if use_unique:
+            return prob[index_unique]
+        else:
+            return prob
 
     def psi_two_sites(self, x: Tensor, k: int) -> Tensor:
         # x: (nbatch, k)
@@ -264,15 +294,23 @@ class RBMSites(nn.Module):
         value[..., 3] = (self.activation_functions(theta_common + theta3)).prod(-1)
         return F.normalize(value, dim=1, eps=1e-14)
 
-    def forward_two_sites(self, x: Tensor) -> Tensor:
+    def forward_two_sites(self, x: Tensor, use_unique: bool = None) -> Tensor:
         assert x.dim() in (1, 2)
 
         if x.dim() == 1:
             x = x.unsqueeze(0)
 
         x = (x + 1) / 2  # 1/-1 -> 1/0
-        # 0/1
-        nbatch, sorb = tuple(x.size())  # (nbatch, sorb)
+        if use_unique is None:
+            use_unique = not x.requires_grad
+        if use_unique:
+            # remove duplicate onstate, dose not support auto-backward
+            x_unique, inverse = torch.unique(x, dim=0, return_inverse=True)
+        else:
+            x_unique = x
+            inverse = None
+
+        nbatch, sorb = tuple(x_unique.size())  # (nbatch, sorb)
 
         prob_lst: List[Tensor] = []
         prob = torch.ones(nbatch, **self.factory_kwargs)
@@ -287,8 +325,27 @@ class RBMSites(nn.Module):
         activations = torch.ones(nbatch, device=self.device).to(torch.bool)
 
         for k in range(0, sorb, 2):
-            x0 = x[:, :k]  # (nbatch, k)
-            y0 = self.psi_two_sites(x0, k)  # (nbatch, 4)
+            if use_unique:
+                if k == 0:
+                    x0 = x_unique[:1, :k]  # empty tensor (1, 0)
+                    inverse_i = torch.zeros(nbatch, dtype=torch.int64, device=self.device)
+                elif 1 <= k <= sorb // 2:
+                    # x0: (n_unique, 2), index_unique_i: (nbatch)
+                    # input tensor is already sorted, torch.unique_consecutive is faster.
+                    x0, inverse_i = torch.unique_consecutive(
+                        x_unique[:, :k], dim=0, return_inverse=True
+                    )
+                else:
+                    # Repeated states may be sparse, so not unique
+                    x0 = x_unique[:, :k]
+                    inverse_i = None
+                if k <= sorb // 2:
+                    y0 = self.psi_two_sites(x0, k)[inverse_i]  # (nbatch, 4)
+                else:
+                    y0 = self.psi_two_sites(x0, k)  # (nbatch, 4)
+            else:
+                x0 = x[:, :k]  # (nbatch, k)
+                y0 = self.psi_two_sites(x0, k)  # (nbatch, 4)
 
             if self.symmetry and self.nele // 2 <= k:
                 lower_up = baseline_up + k // 2
@@ -311,18 +368,20 @@ class RBMSites(nn.Module):
             # if self.symmetry and k == sorb - 2:
             #     prob_k = torch.ones(nbatch, **self.factory_kwargs)
             # else:
-            index = F.one_hot((x[:, k : k + 2] * baselines).sum(dim=1).long(), num_classes=4).to(
-                torch.double
-            )
+            index = F.one_hot(
+                (x_unique[:, k : k + 2] * baselines).sum(dim=1).long(), num_classes=4
+            ).to(torch.double)
             prob_k = (y0 * index).sum(dim=1)
-
             prob.mul_(prob_k)
-            # prob_lst.append(prob_k)
+            prob_lst.append(prob_k)
 
-            num_up.add_(x[..., k])
-            num_down.add_(x[..., k + 1])
+            num_up.add_(x_unique[..., k])
+            num_down.add_(x_unique[..., k + 1])
         # print(torch.stack(prob_lst, dim=1))
-        return prob
+        if use_unique:
+            return prob[inverse]
+        else:
+            return prob
 
     @torch.no_grad()
     def ar_sampling_one_sites(self, n_sample: int) -> Tuple[Tensor, Tensor]:
@@ -367,7 +426,7 @@ class RBMSites(nn.Module):
     @torch.no_grad()
     def ar_sampling_two_sites(self, n_sample: int) -> Tuple[Tensor, Tensor]:
         sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
-        sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64, )
+        sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
 
         alpha = self.nele // 2
         beta = self.nele // 2
@@ -407,11 +466,11 @@ class RBMSites(nn.Module):
 
         return sample_unique.long(), sample_counts
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, use_unique: bool = None) -> Tensor:
         if self.ar_sites == 2:
-            return self.forward_two_sites(x)
+            return self.forward_two_sites(x, use_unique=use_unique)
         elif self.ar_sites == 1:
-            return self.forward_one_sites(x)
+            return self.forward_one_sites(x, use_unique=use_unique)
         else:
             raise NotImplementedError
 
@@ -530,11 +589,18 @@ if __name__ == "__main__":
         print(_numerical_differentiation(model, fci_space[12].reshape(-1, sorb))[0].sum(dim=0))
         exit()
     dict1 = {}
-    psi = model(fci_space)
+    from libs.C_extension import get_comb_tensor
+    fci_space = given_onstate(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device)
+    comb_x, x1 = get_comb_tensor(fci_space, sorb, nele, nele//2, nele//2, True)
+    psi = model(onv_to_tensor(fci_space, sorb), use_unique=True)
     print(f"FCI-space")
-    print((fci_space + 1) / 2)
     print(f"Psi^2")
     print((psi * psi.conj()).sum().item())
+    for i in range(comb_x.size(0)):
+        psi1 = model(x1[i], use_unique=False)
+        psi2 = model(x1[i], use_unique=True)
+        assert(torch.allclose(psi1, psi2, atol=1e-10))
+    fci_space = onv_to_tensor(fci_space, sorb)
     for i in range(dim):
         s = state_to_string(fci_space[i], vcc_one=True)[0]
         dict1[s] = psi[i].detach().norm().item() ** 2

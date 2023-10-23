@@ -82,6 +82,7 @@ class VMCOptimizer:
             electron_info.h2e = self.h2e
         else:
             self.model_raw = nqs
+        # TODO: https://pytorch.org/docs/stable/notes/ddp.html torch.compile(ddp_model)
         self.model = torch.compile(self.model_raw) if self.using_compile else self.model_raw
 
         # Read parameters from an external model or model

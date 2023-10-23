@@ -95,8 +95,17 @@ class RBMWavefunction(nn.Module):
         else:
             return ((da.detach(), db.detach(), dw.detach()), self.psi(x))
 
-    def forward(self, x: Tensor, dlnPsi: bool = False):
+    def forward(self, x: Tensor, dlnPsi: bool = False, use_unique: bool = None):
         if dlnPsi:
             return self.analytic_derivate(x)
         else:
-            return self.psi(x)
+            if use_unique is None:
+                use_unique: bool = not x.requires_grad
+            if use_unique:
+                x_unique, inverse = torch.unique(x, dim=0, return_inverse=True)
+            else:
+                x_unique = x
+            if use_unique:
+                return self.psi(x_unique)[inverse]
+            else:
+                return self.pis(x_unique)
