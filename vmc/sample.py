@@ -184,7 +184,7 @@ class Sampler:
         self.time_sample += 1
         delta = time.time_ns() - t0
         logger.debug(
-            f"rank: {self.rank}: Completed Sampling and calculating eloc {delta/1.0E09:.3E} s"
+            f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s"
         )
 
         if self.is_cuda:
@@ -311,7 +311,7 @@ class Sampler:
         delta = (time.time_ns() - t0) / 1.0e09
 
         s = f"Completed {self.method_sample} Sampling: {delta:.3E} s, "
-        s += f"unique sample: {sample_counts.sum().item()} -> {sample_counts.size(0)}"
+        s += f"unique sample: {sample_counts.sum().item():.3E} -> {sample_counts.size(0)}"
         logger.info(s)
 
         if True:
