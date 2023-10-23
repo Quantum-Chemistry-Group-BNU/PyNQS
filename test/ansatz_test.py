@@ -16,7 +16,7 @@ print = partial(print, flush=True)
 
 from test_functions import vmc_process
 
-from utils import Logger, Dtype
+from utils import Logger, Dtype, setup_seed
 from utils.loggings import dist_print
 from vmc.ansatz import RBMWavefunction, RNNWavefunction, MPSWavefunction
 from ar_rbm import RBMSites
@@ -60,8 +60,9 @@ for mol in molecule:
     e_rel: List[float] = []
     print(f"Temporary file save path: {save_path}")
     for i, seed in enumerate(random_seed_lst):
-        save_file_prefix = save_path + filename + "-"
+        save_file_prefix = save_path + filename + "-1-"
 
+        setup_seed(seed)
         x = torch.load(path + mol, map_location="cpu")
         sorb = x["sorb"]
         nele = x["nele"]
@@ -76,21 +77,31 @@ for mol in molecule:
             ar_sites=2,
             activation_type="cos",
         )
+        rnn = RNNWavefunction(
+            sorb,
+            nele,
+            num_hiddens=sorb,
+            num_layers=1,
+            num_labels=2,
+            rnn_type="complex",
+            symmetry=True,
+            device=device,
+        )
         sampler_param = {
-            "n_sample": 500000,
+            "n_sample": int(1.0e12),
             "debug_exact": True,
             "therm_step": 10000,
             "seed": seed,
             "record_sample": False,
             "max_memory": 4,
-            "alpha": 0.05,
+            "alpha": 0.025,
             "method_sample": "AR",
         }
         pre_train_info = {"pre_max_iter": 1000, "interval": 10, "loss_type": "sample"}
 
         # Optimizer
         opt_type = optim.AdamW
-        opt_params = {"lr": 0.001, "betas": (0.9, 0.99), "weight_decay": 0.0001}
+        opt_params = {"lr": 0.001, "betas": (0.9, 0.99), "weight_decay": 0.001}
         lr_scheduler = optim.lr_scheduler.LambdaLR
         lambda1 = lambda step: (1 + step / 5000) ** -1
         lr_sch_params = {"lr_lambda": lambda1}
@@ -109,9 +120,9 @@ for mol in molecule:
             lr_scheduler=lr_scheduler,
             lr_sch_params=lr_sch_params,
             dtype=dtype,
-            ansatz=ar_rbm,
+            ansatz=rnn,
             sampler_param=sampler_param,
-            max_iter=200,
+            max_iter=100,
             pre_train_info=pre_train_info,
             pre_train=False,
             save_prefix=save_file_prefix,
