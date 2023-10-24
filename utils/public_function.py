@@ -14,6 +14,9 @@ from libs.C_extension import onv_to_tensor, tensor_to_onv
 
 
 def check_para(bra: Tensor):
+    r"""
+    check type of dtype is torch.uint8
+    """
     if bra.dtype != torch.uint8:
         raise Exception(f"The type of bra {bra.dtype} must be torch.uint8")
 
@@ -227,10 +230,11 @@ def unique_idx(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]
     unique, inverse, counts = torch.unique(
         x, dim=dim, sorted=True, return_inverse=True, return_counts=True
     )
-    inv_sorted = inverse.argsort(stable=True) # True is slower
+    inv_sorted = inverse.argsort(stable=True)  # True is slower
     tot_counts = torch.cat((counts.new_zeros(1), counts.cumsum(dim=0)))[:-1]
     index = inv_sorted[tot_counts]
     return unique, inverse, index, counts
+
 
 def unique_consecutive_idx(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """
@@ -244,10 +248,11 @@ def unique_consecutive_idx(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Ten
     unique, inverse, counts = torch.unique_consecutive(
         x, dim=dim, return_inverse=True, return_counts=True
     )
-    inv_sorted = inverse.argsort() # True is slower
+    inv_sorted = inverse.argsort()  # True is slower
     tot_counts = torch.cat((counts.new_zeros(1), counts.cumsum(dim=0)))[:-1]
     index = inv_sorted[tot_counts]
     return unique, inverse, index, counts
+
 
 def check_spin_multiplicity(
     state: Tensor, sorb: int, ms: Union[Tuple[int], List[int]] = None
@@ -442,6 +447,7 @@ class EnterDir:
     def __exit__(self, exc_type, exc_val, exc_tb):
         os.chdir(self.before_path)
 
+
 def multinomial_tensor(counts_all: Tensor, probs: Tensor, eps: float = 1e-14) -> Tensor:
     r"""
     torch.distributions.Multinomial parallel version
@@ -458,12 +464,12 @@ def multinomial_tensor(counts_all: Tensor, probs: Tensor, eps: float = 1e-14) ->
     """
     assert counts_all.dim() == 1
     nbatch, length = tuple(probs.size())
-    assert nbatch == counts_all.size(0) 
+    assert nbatch == counts_all.size(0)
 
     # [N, length]
     probs_re = probs / probs.sum(dim=1, keepdim=True)
     probs_re.div_(probs_re.cumsum(dim=1).clamp_min(eps))
-    counts = torch.ones(probs.shape, dtype=torch.int64, device=probs.device)
+    counts = torch.empty(probs.shape, dtype=torch.int64, device=probs.device)
 
     count_others = torch.zeros(nbatch, dtype=torch.int64, device=probs.device)
     for i in range(length - 1, 0, -1):
@@ -477,6 +483,68 @@ def multinomial_tensor(counts_all: Tensor, probs: Tensor, eps: float = 1e-14) ->
     del count_others, probs_re
 
     return counts
+
+
+def torch_lexsort(keys: Union[List[Tensor], Tuple[Tensor]], dim=-1) -> Tensor:
+    r"""
+    Pytorch implementation of np.lexsort
+
+    ref: https://github.com/pyg-team/pytorch_geometric/issues/7743
+
+    Parameters
+    ----------
+        keys (List[Tensor] or Tuple[Tensor]): (k, N) Tensor or tuple containing k (N,)-shaped sequences
+        dim (int): default: -1
+
+    Returns
+    -------
+        idx (Tensor), (N, ) torch.int64
+    """
+    if len(keys) < 2:
+        raise ValueError(f"keys must be at least 2 sequences, but {len(keys)=}.")
+
+    idx = keys[0].argsort(dim=dim, stable=True)
+    for k in keys[1:]:
+        idx = idx.gather(dim, k.gather(dim, idx).argsort(dim=dim, stable=True))
+
+    return idx
+
+
+def torch_sort_onv(bra: Tensor) -> Tensor:
+    r"""
+    sort onv by binary number using torch_lexsort(similar to np.lexsort) functions
+
+    Parameters
+    ----------
+        bra (Tensor), (nbatch, k), type: torch.uint8 or torch.double
+
+    Returns
+    -------
+        idx (Tensor), (nbatch, ) torch.int64
+
+    Examples
+    --------
+    >>> bra = torch.tensor([[ 3, 0, 0, 0, 0, 0, 0, 0],
+            [12, 0, 0, 0, 0, 0, 0, 0],
+            [ 9, 0, 0, 0, 0, 0, 0, 0],
+            [ 6, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8))
+    >>> idx = torch_sort_onv(bra)
+    >>> idx
+    tensor([0, 3, 2, 1])
+    >>> bra[idx]
+    tensor([[ 3, 0, 0, 0, 0,  0, 0, 0],
+            [ 6, 0, 0, 0, 0, 0, 0, 0],
+            [ 9, 0, 0, 0, 0, 0, 0, 0],
+            [12, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
+    """
+    assert bra.dim() == 2
+
+    keys = list(map(torch.flatten, bra.split(1, dim=1)))
+    idx = torch_lexsort(keys=keys)
+
+    del keys
+    return idx
+
 
 if __name__ == "__main__":
     # print(given_onstate(12, 12, 3, 3)) # H20
