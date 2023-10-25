@@ -1,7 +1,6 @@
 from typing import Tuple
 from torch import Tensor
 
-
 def tensor_to_onv(bra: Tensor, sorb: int) -> Tensor:
     r"""tensor_to_onv(bra, sorb) ->Tensor
      notice: the dim of bra: 1 or 2, dtype = torch.uint8
@@ -10,19 +9,18 @@ def tensor_to_onv(bra: Tensor, sorb: int) -> Tensor:
         bra(Tensor): the states using 0/1 representation, dtype: torch.uint8
             0: unoccupied, 1:occupied
         sorb(int): the number of spin orbital
-    Returns: 
+    Returns:
         the occupied number vector(onv) of the bra tensor(2D), dtype:torch.uint8
 
 
     Example::
-    >>> bra = torch.tensor([1, 1, 1, 1, 0, 0, 0, 0], dtype=torch.uint8) 
+    >>> bra = torch.tensor([1, 1, 1, 1, 0, 0, 0, 0], dtype=torch.uint8)
     >>> sorb = 8
     >>> output = tensor_to_onv(bra, sorb)
     >>> output
     tensor([[0b1111, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
     """
     ...
-
 
 def onv_to_tensor(bra: Tensor, sorb: int) -> Tensor:
     r"""onv_to_tensor(bra, sorb) ->Tensor
@@ -31,7 +29,7 @@ def onv_to_tensor(bra: Tensor, sorb: int) -> Tensor:
     Args:
         bra(Tensor): the occupied number vector(onv), dtype: torch.uint8
         sorb(int): the number of spin orbital
-    Returns: 
+    Returns:
         the states of the bra tensor(2D), dtype: torch.double
          -1: unoccupied, 1:occupied
 
@@ -45,9 +43,9 @@ def onv_to_tensor(bra: Tensor, sorb: int) -> Tensor:
     """
     ...
 
-
-def get_comb_tensor(bra: Tensor, sorb: int, nele: int,
-                    noA: int, noB: int, flag_bit: bool = False) -> Tuple[Tensor, Tensor]:
+def get_comb_tensor(
+    bra: Tensor, sorb: int, nele: int, noA: int, noB: int, flag_bit: bool = False
+) -> Tuple[Tensor, Tensor]:
     r"""Compute all Singles and Doubles excitation for the given bra tensor
      Singles and Doubles excitation: ncomb = nSa + nSb + nDaa + nDbb + nDab + 1
     nSa = noA * nvA, nSb = noB * nvB
@@ -77,7 +75,7 @@ def get_comb_tensor(bra: Tensor, sorb: int, nele: int,
     >>> bra = torch.tensor([[0b1100, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
     >>> nele = 2; sorb = 4; noA = 1; noB = 1; flag_bit = True
     >>> onv, states = get_comb_tensor(bra, sorb, nele, noA, noB, flag_bit)
-    >>> onv 
+    >>> onv
     tensor([[[12, 0, 0, 0, 0, 0, 0, 0],
          [ 9, 0, 0, 0, 0, 0, 0, 0],
          [ 6, 0, 0, 0, 0, 0, 0, 0],
@@ -90,16 +88,16 @@ def get_comb_tensor(bra: Tensor, sorb: int, nele: int,
     """
     ...
 
-
-def get_hij_torch(bra: Tensor, ket: Tensor,
-                  h1e: Tensor, h2e: Tensor, sorb: int, nele: int) -> Tensor:
+def get_hij_torch(
+    bra: Tensor, ket: Tensor, h1e: Tensor, h2e: Tensor, sorb: int, nele: int
+) -> Tensor:
     r"""Compute the matrix element <i|H|j> using Slater-Condon Rules
         see: Szabo A, Ostlund N S. Modern quantum chemistry and
          http://vergil.chemistry.gatech.edu/notes/permsymm/permsymm.pdf
          and https://doi.org/10.48550/arXiv.1311.6244
 
 
-    Notes: 
+    Notes:
         the dim of bra: 2(n, onv), ket: 2 or 3(m, onv) or (n, ncomb, onv)
         ncomb: all Singles and Doubles for the given onv
 
@@ -123,15 +121,22 @@ def get_hij_torch(bra: Tensor, ket: Tensor,
     """
     ...
 
-
-def MCMC_sample(model_file: str, initial_state: Tensor, state_sample: Tensor,
-                psi_sample: Tensor, sorb: int, nele: int,
-                noA: int, noB: int, seed: int, n_sweep: int, therm_step: int) -> float:
-    ...
-
-
-def spin_flip_rand(bra: Tensor, sorb: int, nele: int,
-                   noA: int, noB: int, seed: int) -> Tuple[Tensor, Tensor]:
+def MCMC_sample(
+    model_file: str,
+    initial_state: Tensor,
+    state_sample: Tensor,
+    psi_sample: Tensor,
+    sorb: int,
+    nele: int,
+    noA: int,
+    noB: int,
+    seed: int,
+    n_sweep: int,
+    therm_step: int,
+) -> float: ...
+def spin_flip_rand(
+    bra: Tensor, sorb: int, nele: int, noA: int, noB: int, seed: int
+) -> Tuple[Tensor, Tensor]:
     r"""
     Flip the spin randomly (restricted to SD excitation) in MCMC sample
 
@@ -156,29 +161,28 @@ def spin_flip_rand(bra: Tensor, sorb: int, nele: int,
     >>> nele = 4; sorb = 8; noA = 2; noB = 2; seed = 2023
     >>> states, onv = spin_flip_rand(bra, sorb, nele, sorb, noA, noB, seed)
     >>> states
-    tensor([-1., 1., -1., 1., 1., -1., 1., -1.], dtype=torch.float64) 
+    tensor([-1., 1., -1., 1., 1., -1., 1., -1.], dtype=torch.float64)
     >>> onv
     tensor([90, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8) # bin(90): 0b01011010
     >>> states, onv = spin_flip_rand(bra, sorb, nele, sorb, noA, noB, seed)
     >>> states
-    tensor([ 1., 1., -1., -1., 1., 1., -1., -1.], dtype=torch.float64) 
+    tensor([ 1., 1., -1., -1., 1., 1., -1., -1.], dtype=torch.float64)
     >>> onv
     tensor([51, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8) # bin(51): 0b00110011
     """
     ...
 
-
-def mps_vbatch(data: Tensor, index: Tensor, nphysical: int,
-               batch: int = 5000) -> Tuple[Tensor, Tensor]:
+def mps_vbatch(
+    data: Tensor, index: Tensor, nphysical: int, batch: int = 5000
+) -> Tuple[Tensor, Tensor]:
     r"""
-    variable batch matrix and vector product using magma_dgemv_vbatch or cycle, 
+    variable batch matrix and vector product using magma_dgemv_vbatch or cycle,
             default: batch: 5000, if using cpu, batch is placeholder"
      index(Tensor): shape: (3, nphysical, nbatch) ->[ptr_begin, dr, dc]
     Args:
         data(Tensor):
         flops(Tensor): each physical flops in per batch. shape: (nbatch, nphysical)
     """
-
 
 def permute_sgn(image2: Tensor, onstate: Tensor, sorb: int) -> Tensor:
     r"""
@@ -193,11 +197,17 @@ def permute_sgn(image2: Tensor, onstate: Tensor, sorb: int) -> Tensor:
         (Tensor)
     """
 
-
-def convert_sites(onstate: Tensor, nphysical: int, data_index: Tensor,
-                  qrow_qcol: Tensor, qrow_qcol_ptr: Tensor, qrow_qcol_shape: Tensor,
-                  ista: Tensor, ista_ptr: Tensor,
-                  image2: Tensor) -> Tuple[Tensor, Tensor]:
+def convert_sites(
+    onstate: Tensor,
+    nphysical: int,
+    data_index: Tensor,
+    qrow_qcol: Tensor,
+    qrow_qcol_ptr: Tensor,
+    qrow_qcol_shape: Tensor,
+    ista: Tensor,
+    ista_ptr: Tensor,
+    image2: Tensor,
+) -> Tuple[Tensor, Tensor]:
     r"""
 
     nbatch convert sites:
@@ -206,7 +216,7 @@ def convert_sites(onstate: Tensor, nphysical: int, data_index: Tensor,
         nphysical(int): sorb//2
         data_index(Tensor): (nphysical * 4), very site data ptr
         qrow_qcol(Tensor): (length, 4), int64_t, last dim(Ns, Nz, dr/dc, sorted-idx), sorted with (Ns, Nz)
-        qrow_qcol_shape(Tensor): (nphysical + 1), [qrow, qcol/qrow, qcol/qrow,..., qcol] 
+        qrow_qcol_shape(Tensor): (nphysical + 1), [qrow, qcol/qrow, qcol/qrow,..., qcol]
         qrow_qcol_index(Tensor): (nphysical + 2), [0, qrow, ...], cumulative sum
         ista(Tensor): (length)
         ista_index(Tensor): (nphysical * 4): cumulative sum
@@ -218,10 +228,10 @@ def convert_sites(onstate: Tensor, nphysical: int, data_index: Tensor,
 
     """
 
-def merge_rank_sample(idx: Tensor, counts: Tensor, split_idx: Tensor, length: int) ->Tensor:
+def merge_rank_sample(idx: Tensor, counts: Tensor, split_idx: Tensor, length: int) -> Tensor:
     r"""
     merge sample counts
-    
+
     Implement functions similar to the following using cpp and cuda:
     >>> batch = idx.shape[0]
     >>> merge_counts = torch.zeros(length)
@@ -231,11 +241,11 @@ def merge_rank_sample(idx: Tensor, counts: Tensor, split_idx: Tensor, length: in
     Parameters
     ----------
         idx: Tensor
-        counts: Tensor: 
+        counts: Tensor:
         split_idx: Tensor, idx and counts split position, if use cpu, this is Placeholder
         if use cuda, this is necessary, because of AtomicAdd.
         length: int
-    
+
     Returns:
     -------
         merge_counts: Tensor, shape:(length,)
@@ -248,7 +258,7 @@ def constrain_make_charts(sym_idex: Tensor):
     Parameters
     ----------
         sym_index: Tensor, nbatch
-    
+
     Return:
     ------
         values: Tensor (nbatch, 4)
@@ -267,3 +277,57 @@ def constrain_make_charts(sym_idex: Tensor):
     #     [0, 1, 0, 0], [0, 0, 0, 1], [0, 1, 0, 1],
     #     [1, 1, 0, 0], [0, 0, 1, 1], [1, 1, 1, 1]], dtype=torch.double,
     # ).reshape(-1, 4)
+
+def wavefunction_lut(
+    bra_key: Tensor, wf_value: Tensor, onv: Tensor, sorb: int, little_endian: bool = True
+) -> Tuple[Tensor, Tensor]:
+    r"""
+    wavefunction lookup-table implement using binary-search, bra_len = (sorb - 1) / 64 + 1
+
+    Parameters
+    ----------
+        bra_key(Tensor), (length, bre_len * 8) uint8, this is order with little-endian
+        wf_value(Tensor): (length) double/complex-128, wavefunction value:
+        onv(Tensor): (nbatch, bra+len * 8) uint8, the onv used the looked
+        little_endian(bool): the bra is little-endian(True) or large-endian.
+          [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
+    Returns
+    -------
+        info(Tuple[Tensor, Tensor]):
+         info[0]: the index of onv in bra-key, info[0]: the wavefunction value of onv in bra-key
+
+    Example
+    -------
+    details see: test/wavefunction_lut_test.
+    >>> key = torch.tensor(
+        [
+            [3, 0, 0, 0, 0, 0, 0, 0],
+            [6, 0, 0, 0, 0, 0, 0, 0],
+            [12, 0, 0, 0, 0, 0, 0, 0],
+            [9, 1, 0, 0, 0, 0, 0, 0],
+            [9, 2, 0, 0, 0, 0, 0, 0],
+            [1, 3, 0, 0, 0, 0, 0, 0],
+        ],
+        dtype=torch.uint8,
+    )
+    >>> sorb = 4
+
+    >>> value = torch.arange(6) * 0.1
+    >>> value = torch.complex(value, value)
+
+    >>> onv = torch.tensor(
+        [
+            [12, 0, 0, 0, 0, 0, 0, 0],
+            [9, 2, 0, 0, 0, 0, 0, 0],
+            [6, 0, 0, 0, 0, 0, 0, 0],
+            [3, 0, 0, 0, 0, 0, 0, 0],
+            [14, 0, 0, 0, 0, 0, 0, 0],
+            [1, 3, 0, 0, 0, 0, 0, 0],
+        ],
+        dtype=torch.uint8,
+    )
+    >>> info = wavefunction_lut(key, value, onv, sorb)
+    >>> print(info)
+    tensor([2, 4, 1, 0, 5]), tensor([0.2000+0.2000j, 0.4000+0.4000j, 0.1000+0.1000j, 0.0000+0.0000j,
+        0.5000+0.5000j])
+    """

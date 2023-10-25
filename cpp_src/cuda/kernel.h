@@ -87,3 +87,8 @@ __host__ void merge_idx_cuda(int64_t *merge_counts, const int64_t *idx,
 
 __host__ void constrain_lookup_table(const int64_t *sym_index, double *result,
                                      const int64_t nbatch);
+
+__host__ void binary_search_BigInteger_cuda(
+    const unsigned long *arr, const unsigned long *target, int64_t *result,
+    const int64_t nbatch, const int64_t arr_length, const int64_t target_length,
+    bool little_endian);

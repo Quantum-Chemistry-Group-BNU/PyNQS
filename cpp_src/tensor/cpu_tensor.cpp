@@ -478,3 +478,92 @@ Tensor constrain_make_charts_cpu(const Tensor &sym_index) {
           .reshape({nbatch, 4});
   return std::move(result_tensor.clone());
 }
+
+template <typename IntType>
+int64_t binary_search_BigInteger(const IntType *arr, const IntType *target,
+                                 const int64_t arr_length,
+                                 const int64_t target_length = 1,
+                                 bool little_endian = true) {
+  // arr: [arr_length, targe_length] 2D array but arr is point not point-point
+  // arr is array of the great uint64 or others [12, 13] => 2**64 + 12
+  // target: [targe_length]
+  // little_endian: [12, 13] => 13 * 2**64 + 12
+  // big_endian: [12, 13] => 12 * 2**64 + 12
+  int64_t left = 0;
+  int64_t right = arr_length - 1;
+
+  auto compare = [&arr, &target, target_length,
+                  little_endian](const IntType *mid_element) -> int {
+    if (little_endian) {
+      for (int64_t i = target_length - 1; i >= 0; i--) {
+        if (mid_element[i] < target[i]) {
+          return -1;
+        } else if (mid_element[i] > target[i]) {
+          return 1;
+        }
+      }
+    } else {
+      for (int64_t i = 0; i < target_length; i--) {
+        if (mid_element[i] < target[i]) {
+          return -1;
+        } else if (mid_element[i] > target[i]) {
+          return 1;
+        }
+      }
+    }
+    return 0;
+  };
+
+  while (left <= right) {
+    int64_t mid = left + (right - left) / 2;
+    int64_t mid_index = mid * target_length;
+    const IntType *mid_element = &arr[mid_index];
+    int result = compare(mid_element);
+
+    if (result == 0) {
+      return mid;
+    } else if (result < 0) {
+      left = mid + 1;
+    } else {
+      right = mid - 1;
+    }
+  }
+
+  return -1;
+}
+
+tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key,
+                                     const Tensor &wf_value, const Tensor &onv,
+                                     const int sorb,
+                                     const bool little_endian = true) {
+  // bra_key: (length, bra_len * 8)
+  // wf_value: nbatch if not use_complex else nbatch * 2
+  // onv: (nbatch, bra_len * 8)
+  // little_endian: the order of the bra_key, default is little-endian
+  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
+  const int64_t bra_len = (sorb - 1) / 64 + 1;
+  const int64_t nbatch = onv.size(0);
+  int64_t length = bra_key.size(0);
+
+  const unsigned long *onv_ptr =
+      reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
+  const unsigned long *bra_key_ptr =
+      reinterpret_cast<unsigned long *>(bra_key.data_ptr<uint8_t>());
+  std::vector<int64_t> result;
+
+  // at::parallel_for maybe is faster, but push_back is error
+  for (int64_t i = 0; i < nbatch; i++) {
+    auto idx = binary_search_BigInteger<unsigned long>(
+        bra_key_ptr, &onv_ptr[i * bra_len], length, bra_len, little_endian);
+    if (idx != -1) {
+      result.push_back(idx);
+    }
+  }
+
+  Tensor result_tensor =
+      torch::from_blob(result.data(), result.size(),
+                       torch::TensorOptions().dtype(torch::kInt64))
+          .clone();
+  return std::make_tuple(result_tensor,
+                         wf_value.index_select(0, result_tensor));
+}

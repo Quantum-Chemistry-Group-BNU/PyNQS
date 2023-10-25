@@ -75,7 +75,7 @@ Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
     // bra: (n, tensor_len), ket: (m, tensor_len), construct Hij matrix
     n = bra_tensor.size(0), m = ket_tensor.size(0);
   }
-  
+
   // bra or ket is empty
   if (bra_tensor.numel() == 0 || bra_tensor.numel() == 0) {
     return torch::empty({n, m}, h1e_tensor.options());
@@ -319,4 +319,31 @@ Tensor constrain_make_charts_cuda(const Tensor &sym_index) {
 
   constrain_lookup_table(sym_ptr, result_ptr, nbatch);
   return result;
+}
+
+tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key,
+                                      const Tensor &wf_value, const Tensor &onv,
+                                      const int sorb,
+                                      const bool little_endian = true) {
+  // bra_key: (length, bra_len * 8)
+  // wf_value: nbatch if not use_complex else nbatch * 2
+  // onv: (nbatch, bra_len * 8)
+  // little_endian: the order of the bra_key, default is little-endian
+  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 +
+  const int64_t bra_len = (sorb - 1) / 64 + 1;
+  const int64_t nbatch = onv.size(0);
+  int64_t length = bra_key.size(0);
+  auto device = bra_key.device();
+
+  const unsigned long *onv_ptr =
+      reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
+  const unsigned long *bra_key_ptr =
+      reinterpret_cast<unsigned long *>(bra_key.data_ptr<uint8_t>());
+  Tensor result = torch::zeros(
+      nbatch, torch::TensorOptions().dtype(torch::kInt64).device(device));
+  int64_t *result_ptr = result.data_ptr<int64_t>();
+  binary_search_BigInteger_cuda(bra_key_ptr, onv_ptr, result_ptr, nbatch,
+                                length, bra_len, little_endian);
+  Tensor idx = torch::masked_select(result, result.gt(-1));
+  return std::make_tuple(idx, wf_value.index_select(0, idx));
 }

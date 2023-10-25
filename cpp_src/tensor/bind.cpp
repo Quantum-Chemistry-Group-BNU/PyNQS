@@ -69,27 +69,26 @@ tuple_tensor_2d get_comb(const Tensor &bra_tensor, const int sorb,
   CHECK_CONTIGUOUS(bra_tensor);
   assert(dim == 1 || dim == 2);
   assert(bra_tensor.dtype() == torch::kUInt8);
-  assert((bra_len * 8 ) == bra_tensor.size(-1));
+  assert((bra_len * 8) == bra_tensor.size(-1));
   if (bra_tensor.is_cpu()) {
-    return get_comb_tensor_cpu(bra_tensor, sorb, nele, noA,
-                               noB, flag_bit);
+    return get_comb_tensor_cpu(bra_tensor, sorb, nele, noA, noB, flag_bit);
 #ifdef GPU
   } else {
-    return get_comb_tensor_cuda(bra_tensor, sorb, nele, noA,
-                                noB, flag_bit);
+    return get_comb_tensor_cuda(bra_tensor, sorb, nele, noA, noB, flag_bit);
 #endif
   }
 }
 
 auto MCMC_sample(const std::string model_file, Tensor &initial_state,
-                 Tensor &state_sample, Tensor &psi_sample,
-                 const int sorb, const int nele, const int noA, const int noB,
-                 const int seed, const int n_sweep, const int therm_step) {
+                 Tensor &state_sample, Tensor &psi_sample, const int sorb,
+                 const int nele, const int noA, const int noB, const int seed,
+                 const int n_sweep, const int therm_step) {
   int n_accept = 0;
   Tensor next_state = initial_state.clone();
   Tensor current_state = initial_state.clone();
   torch::jit::script::Module nqs = torch::jit::load(model_file);
-  std::vector<torch::jit::IValue> inputs = {onv_to_tensor(current_state, sorb).view({-1})};
+  std::vector<torch::jit::IValue> inputs = {
+      onv_to_tensor(current_state, sorb).view({-1})};
   Tensor psi_current = nqs.forward(inputs).toTensor();
   double prob_current = std::pow(psi_current.norm().item<double>(), 2);
   static std::mt19937 rng(seed);
@@ -131,9 +130,8 @@ tuple_tensor_2d mps_vbatch(const Tensor mps_data, const Tensor data_index,
   }
 }
 
-Tensor permute_sgn(const Tensor image2, const Tensor onstate,
-                               const int sorb){
-  if(onstate.is_cpu()){
+Tensor permute_sgn(const Tensor image2, const Tensor onstate, const int sorb) {
+  if (onstate.is_cpu()) {
     return permute_sgn_tensor_cpu(image2, onstate, sorb);
 #ifdef GPU
   } else {
@@ -147,8 +145,10 @@ params:
 * @param onstate: (nbatch, nphysical * 2) or (nphysical * 2), [0, 1, 1, 0, ...]
 * @param nphysical: sorb//2
 * @param data_index: (nphysical * 4), very site data ptr.
-* @param qrow_qcol: (length, 4), int64_t, last dim(Ns, Nz, dr/dc, sorted-idx), sorted with (Ns, Nz) 
-* @param qrow_qcol_shape: (nphysical + 1), [qrow, qcol/qrow, qcol/qrow,..., qcol] 
+* @param qrow_qcol: (length, 4), int64_t, last dim(Ns, Nz, dr/dc, sorted-idx),
+sorted with (Ns, Nz)
+* @param qrow_qcol_shape: (nphysical + 1), [qrow, qcol/qrow, qcol/qrow,...,
+qcol]
 * @param qrow_qcol_index: (nphysical + 2), [0, qrow, ...], cumulative sum
 * @param ista: (length)
 * @param ista_index: (nphysical * 4): cumulative sum
@@ -183,7 +183,7 @@ tuple_tensor_2d nbatch_convert_sites(
 }
 
 Tensor merge_rank_sample(const Tensor &idx, const Tensor &counts,
-                    const Tensor &split_idx, const int64_t length) {
+                         const Tensor &split_idx, const int64_t length) {
   CHECK_CONTIGUOUS(idx);
   CHECK_CONTIGUOUS(counts);
   if (idx.is_cpu() && counts.is_cpu()) {
@@ -204,6 +204,28 @@ Tensor constrain_make_charts(const Tensor &sym_index) {
     // const auto sym_index_0 = sym_index.to(torch::kCPU);
     // return constrain_make_charts(sym_index_0).to(device);
     return constrain_make_charts_cuda(sym_index);
+#endif
+  }
+}
+
+// wavefunction lookup-table implement using binary-search
+tuple_tensor_2d wavefunction_lut(const Tensor &bra_key, const Tensor &wf_value,
+                                 const Tensor &onv, const int sorb,
+                                 bool little_endian = true) {
+  /*
+  bra_len = (sorb - 1) / 64 + 1;
+  bra_key(Tensor): (length, bre_len * 8) uint8, this is order with little-endian
+  wf_value(Tensor): (length) double/complex-128, wavefunction value:
+  onv(Tensor): (nbatch, bra+len * 8) uint8, the onv used the looked
+  little_endian (bool): the bra is little-endian(True) or large-endian.
+  [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
+  data: 23-10-25
+  */
+  if (bra_key.is_cpu() || wf_value.is_cpu() || onv.is_cpu()) {
+    return wavefunction_lut_cpu(bra_key, wf_value, onv, sorb, little_endian);
+#ifdef GPU
+  } else {
+    return wavefunction_lut_cuda(bra_key, wf_value, onv, sorb, little_endian);
 #endif
   }
 }
@@ -234,5 +256,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // m.def("convert_sites_cpu", &nbatch_convert_sites_cpu, " test");
   m.def("convert_sites", &nbatch_convert_sites, " test");
   m.def("merge_rank_sample", &merge_rank_sample, "merge sample index");
-  m.def("constrain_make_charts", &constrain_make_charts, "make charts for two sites");
+  m.def("constrain_make_charts", &constrain_make_charts,
+        "make charts for two sites");
+  m.def("wavefunction_lut", &wavefunction_lut, py::arg("bra_key"),
+        py::arg("wf_value"), py::arg("onv"), py::arg("sorb"),
+        py::arg("little_endian") = true, "wavefunction lookup-table binary-search implement");
 }

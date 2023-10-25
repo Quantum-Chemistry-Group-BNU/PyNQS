@@ -510,7 +510,7 @@ def torch_lexsort(keys: Union[List[Tensor], Tuple[Tensor]], dim=-1) -> Tensor:
     return idx
 
 
-def torch_sort_onv(bra: Tensor) -> Tensor:
+def torch_sort_onv(bra: Tensor, little_endian: bool = True) -> Tensor:
     r"""
     sort onv by binary number using torch_lexsort(similar to np.lexsort) functions
 
@@ -532,14 +532,19 @@ def torch_sort_onv(bra: Tensor) -> Tensor:
     >>> idx
     tensor([0, 3, 2, 1])
     >>> bra[idx]
-    tensor([[ 3, 0, 0, 0, 0,  0, 0, 0],
+    tensor([[ 3, 0, 0, 0, 0, 0, 0, 0],
             [ 6, 0, 0, 0, 0, 0, 0, 0],
             [ 9, 0, 0, 0, 0, 0, 0, 0],
             [12, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
     """
     assert bra.dim() == 2
 
-    keys = list(map(torch.flatten, bra.split(1, dim=1)))
+    if little_endian:
+        keys = list(map(torch.flatten, bra.split(1, dim=1)))
+    else:
+        # FIXME: how to set the keys
+        raise NotImplementedError
+        # keys = list(map(torch.flatten, bra.split(1, dim=1)))[::-1]
     idx = torch_lexsort(keys=keys)
 
     del keys

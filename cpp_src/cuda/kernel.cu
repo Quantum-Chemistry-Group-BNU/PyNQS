@@ -457,3 +457,82 @@ __host__ void constrain_lookup_table(const int64_t *sym_index, double *result,
   HANDLE_ERROR(cudaStatus);
   cudaDeviceSynchronize();
 }
+
+template <typename IntType>
+__device__ int64_t BigInteger_device(const IntType *arr, const IntType *target,
+                                     const int64_t arr_length,
+                                     const int64_t target_length = 1,
+                                     bool little_endian = true) {
+  // arr: [arr_length, targe_length] 2D array but arr is point not point-point
+  // arr is array of the great uint64 or others [12, 13] => 2**64 + 12
+  // target: [targe_length]
+  // little_endian: [12, 13] => 13 * 2**64 + 12
+  // big_endian: [12, 13] => 12 * 2**64 + 12
+  int64_t left = 0;
+  int64_t right = arr_length - 1;
+
+  auto compare = [&arr, &target, target_length,
+                  little_endian](const IntType *mid_element) -> int {
+    if (little_endian) {
+      for (int64_t i = target_length - 1; i >= 0; i--) {
+        if (mid_element[i] < target[i]) {
+          return -1;
+        } else if (mid_element[i] > target[i]) {
+          return 1;
+        }
+      }
+    } else {
+      for (int64_t i = 0; i < target_length; i--) {
+        if (mid_element[i] < target[i]) {
+          return -1;
+        } else if (mid_element[i] > target[i]) {
+          return 1;
+        }
+      }
+    }
+    return 0;
+  };
+
+  while (left <= right) {
+    int64_t mid = left + (right - left) / 2;
+    int64_t mid_index = mid * target_length;
+    const IntType *mid_element = &arr[mid_index];
+    int result = compare(mid_element);
+
+    if (result == 0) {
+      return mid;
+    } else if (result < 0) {
+      left = mid + 1;
+    } else {
+      right = mid - 1;
+    }
+  }
+
+  return -1;
+}
+
+__global__ void BigInteger_kernel(const unsigned long *arr, const unsigned long *target,
+                                  int64_t *result, const int64_t nbatch,
+                                  const int64_t arr_length,
+                                  const int64_t target_length,
+                                  bool little_endian) {
+  int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idn >= nbatch)
+    return;
+  result[idn] =
+      BigInteger_device<unsigned long>(arr, &target[idn * target_length], arr_length,
+                                 target_length, little_endian);
+};
+
+__host__ void binary_search_BigInteger_cuda(
+    const unsigned long *arr, const unsigned long *target, int64_t *result,
+    const int64_t nbatch, const int64_t arr_length,
+    const int64_t target_length = 1, bool little_endian = true) {
+  dim3 blockDim(1024);
+  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
+  BigInteger_kernel<<<gridDim, blockDim>>>(
+      arr, target, result, nbatch, arr_length, target_length, little_endian);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
+  cudaDeviceSynchronize();
+}
