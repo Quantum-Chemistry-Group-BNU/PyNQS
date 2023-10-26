@@ -294,7 +294,8 @@ def wavefunction_lut(
     Returns
     -------
         info(Tuple[Tensor, Tensor]):
-         info[0]: the index of onv in bra-key, info[0]: the wavefunction value of onv in bra-key
+         info[0]: the index of onv in bra-key, if not find, set to -1. (torch.int64)
+         info[1]: the wavefunction value of onv in bra-key
 
     Example
     -------
@@ -328,6 +329,6 @@ def wavefunction_lut(
     )
     >>> info = wavefunction_lut(key, value, onv, sorb)
     >>> print(info)
-    tensor([2, 4, 1, 0, 5]), tensor([0.2000+0.2000j, 0.4000+0.4000j, 0.1000+0.1000j, 0.0000+0.0000j,
+    tensor([2, 4, 1, -1, 5]), tensor([0.2000+0.2000j, 0.4000+0.4000j, 0.1000+0.1000j, 0.0000+0.0000j,
         0.5000+0.5000j])
     """

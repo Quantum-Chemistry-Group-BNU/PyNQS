@@ -345,5 +345,5 @@ tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key,
   binary_search_BigInteger_cuda(bra_key_ptr, onv_ptr, result_ptr, nbatch,
                                 length, bra_len, little_endian);
   Tensor idx = torch::masked_select(result, result.gt(-1));
-  return std::make_tuple(idx, wf_value.index_select(0, idx));
+  return std::make_tuple(result, wf_value.index_select(0, idx));
 }

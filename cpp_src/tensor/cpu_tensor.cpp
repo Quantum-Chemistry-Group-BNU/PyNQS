@@ -549,21 +549,17 @@ tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key,
       reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
   const unsigned long *bra_key_ptr =
       reinterpret_cast<unsigned long *>(bra_key.data_ptr<uint8_t>());
-  std::vector<int64_t> result;
+  Tensor result = torch::zeros(
+      nbatch, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+  int64_t *result_ptr = result.data_ptr<int64_t>();
 
   // at::parallel_for maybe is faster, but push_back is error
   for (int64_t i = 0; i < nbatch; i++) {
-    auto idx = binary_search_BigInteger<unsigned long>(
+    result_ptr[i] = binary_search_BigInteger<unsigned long>(
         bra_key_ptr, &onv_ptr[i * bra_len], length, bra_len, little_endian);
-    if (idx != -1) {
-      result.push_back(idx);
-    }
   }
 
-  Tensor result_tensor =
-      torch::from_blob(result.data(), result.size(),
-                       torch::TensorOptions().dtype(torch::kInt64))
-          .clone();
-  return std::make_tuple(result_tensor,
-                         wf_value.index_select(0, result_tensor));
+  auto idx = torch::masked_select(result, result.gt(-1));
+  return std::make_tuple(result,
+                         wf_value.index_select(0, idx));
 }

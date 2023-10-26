@@ -10,7 +10,7 @@ from torch.distributions import Binomial
 from typing import List, Type, Tuple, Union, Literal
 from dataclasses import dataclass
 
-from libs.C_extension import onv_to_tensor, tensor_to_onv
+from libs.C_extension import onv_to_tensor, tensor_to_onv, wavefunction_lut
 
 
 def check_para(bra: Tensor):
@@ -204,10 +204,10 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor, Tensor, T
 
     # torch.unique does not have 'return_index'
     union = torch.cat([state1, common])
-    idx1, counts = unique_idx(union, dim=0)[2:]
+    idx1, counts = torch_unique_index(union, dim=0)[2:]
     idx1 = idx1[torch.where(counts > 1)[0]]
     union = torch.cat([state2, common])
-    idx2, counts = unique_idx(union, dim=0)[2:]
+    idx2, counts = torch_unique_index(union, dim=0)[2:]
     idx2 = idx2[torch.where(counts > 1)[0]]
 
     # check indices
@@ -216,7 +216,7 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor, Tensor, T
     return common, idx1, idx2
 
 
-def unique_idx(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+def torch_unique_index(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """
     This is similar to np.unique, support 'return_index'
     ref:
@@ -543,12 +543,85 @@ def torch_sort_onv(bra: Tensor, little_endian: bool = True) -> Tensor:
         keys = list(map(torch.flatten, bra.split(1, dim=1)))
     else:
         # FIXME: how to set the keys
-        raise NotImplementedError
+        raise NotImplementedError("Little_endian has not been implemented")
         # keys = list(map(torch.flatten, bra.split(1, dim=1)))[::-1]
     idx = torch_lexsort(keys=keys)
 
     del keys
     return idx
+
+
+class WavefunctionLUT:
+    r"""
+    wavefunction Lookup-Table in order to reduce psi(x) calculation in local energy
+    """
+
+    def __init__(
+        self,
+        bra_key: Tensor,
+        wf_value: Tensor,
+        sorb: int,
+        device=None,
+        sort: bool = True,
+    ) -> None:
+        """
+        bra_key: the key of Lookup-Table, dtype: torch.uint8
+        wf_value: the value of Lookup-Table
+        sort: whether use torch_sort_onv, default: True
+        Notice: if bra_key is not ordered, 'self.lookup' maybe return error result.
+        """
+        check_para(bra_key)
+        assert bra_key.size(0) == wf_value.size(0)
+        if sort:
+            idx = torch_sort_onv(bra_key)
+            self._bra_key = bra_key[idx].to(device)
+            self._wf_value = wf_value[idx].to(device)
+        else:
+            self._bra_key = bra_key.to(device)
+            self._wf_value = wf_value.to(device)
+        self.sorb = sorb
+
+    def __name__(self) -> Literal["WavefunctionLUT"]:
+        return "WavefunctionLUT"
+
+    @property
+    def bra_key(self) -> Tensor:
+        return self._bra_key
+
+    @property
+    def wf_value(self) -> Tensor:
+        return self._wf_value
+
+    def to(self, device: str) -> None:
+        self._bra_key = self._bra_key.to(device=device)
+        self._wf_value = self._wf_value.to(device=device)
+
+    def lookup(self, onv: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+        """
+        Returns:
+             nov_idx: the index of onv in bra-key,
+             nov_not_idx: the index of onv not in bra-key,
+             value: the wavefunction value of onv in bra-key
+        """
+        # XXX: not-idx implemented in c++ may be faster than the following.
+        idx_array, value = wavefunction_lut(self._bra_key, self._wf_value, onv, self.sorb)
+        nbatch = onv.size(0)
+        device = onv.device
+        bool_array = idx_array.gt(-1)  # if not found, set to -1
+        baseline = torch.arange(nbatch, device=device, dtype=torch.int64)
+
+        # the index of onv  in/not int bra-key
+        onv_idx = baseline[bool_array]
+        onv_not_idx = baseline[torch.logical_not(bool_array)]
+        return (onv_idx, onv_not_idx, value)
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(\n"
+            + f"    bra-key shape: {tuple(self.bra_key.size())}\n"
+            + f"    wf-value shape: {self.wf_value.size(0)}\n"
+            + f"    sorb: {self.sorb}"
+        )
 
 
 if __name__ == "__main__":
