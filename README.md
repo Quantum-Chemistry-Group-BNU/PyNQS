@@ -37,6 +37,7 @@ A simple function calculates &lt;n|H|m> using the Pytorch tensor in CPU or GPU.
 > ls # check main directory
 # ci  cpp_src  docs  libs  main.py  README.md  test  utils  vmc
 > mv test/example_H4.py ../
-> python example_H4.py  # run example
+> vi run.sh  # set export RUN_FILE="example_H4.py"
+> ./run.sh  # You can find the *.png, *.pth and *.npz file in ./tmp/  
 ```
 
