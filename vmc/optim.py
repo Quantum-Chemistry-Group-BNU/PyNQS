@@ -432,7 +432,8 @@ class VMCOptimizer:
         plt.legend(loc="best")
 
         plt.subplots_adjust(wspace=0, hspace=0.5)
-        plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches="tight")
+        plt.tight_layout()
+        plt.savefig(prefix + ".png", format="png", dpi=1000)
         plt.close()
 
         # save energy, ||g||, max_|g|
