@@ -69,11 +69,11 @@ info = wavefunction_lut(key, value, onv, sorb)
 info1 = wavefunction_lut(key.to("cuda"), value.to("cuda"), onv.to("cuda"), sorb)
 print(info, info1)
 
-length = int(10**6)
+length = int(10**7)
 key = torch.from_numpy(
     np.random.randint(2**10, size=length * 2, dtype=np.uint64).reshape(-1, 2).view(np.uint8)
 )
-key = key[torch_sort_onv(key)]
+# key = key[torch_sort_onv(key)]
 
 sorb = 64 + 24
 
@@ -90,17 +90,30 @@ onv2 = key
 # notice, there is no same value between onv1 and onv
 onv = torch.cat([onv1, onv2])
 # random sample maybe is slower
-onv = onv[torch.tensor(random.sample(list(range(onv.size(0))), onv.size(0)))]
+onv = onv[torch.randperm(onv.size(0))]
 
-
+print(f"Look-up {key.size(0)}")
 # CPU
+import time
+t0 = time.time_ns()
+key = key[torch_sort_onv(key)]
+t1 = time.time_ns()
 info = wavefunction_lut(key, value, onv, sorb, little_endian=True)
+t2 = time.time_ns()
+print(f"CPU: Sort: {(t1-t0)/1.e06:.3f} ms LooKup: {(t2-t1)/1.0e06:.3f} ms")
 
 # CUDA
-info1 = wavefunction_lut(key.to("cuda"), value.to("cuda"), onv.to("cuda"), sorb, little_endian=True)
+value = value.to("cuda")
+onv = onv.to("cuda")
+key = key.to("cuda")
+t0 = time.time_ns()
+key = key[torch_sort_onv(key)]
+t1 = time.time_ns()
+info1 = wavefunction_lut(key, value, onv, sorb, little_endian=True)
+t2 = time.time_ns()
+print(f"GPU: Sort: {(t1-t0)/1.e06:.3f} ms LooKup: {(t2-t1)/1.0e06:.3f} ms")
 
-print(info[0])
 assert(torch.allclose(info[0], info1[0].to("cpu")))
 assert(torch.allclose(info[1], info1[1].to("cpu")))
 
-assert(info[0].size(0) == length)
+assert(info[0].gt(-1).sum().item() == length)
