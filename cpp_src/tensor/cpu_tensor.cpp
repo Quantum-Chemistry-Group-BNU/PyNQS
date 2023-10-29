@@ -563,3 +563,54 @@ tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key,
   return std::make_tuple(result,
                          wf_value.index_select(0, idx));
 }
+
+inline std::vector<std::vector<unsigned long>> convert_space(const Tensor &bra,
+                                                             const int sorb) {
+  std::vector<std::vector<unsigned long>> space;
+  const unsigned long *ptr =
+      reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
+  const int64_t length = bra.size(0);
+  int _len = (sorb - 1) / 64 + 1;
+  for (int64_t i = 0; i < length; i++) {
+    std::vector<unsigned long> x(ptr + i * _len, ptr + (i + 1) * _len);
+    space.push_back(x);
+    // std::cout << "i: " << i << std::endl;
+  }
+  return space;
+}
+
+tuple_tensor_2d wavefunction_lut_hash(const Tensor &bra_key,
+                                      const Tensor &wf_value, const Tensor &onv,
+                                      const int sorb) {
+  auto t0 = tools::get_time();
+  // TODO: not copy memory
+  const auto bra_space = convert_space(bra_key, sorb);
+  const auto onv_space = convert_space(onv, sorb);
+  std::unordered_map<std::vector<unsigned long int>, int, OnstateHash> WFMap;
+  auto t1 = tools::get_time();
+
+  for (int64_t i = 0; i < bra_key.size(0); i++) {
+    WFMap[bra_space[i]] = i + 1;
+  }
+  auto t2 = tools::get_time();
+
+  auto x = std::vector<int64_t>(onv_space.size(), -1);
+  for (int64_t i = 0; i < onv_space.size(); i++) {
+    // x[i] = WFMap.find(onv_space[i]) != WFMap.end() ? WFMap[onv_space[i]] : -1;
+    x[i] = WFMap[onv_space[i]] - 1;
+  }
+  auto t3 = tools::get_time();
+
+  auto result = torch::from_blob(x.data(), onv_space.size(),
+                                 torch::TensorOptions().dtype(torch::kInt64))
+                    .clone();
+  auto idx = torch::masked_select(result, result.gt(-1));
+  auto t4 = tools::get_time();
+  
+  std::cout << "Tensor-index: " << tools::get_duration_nano(t4- t3)/1.0E6 << "ms\n"
+    <<"LooKup: " <<tools::get_duration_nano(t3 -t2)/1.0E6 << "ms \n"
+    << "Make-HashMap: " << tools::get_duration_nano(t2 -t1)/1.0E6 << "ms \n"
+    << "Space: " << tools::get_duration_nano(t1 -t0)/1.0E6 << "ms \n";
+
+  return std::make_tuple(result, wf_value.index_select(0, idx));
+}

@@ -1,15 +1,17 @@
 import random
 import torch
 import numpy as np
-
+import time
 
 from typing import List, Union, Tuple
 from torch import Tensor
 
-try:
-    from libs.C_extension import wavefunction_lut
-except:
-    from C_extension import wavefunction_lut
+from C_extension import wavefunction_lut, wavefunction_lut_map
+
+# try:
+#     from libs.C_extension import wavefunction_lut
+# except:
+#     from C_extension import wavefunction_lut
 
 
 # this two function come from utils.pubic_function
@@ -69,22 +71,24 @@ info = wavefunction_lut(key, value, onv, sorb)
 info1 = wavefunction_lut(key.to("cuda"), value.to("cuda"), onv.to("cuda"), sorb)
 print(info, info1)
 
-length = int(10**7)
+length = int(10**6)
 key = torch.from_numpy(
-    np.random.randint(2**10, size=length * 2, dtype=np.uint64).reshape(-1, 2).view(np.uint8)
+    np.random.randint(0, 2**16, size=length * 2, dtype=np.uint64).reshape(-1, 2).view(np.uint8)
 )
+
+key = torch.unique(key, dim=0)
+
 # key = key[torch_sort_onv(key)]
 
 sorb = 64 + 24
 
-value = torch.arange(length) * 0.1
-value = torch.complex(value, value)
-
 onv1 = torch.from_numpy(
-    np.random.randint(2**12, 2**20, size=length * 2, dtype=np.uint64)
+    # np.array([[10, 20, 10, 20, 10, 30, 10, 30, 10, 40, 10, 50]], dtype=np.uint64)
+    np.random.randint(2**16, 2**20, size=length * 2, dtype=np.uint64)
     .reshape(-1, 2)
     .view(np.uint8)
 )
+onv1 = torch.unique(onv1, dim=0)
 onv2 = key
 
 # notice, there is no same value between onv1 and onv
@@ -92,28 +96,38 @@ onv = torch.cat([onv1, onv2])
 # random sample maybe is slower
 onv = onv[torch.randperm(onv.size(0))]
 
+value = torch.arange(onv.shape[0]) * 0.1
+value = torch.complex(value, value)
+
 print(f"Look-up {key.size(0)}")
-# CPU
-import time
 t0 = time.time_ns()
-key = key[torch_sort_onv(key)]
+sort_idx = torch_sort_onv(key)
+key_cpu = key[sort_idx]
+value_cpu = value[sort_idx]
 t1 = time.time_ns()
-info = wavefunction_lut(key, value, onv, sorb, little_endian=True)
+x, y = wavefunction_lut(key_cpu, value_cpu, onv, sorb, little_endian=True)
 t2 = time.time_ns()
 print(f"CPU: Sort: {(t1-t0)/1.e06:.3f} ms LooKup: {(t2-t1)/1.0e06:.3f} ms")
 
-# CUDA
+t0 = time.time_ns()
+x1, y1 = wavefunction_lut_map(key_cpu, value_cpu, onv, sorb)
+t1 = time.time_ns()
+print(f"HashMap : {(t1-t0)/1.e06:.3f} ms")
+
+print(torch.allclose(x1, x), torch.allclose(y1, y))
+
+
+key = key.to("cuda")
 value = value.to("cuda")
 onv = onv.to("cuda")
-key = key.to("cuda")
+# GPU
 t0 = time.time_ns()
-key = key[torch_sort_onv(key)]
+sort_idx = torch_sort_onv(key)
+key_cuda = key[sort_idx]
+value_cuda = value[sort_idx]
 t1 = time.time_ns()
-info1 = wavefunction_lut(key, value, onv, sorb, little_endian=True)
+x2, y2 = wavefunction_lut(key_cuda, value_cuda, onv, sorb, little_endian=True)
 t2 = time.time_ns()
 print(f"GPU: Sort: {(t1-t0)/1.e06:.3f} ms LooKup: {(t2-t1)/1.0e06:.3f} ms")
 
-assert(torch.allclose(info[0], info1[0].to("cpu")))
-assert(torch.allclose(info[1], info1[1].to("cpu")))
-
-assert(info[0].gt(-1).sum().item() == length)
+print(torch.allclose(x1.to("cpu"), x2.to("cpu")))

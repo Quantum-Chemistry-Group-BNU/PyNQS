@@ -230,6 +230,12 @@ tuple_tensor_2d wavefunction_lut(const Tensor &bra_key, const Tensor &wf_value,
   }
 }
 
+tuple_tensor_2d wavefunction_lut_map(const Tensor &bra_key,
+                                     const Tensor &wf_value, const Tensor &onv,
+                                     const int sorb) {
+  return wavefunction_lut_hash(bra_key, wf_value, onv, sorb);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
@@ -261,4 +267,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("wavefunction_lut", &wavefunction_lut, py::arg("bra_key"),
         py::arg("wf_value"), py::arg("onv"), py::arg("sorb"),
         py::arg("little_endian") = true, "wavefunction lookup-table binary-search implement");
+
+  m.def("wavefunction_lut_map", &wavefunction_lut_map, "unordered map implement not binary search");
 }
