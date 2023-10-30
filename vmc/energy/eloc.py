@@ -12,6 +12,7 @@ from line_profiler import LineProfiler
 
 from libs.C_extension import get_hij_torch, get_comb_tensor, onv_to_tensor
 from utils import check_para
+from utils.public_function import WavefunctionLUT
 
 print = partial(print, flush=True)
 
@@ -27,6 +28,7 @@ def local_energy(
     noa: int,
     nob: int,
     dtype=torch.double,
+    WF_LUT: WavefunctionLUT = None
 ) -> Tuple[Tensor, Tensor, Tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
@@ -34,12 +36,17 @@ def local_energy(
     1. the all Singles and Doubles excitation about given state:
         x: (1, sorb)/(batch, sorb) -> comb_x: (batch, ncomb, sorb)/(ncomb, sorb)
     2. Compute matrix element <x|H|x'> (1, ncomb)/(batch, ncomb)
-    3. psi(x), psi(comb_x)[ncomb] using NAQS.
+    3. psi(x), psi(comb_x)[ncomb] using NAQS,
+       meanwhile use WaveFunction LookUp-Table coming from sampling. 
     4. calculate the local energy
 
     Return:
         eloc[Tensor]: local energy(nbatch)
         psi[Tensor]: psi(x1) 1D(nbatch)
+        times:[List[Float]]:
+            t1: Singles-Doubles excitation and uint8 -> double
+            t2: matrix element <x|H|x'>
+            t3: psi(x)
     """
     check_para(x)
 
@@ -59,6 +66,8 @@ def local_energy(
 
     t2 = time.time_ns()
     # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
+    # TODO: torch.unique comb_x is faster, but convert -> -1/1 or 0/1 maybe is not order
+    # so, fully testing.
     # FIXME: What time remove duplicate onstate, memory consuming,
     # and has been implemented in wavefunction ansatz,
     # if testing, use keyword: 'use_unique = False/True'.
@@ -67,7 +76,7 @@ def local_energy(
         # unique_x1 = onv_to_tensor(unique, sorb)
         # psi_x1 = torch.index_select(ansatz(unique_x1), 0, index).reshape(batch, -1)
         if x1.numel() != 0:
-            psi_x1 = ansatz(x1.reshape(-1, sorb)).reshape(batch, -1)  # [batch, comb]
+            psi_x1 = ansatz(x1.reshape(-1, sorb), WF_LUT=WF_LUT).reshape(batch, -1)  # [batch, comb]
         else:
             comb = comb_hij.size(1)
             psi_x1 = torch.zeros(batch, comb, device=device, dtype=dtype)

@@ -27,7 +27,15 @@ from libs.C_extension import (
     merge_rank_sample,
 )
 from utils import state_to_string, ElectronInfo, check_para, get_nbatch, diff_rank_seed
-from utils.distributed import gather_tensor, scatter_tensor, get_rank, get_world_size, synchronize
+from utils.distributed import (
+    gather_tensor,
+    scatter_tensor,
+    get_rank,
+    get_world_size,
+    synchronize,
+    broadcast_tensor,
+)
+from utils.public_function import torch_unique_index, WavefunctionLUT
 
 print = partial(print, flush=True)
 
@@ -58,6 +66,7 @@ class Sampler:
         method_sample="MCMC",
         max_n_sample: int = None,
         max_unique_sample: int = None,
+        use_LUT: bool = False,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -123,6 +132,9 @@ class Sampler:
         # self.min_n_sample += (self.rank + 1) * 10000
         # self.n_sample += (self.rank + 1) * 10000
 
+        # Use WaveFunction LooKup-Table to speed up local-energy calculations
+        self.use_LUT = use_LUT
+
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
             logger.info(
@@ -160,12 +172,15 @@ class Sampler:
             return ci_space_rank.detach(), sample_prob, eloc, e_total, stats_dict
 
         # AR or MCMC sampling
-        sample_unique, sample_counts, sample_prob = self.sampling(initial_state, n_sweep)
+        sample_unique, sample_counts, sample_prob, WF_LUT = self.sampling(initial_state, n_sweep)
         if self.method_sample == "MCMC":
             logger.debug(f"rank: {self.rank} Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
         e_total, eloc, _, stats_dict = self.calculate_energy(
-            sample_unique, state_prob=sample_prob, state_counts=sample_counts
+            sample_unique,
+            state_prob=sample_prob,
+            state_counts=sample_counts,
+            WF_LUT=WF_LUT,
         )
         # print local energy statistics information
         self._statistics(stats_dict)
@@ -183,26 +198,32 @@ class Sampler:
 
         self.time_sample += 1
         delta = time.time_ns() - t0
-        logger.debug(
-            f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s"
-        )
+        logger.debug(f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s")
 
         if self.is_cuda:
             torch.cuda.empty_cache()
         return sample_unique.detach(), sample_prob, eloc, e_total, stats_dict
 
-    def sampling(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, Tensor]:
+    def sampling(
+        self, initial_state: Tensor, n_sweep: int = None
+    ) -> Tuple[Tensor, Tensor, Tensor, WavefunctionLUT]:
         """
         prob is not real prob, prob = prob * world-size
         """
         if self.method_sample == "MCMC":
-            sample_unique, sample_counts, sample_prob = self.MCMC(initial_state, n_sweep)
+            sample_unique, sample_counts, sample_prob, WF_LUT = self.MCMC(initial_state, n_sweep)
         elif self.method_sample == "AR":
-            sample_unique, sample_counts, sample_prob = self.auto_regressive()
+            (sample_unique, sample_counts, sample_prob, WF_LUT) = self.auto_regressive()
+        else:
+            raise NotImplementedError(f"Other sampling has not been implemented")
 
-        return sample_unique, sample_counts, sample_prob
+        return sample_unique, sample_counts, sample_prob, WF_LUT
 
-    def MCMC(self, initial_state: Tensor, n_sweep: int = None) -> Tuple[Tensor, Tensor, Tensor]:
+    def MCMC(
+        self, initial_state: Tensor, n_sweep: int = None
+    ) -> Tuple[Tensor, Tensor, Tensor, WavefunctionLUT]:
+        if self.world_size > 1:
+            raise NotImplementedError(f"MCMC distributed has not been implemented")
         # TODO: distributed not been implemented
         # prepare sample and this only apply for MCMC sampling
         self.state_sample: Tensor = torch.empty_like(initial_state).repeat(self.n_sample, 1)
@@ -285,16 +306,18 @@ class Sampler:
         sample_unique, sample_counts = torch.unique(self.state_sample, dim=0, return_counts=True)
         sample_prob = sample_counts / sample_counts.sum()
 
-        return sample_unique, sample_counts, sample_prob
+        # This is only placeholders
+        WF_LUT: WavefunctionLUT = None
+        return (sample_unique, sample_counts, sample_prob, WF_LUT)
 
-    def auto_regressive(self) -> Tuple[Tensor, Tensor, Tensor]:
+    def auto_regressive(self) -> Tuple[Tensor, Tensor, Tensor, WavefunctionLUT]:
         """
         Auto regressive sampling
         """
         t0 = time.time_ns()
         while True:
             #  0/1
-            sample_unique, sample_counts = self.nqs.module.ar_sampling(self.n_sample)
+            sample_unique, sample_counts, wf_value = self.nqs.module.ar_sampling(self.n_sample)
 
             if sample_unique.size(0) >= self.max_unique_sample:
                 # reach lower limit of samples or decreased samples times
@@ -316,7 +339,7 @@ class Sampler:
 
         if True:
             # Sample-comm, gather->merge->scatter
-            return self.gather_scatter_sample(sample_unique, sample_counts)
+            return self.gather_scatter_sample(sample_unique, sample_counts, wf_value)
         sample_prob = sample_counts / sample_counts.sum()
         # convert to onv
         sample_unique = tensor_to_onv(sample_unique.to(torch.uint8), self.sorb)
@@ -324,12 +347,17 @@ class Sampler:
         return sample_unique, sample_counts, sample_prob
 
     def gather_scatter_sample(
-        self, unique: Tensor, counts: Tensor
-    ) -> Tuple[Tensor, Tensor, Tensor]:
+        self,
+        unique: Tensor,
+        counts: Tensor,
+        wf_value: Tensor,
+    ) -> Tuple[Tensor, Tensor, Tensor, WavefunctionLUT]:
         """
         1. Gather sample-unique/counts from very rank
         2. Merge all unique/counts in master-rank(rank0)
         3. Scatter unique/counts/prob to very rank
+
+        Meanwhile, All-Gather sample-unique and wf-value in order to make wf-lookup-table
 
         Notice Scatter prob = prob * world-size
 
@@ -338,11 +366,16 @@ class Sampler:
             unique_rank: Tensor
             counts_rank: Tensor
             prob_rank: Tensor, prob_rank = prob * world_size
+            WF_LUT: wavefunction LookUP-Table about all-sample-unique and wf-value
         """
         t0 = time.time_ns()
-        # Gather unique, counts
+        # Gather unique, counts, wf_value
         unique_all = gather_tensor(unique, self.device, self.world_size, master_rank=0)
         count_all = gather_tensor(counts, self.device, self.world_size, master_rank=0)
+        if self.use_LUT:
+            wf_value_all = gather_tensor(wf_value, self.device, self.world_size, master_rank=0)
+        else:
+            wf_value_all = None
         # sample_all = gather_tensor(sample, self.device, self.word_size, master_rank=0)
         synchronize()
         t1 = time.time_ns()
@@ -350,49 +383,78 @@ class Sampler:
             split_idx = [0] + [i.shape[0] for i in unique_all]
             split_idx = torch.tensor(split_idx, dtype=torch.int64).cumsum(dim=0)
             unique_all = torch.cat(unique_all)
-            merge_unique, merge_idx = torch.unique(unique_all, dim=0, return_inverse=True)
+            merge_unique, merge_inv, merge_idx = torch_unique_index(unique_all)[:3]
+            if self.use_LUT:
+                wf_value_all = torch.cat(wf_value_all)
+                wf_value_unique = wf_value_all[merge_idx]
+            # merge_unique, merge_
             count_all = torch.cat(count_all)
             # nbatch = unique_all.shape[0]
             # merge_counts = torch.zeros(merge_unique.shape[0], dtype=torch.int64, device=self.device)
 
             # merge prob
             length = merge_unique.shape[0]
-            merge_counts = merge_rank_sample(merge_idx, count_all, split_idx, length)
+            merge_counts = merge_rank_sample(merge_inv, count_all, split_idx, length)
             # for i in range(nbatch):
             #     merge_counts[merge_idx[i]] += count_all[i]
             merge_prob = merge_counts / merge_counts.sum()
             # _, counts_test = torch.unique(torch.cat(sample_all), dim=0, return_counts=True)
             # assert(torch.allclose(counts_test, merge_counts))
         else:
-            merge_counts = None
-            merge_unique = None
-            merge_prob = None
+            merge_counts: Tensor = None
+            merge_unique: Tensor = None
+            merge_prob: Tensor = None
+            wf_value_unique: Tensor = None
 
         t2 = time.time_ns()
         # Scatter unique, counts
         unique_rank = scatter_tensor(merge_unique, self.device, torch.int64, self.world_size)
         counts_rank = scatter_tensor(merge_counts, self.device, torch.int64, self.world_size)
         prob_rank = scatter_tensor(merge_prob, self.device, torch.double, self.world_size)
-        synchronize()
+
         t3 = time.time_ns()
+        if self.use_LUT:
+            # XXX: unique_rank split merge_unique when broadcast to all-rank,
+            # this maybe efficiency than scatter->broadcast
+            merge_unique = broadcast_tensor(merge_unique, self.device, torch.int64, master_rank=0)
+            wf_value_unique = broadcast_tensor(
+                wf_value_unique, self.device, self.dtype, master_rank=0
+            )
+        synchronize()
+        t4 = time.time_ns()
 
         if self.rank == 0:
             delta1 = (t1 - t0) / 1.0e09
             delta2 = (t3 - t2) / 1.0e09
             delta3 = (t2 - t1) / 1.0e09
+            delta4 = (t4 - t3) / 1.0e09
             s = f"Sample-Comm, Gather: {delta1:.3E} s, Scatter: {delta2:.3E} s, merge: {delta3:.3E} s\n"
-            s += f"All-Rank unique sample: {merge_unique.size(0)}"
+            s += f"All-Rank unique sample: {merge_unique.size(0)}, Broadcast LUT: {delta4:.3E} s"
             logger.info(s, master=True)
         # convert to onv
         unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
 
-        del merge_unique, merge_counts, merge_prob, unique_all, count_all
-        return unique_rank, counts_rank, prob_rank * self.world_size
+        if self.use_LUT:
+            WF_LUT = WavefunctionLUT(
+                tensor_to_onv(merge_unique.to(torch.uint8), self.sorb),
+                wf_value_unique,
+                self.sorb,
+                self.device,
+            )
+        else:
+            WF_LUT: WavefunctionLUT = None
+
+        del merge_counts, merge_prob, unique_all, count_all, wf_value_all
+        return (unique_rank, counts_rank, prob_rank * self.world_size, WF_LUT)
 
     # TODO: how to calculate batch_size;
     # calculate the max nbatch for given Max Memory
     def calculate_energy(
-        self, sample: Tensor, state_prob: Tensor = None, state_counts: Tensor = None
+        self,
+        sample: Tensor,
+        state_prob: Tensor = None,
+        state_counts: Tensor = None,
+        WF_LUT: WavefunctionLUT = None,
     ) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
         r"""
         Returns:
@@ -424,6 +486,7 @@ class Sampler:
             state_prob=state_prob,
             state_counts=state_counts,
             exact=self.debug_exact,
+            WF_LUT=WF_LUT,
             dtype=self.dtype,
         )
         return e_total, eloc, placeholders, stats_dict
@@ -434,6 +497,7 @@ class Sampler:
             + " (\n"
             + f"    Sample method: {self.method_sample}\n"
             + f"    the number of sample: {self.n_sample}\n"
+            + f"    Using LUT: {self.use_LUT}\n"
             + f"    Therm step: {self.therm_step}\n"
             + f"    Exact sampling: {self.debug_exact}\n"
             + f"    Given CI: {self.ci_space.size(0):.3E}\n"

@@ -8,6 +8,7 @@ from loguru import logger
 
 from .eloc import local_energy
 from utils.distributed import gather_tensor, get_world_size, synchronize, get_rank, scatter_tensor
+from utils.public_function import WavefunctionLUT
 
 
 def total_energy(
@@ -24,6 +25,7 @@ def total_energy(
     state_prob: Tensor = None,
     state_counts: Tensor = None,
     exact: bool = False,
+    WF_LUT: WavefunctionLUT = None,
     dtype=torch.double,
 ) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
     r"""
@@ -54,7 +56,16 @@ def total_energy(
     # for ons, idx in loader: # why is slower than using split?
     for ons, idx in zip(x.split(nbatch), idx_lst.split(nbatch)):
         eloc_lst[idx], psi_lst[idx], x_time = local_energy(
-            ons, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype=dtype
+            ons,
+            h1e,
+            h2e,
+            ansatz,
+            sorb,
+            nele,
+            noa,
+            nob,
+            dtype=dtype,
+            WF_LUT=WF_LUT,
         )
         # y = torch.zeros(0, ons.shape[1], dtype=torch.uint8, device=ons.device)
         time_lst.append(x_time)
