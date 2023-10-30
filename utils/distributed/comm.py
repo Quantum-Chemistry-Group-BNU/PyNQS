@@ -102,7 +102,7 @@ def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int =
     # tensor in master rank, other rank is None
     split_batch = torch.ones(world_size, device=device, dtype=torch.int64)
     other_dim = torch.zeros(1, device=device, dtype=torch.int64)
-    if dist.get_rank() == master_rank:
+    if get_rank() == master_rank:
         k = (tensor.shape[0] - 1 + world_size) // world_size
         res = tensor.shape[0] - k * (world_size - 1)
         split_batch.mul_(k)
@@ -114,7 +114,7 @@ def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int =
 
     other_shape_tensor = torch.zeros(other_dim[0], device=device, dtype=torch.int64)
 
-    if dist.get_rank() == master_rank:
+    if get_rank() == master_rank:
         other_shape_tensor = torch.tensor(tensor[0].shape, device=device)
     dist.broadcast(other_shape_tensor, src=master_rank, async_op=True)
     dist.barrier()
@@ -125,7 +125,7 @@ def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int =
         data = torch.zeros(split_batch[0], dtype=dtype, device=device)
     else:
         data = torch.zeros(split_batch[0], *other_shape, dtype=dtype, device=device)
-    if dist.get_rank() == master_rank:
+    if get_rank() == master_rank:
         size_diff = k - res
         if size_diff:
             if len(other_shape) == 0:
@@ -139,35 +139,56 @@ def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int =
 
     dist.scatter(data, scatter_data, src=master_rank)
     # remove zeros
-    data = data[: split_batch[dist.get_rank()]]
+    data = data[: split_batch[get_rank()]]
     return data
 
 
-# def broadcast_tensor(tensor: Tensor, device, master_rank: int = 0, word_size: int = 1):
-#     dims = torch.zeros(1, dtype=torch.int64, device=device)
-#     if dist.get_rank() == master_rank:
-#         dims = tensor.dim()
-#     dist.broadcast(dims, src=master_rank, async_op=True)
-#     dist.barrier()
+def broadcast_tensor(tensor: Union[Tensor, None], device, dtype, master_rank: int = 0) -> Tensor:
+    """
+    Broadcast tensor, support complex-tensor(complex128, complex64)
+    
+    Returns
+    -------
+        tensor: Tensor, convert to dtype
+    """
+    if get_world_size() == 1:
+        return tensor
 
-#     shapes = torch.zeros(dims[0].item(), dtype=torch.int64, device=device)
-#     if dist.get_rank() == master_rank:
-#         shapes = torch.tensor(tensor.shape, dtype=torch.int64, device=device)
+    is_complex: bool = dtype in (torch.complex128, torch.complex64, torch.complex32)
 
-#     shapes = tuple(shapes.to("cpu").tolist())
+    # broadcast dim
+    tensor_dim = torch.zeros(1, device=device, dtype=torch.int64)
+    if get_rank() == master_rank:
+        tensor_dim[0] = tensor.dim()
+    dist.broadcast(tensor_dim, src=master_rank, async_op=True)
+    dist.barrier()
 
-#     a = torch.zeros(*shapes, device=device)
-#     if dist.get_rank() == master_rank:
-#         a = tensor
-#     dist.broadcast(a, src=master_rank, async_op=True)
-#     dist.barrier()
+    # broadcast shape
+    tensor_shape = torch.zeros(tensor_dim[0], device=device, dtype=torch.int64)
+    if get_rank() == master_rank:
+        tensor_shape = torch.tensor(tensor.shape, device=device, dtype=torch.int64)
+    dist.broadcast(tensor_shape, src=master_rank, async_op=True)
+    dist.barrier()
+    shape = tuple(tensor_shape.to("cpu").tolist())
+
+    if get_rank() == master_rank:
+        assert isinstance(tensor.data, Tensor)
+        tensor = tensor.to(dtype=dtype)
+    else:
+        assert tensor is None
+        tensor = torch.empty(shape, dtype=dtype, device=device)
+
+    if is_complex:
+        tensor = torch.view_as_real(tensor)
+
+    dist.broadcast(tensor, src=master_rank)
+    if is_complex:
+        tensor = torch.view_as_complex(tensor)
+    return tensor
 
 
 def gather_tensor(
-    tensor: Tensor,
-    device,
-    world_size: int,
-    master_rank: int = 0,
+    tensor: Tensor, device, world_size: int, master_rank: int = 0
 ) -> Union[List[Tensor], None]:
     """
     Gathers tensor(1D, 2D, ...) of different lengths across multiple gpus in master rank
@@ -196,8 +217,8 @@ def gather_tensor(
     dist.all_gather(all_size, local_size)
     dist.barrier()
     max_batch = max(all_size)
-    
-    if tensor.dim() >=2:
+
+    if tensor.dim() >= 2:
         other_shape = tuple(torch.tensor(tensor.shape).tolist()[1:])
     else:
         other_shape = ()
@@ -207,7 +228,7 @@ def gather_tensor(
         padding = torch.zeros(size_diff, *other_shape, device=device, dtype=tensor.dtype)
         tensor = torch.cat((tensor, padding))
 
-    if dist.get_rank() == master_rank:
+    if get_rank() == master_rank:
         # gather dose not support complex-tensor
         if is_complex:
             tensor = torch.view_as_real(tensor)
@@ -219,7 +240,7 @@ def gather_tensor(
         all_tensor_padded = None
         dist.gather(tensor, gather_list=[], dst=master_rank)
 
-    if dist.get_rank() == master_rank:
+    if get_rank() == master_rank:
         all_tensor = []
         for tensor, size in zip(all_tensor_padded, all_size):
             if is_complex:
@@ -261,8 +282,8 @@ def all_gather_tensor(tensor: Tensor, device, world_size: int) -> List[Tensor]:
     all_batch = [torch.zeros_like(local_batch) for _ in range(world_size)]
     dist.all_gather(all_batch, local_batch)
     max_batch = max(all_batch)
-    
-    if tensor.dim() >=2:
+
+    if tensor.dim() >= 2:
         other_shape = tuple(torch.tensor(tensor.shape).tolist()[1:])
     else:
         other_shape = ()
@@ -279,8 +300,8 @@ def all_gather_tensor(tensor: Tensor, device, world_size: int) -> List[Tensor]:
         all_tensor.append(tensor[:size])
     return all_tensor
 
-class SyncFunction(torch.autograd.Function):
 
+class SyncFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, tensor):
         ctx.batch_size = tensor.shape[0]
