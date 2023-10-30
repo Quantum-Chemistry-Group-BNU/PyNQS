@@ -590,14 +590,14 @@ tuple_tensor_2d wavefunction_lut_hash(const Tensor &bra_key,
   auto t1 = tools::get_time();
 
   for (int64_t i = 0; i < bra_key.size(0); i++) {
-    WFMap[bra_space[i]] = i + 1;
+    WFMap[bra_space[i]] = i;
   }
   auto t2 = tools::get_time();
 
   auto x = std::vector<int64_t>(onv_space.size(), -1);
   for (int64_t i = 0; i < onv_space.size(); i++) {
-    // x[i] = WFMap.find(onv_space[i]) != WFMap.end() ? WFMap[onv_space[i]] : -1;
-    x[i] = WFMap[onv_space[i]] - 1;
+    x[i] = WFMap.find(onv_space[i]) != WFMap.end() ? WFMap[onv_space[i]] : -1;
+    // x[i] = WFMap[onv_space[i]] - 1;
   }
   auto t3 = tools::get_time();
 
