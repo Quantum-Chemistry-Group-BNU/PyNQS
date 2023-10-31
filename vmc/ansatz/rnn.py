@@ -8,7 +8,11 @@ from typing import Optional, Tuple, List
 from torch import nn, Tensor
 from torch.nn.parameter import Parameter
 
-from utils.public_function import multinomial_tensor, unique_consecutive_idx, WavefunctionLUT
+from utils.public_function import (
+    multinomial_tensor,
+    torch_consecutive_unique_idex,
+    torch_unique_index,
+)
 from libs.C_extension import tensor_to_onv
 
 
@@ -23,7 +27,8 @@ class RNNWavefunction(nn.Module):
         rnn_type: str = "complex",
         symmetry: bool = True,
         device: str = None,
-    ):
+        use_unique: bool = True,
+    ) -> None:
         super(RNNWavefunction, self).__init__()
         self.device = device
         self.factory_kwargs = {"device": self.device, "dtype": torch.double}
@@ -54,6 +59,8 @@ class RNNWavefunction(nn.Module):
         # self.reset_parameter()
         self.occupied = torch.tensor([1.0], **self.factory_kwargs)
         self.unoccupied = torch.tensor([0.0], **self.factory_kwargs)
+
+        self.use_unique = use_unique
 
     def rnn(self, x: Tensor, hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
         output, hidden_state = self.GRU(x, hidden_state)
@@ -94,44 +101,21 @@ class RNNWavefunction(nn.Module):
     def forward(
         self,
         x: Tensor,
-        use_unique: bool = None,
-        WF_LUT: WavefunctionLUT = None,
     ) -> Tensor:
         assert x.dim() in (
             1,
             2,
         ), f"GRU: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
 
-        if use_unique is None:
-            # remove duplicate onstate, dose not support auto-backward
-            use_unique = not x.requires_grad
+        # remove duplicate onstate, dose not support auto-backward
+        use_unique = self.use_unique and (not x.requires_grad)
         if x.dim() == 1:
             x = x.unsqueeze(0)
-        t0 = time.time_ns()
-        use_LUT: bool = False
-        if use_unique:
-            x_unique, inverse = torch.unique(x, dim=0, return_inverse=True)
-            t1 = time.time_ns()
-            # print(f"Unique : {(t1 - t0)/1.0E06:.4E} ms")
-            if WF_LUT is not None:
-                nbatch_before_lut = x_unique.size(0)
-                # convert -1/1 ... -> 0b11...
-                x_uint8 = tensor_to_onv(((1 + x_unique)/2).to(torch.uint8), self.sorb)
-                # use WaveFunction LookUp-Table
-                lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(x_uint8)
-                x_unique = x_unique[lut_not_idx]
-                use_LUT = True
-            t2 = time.time_ns()
-            # print(f"LUT : {(t2 - t1)/1.0E06:.4E} ms")
-        else:
-            x_unique = x
-            inverse = None
-        # print(f"LUT-unique: {(time.time_ns() - t0)/1.0E06:.4E} ms")
-    
-        x_unique = x_unique.unsqueeze(1)
-        x_unique = ((x_unique + 1) / 2).to(torch.int64)  # 1/-1 -> 1/0
+
+        x = x.unsqueeze(1)
+        x = ((x + 1) / 2).to(torch.int64)  # 1/-1 -> 1/0
         # (nbatch, seq_len, sorb), seq_len = 1, 1: occupied, 0: unoccupied
-        nbatch, _, dim = tuple(x_unique.size())
+        nbatch, _, dim = tuple(x.size())
 
         alpha = self.nele // 2
         beta = self.nele // 2
@@ -150,8 +134,7 @@ class RNNWavefunction(nn.Module):
             )
         x0 = torch.zeros(nbatch, 1, 2, **self.factory_kwargs)
         # x0, hidden_state is constant values
-        # phase: List[Tensor] = []
-        # amp: List[Tensor] = []
+
         amp = torch.ones(nbatch, **self.factory_kwargs)
         if self.compute_phase:
             phase = torch.zeros(nbatch, **self.factory_kwargs)
@@ -171,9 +154,8 @@ class RNNWavefunction(nn.Module):
                         inverse_i = torch.zeros(nbatch, dtype=torch.int64, device=self.device)
                     else:
                         # input tensor is already sorted, torch.unique_consecutive is faster.
-                        inverse_i, index_i = unique_consecutive_idx(
-                            x_unique[..., :i].squeeze(1), dim=0
-                        )[1:3]
+                        # TODO: torch_consecutive_unique_idex or torch_unique_index
+                        inverse_i, index_i = torch_unique_index(x[..., :i].squeeze(1), dim=0)[1:3]
                         x0 = x0[index_i]
                     if i == 0:
                         hidden_state = torch.zeros(
@@ -194,10 +176,7 @@ class RNNWavefunction(nn.Module):
             else:
                 # x0: (nbatch, 1, 2)
                 y0, hidden_state = self.rnn(x0, hidden_state)  # (nbatch, 2)
-            # if symmetry and i >= dim - 2:
-            #     # placeholders only
-            #     y0_amp = torch.empty(nbatch, 2, **self.factory_kwargs) # (nbatch, 2)
-            # else:
+
             y0_amp = self.amp_impl(y0)  # (nbatch, 2)
             if self.compute_phase:
                 y0_phase = self.phase_impl(y0)  # (nbatch, 2)
@@ -218,16 +197,12 @@ class RNNWavefunction(nn.Module):
                 y0_amp = F.normalize(y0_amp, dim=1, eps=1e-12)
 
             if i % 2 == 0:
-                num_up.add_(x_unique[..., i].squeeze(1))
+                num_up.add_(x[..., i].squeeze(1))
             else:
-                num_down.add_(x_unique[..., i].squeeze(1))
+                num_down.add_(x[..., i].squeeze(1))
 
-            x0 = F.one_hot(x_unique[..., i], num_classes=2).to(self.factory_kwargs["dtype"])
+            x0 = F.one_hot(x[..., i], num_classes=2).to(self.factory_kwargs["dtype"])
 
-            # if using Constraints, the the prob of the last two orbital must be is 1.0
-            # if symmetry and i >= dim -2:
-            #     amp_i = torch.ones(nbatch, **self.factory_kwargs)  # (nbatch)
-            # else:
             # XXX: In-place autograd ??????, Fully testing
             amp_i = (y0_amp * x0.squeeze(1)).sum(dim=1)  # (nbatch)
             # avoid In-place when auto-grad
@@ -243,24 +218,11 @@ class RNNWavefunction(nn.Module):
         # Real positive |psi> = \sqrt(prob)
         # amp = torch.stack(amp, dim=1).prod(dim=1)  # (nbatch)
         if self.compute_phase:
-            # phase = torch.stack(phase, dim=1).sum(dim=1)  # (nbatch)
             wf = torch.complex(torch.zeros_like(phase), phase).exp() * amp
         else:
             wf = amp
 
-        # print(f"psi(x): {(time.time_ns() - t0)/1.0E06:.4E} ms")
-        if use_unique:
-            if use_LUT:
-                prob1 = torch.zeros(nbatch_before_lut, device=self.device, dtype=wf.dtype)
-                # merge the psi(x) and the lookup-table value
-                # Notice: the dtype of lut_value maybe not equal wf's and will raise UserWarning.
-                # e.g. lut_value is complex128, wf is float64
-                prob1[lut_idx] = lut_value.to(wf.dtype)
-                prob1[lut_not_idx] = wf
-                return prob1[inverse]
-            return wf[inverse]
-        else:
-            return wf
+        return wf
 
     @torch.no_grad()
     def ar_sampling(self, n_sample: int) -> Tuple[Tensor, Tensor, Tensor]:

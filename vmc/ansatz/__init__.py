@@ -1,5 +1,6 @@
 from .rbm import RBMWavefunction
 from .rnn import RNNWavefunction
+from .ar_rbm import RBMSites
 
 try:
     from .mps import MPSWavefunction
@@ -8,4 +9,4 @@ except ImportError:
 
     warnings.warn("MPS ansatz has not been implemented", ImportWarning)
 
-__all__ = ["RBMWavefunction", "RNNWavefunction"]
+__all__ = ["RBMWavefunction", "RNNWavefunction", "RBMSites"]

@@ -67,6 +67,7 @@ class Sampler:
         max_n_sample: int = None,
         max_unique_sample: int = None,
         use_LUT: bool = False,
+        use_unique: bool = True,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -134,6 +135,9 @@ class Sampler:
 
         # Use WaveFunction LooKup-Table to speed up local-energy calculations
         self.use_LUT = use_LUT
+
+        # Use 'torch.unique' to speed up local-energy calculations
+        self.use_unique = use_unique
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -487,6 +491,7 @@ class Sampler:
             state_counts=state_counts,
             exact=self.debug_exact,
             WF_LUT=WF_LUT,
+            use_unique=self.use_unique,
             dtype=self.dtype,
         )
         return e_total, eloc, placeholders, stats_dict

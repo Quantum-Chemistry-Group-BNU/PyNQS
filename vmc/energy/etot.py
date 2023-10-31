@@ -26,6 +26,7 @@ def total_energy(
     state_counts: Tensor = None,
     exact: bool = False,
     WF_LUT: WavefunctionLUT = None,
+    use_unique: bool = True,
     dtype=torch.double,
 ) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
     r"""
@@ -66,6 +67,7 @@ def total_energy(
             nob,
             dtype=dtype,
             WF_LUT=WF_LUT,
+            use_unique=use_unique,
         )
         # y = torch.zeros(0, ons.shape[1], dtype=torch.uint8, device=ons.device)
         time_lst.append(x_time)

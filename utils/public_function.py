@@ -225,7 +225,7 @@ def torch_unique_index(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor,
         https://pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html#torch.Tensor.scatter_
     Returns
     -------
-        unique, indices, inverse, counts
+        unique, inverse, index, counts
     """
     unique, inverse, counts = torch.unique(
         x, dim=dim, sorted=True, return_inverse=True, return_counts=True
@@ -236,7 +236,7 @@ def torch_unique_index(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor,
     return unique, inverse, index, counts
 
 
-def unique_consecutive_idx(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+def torch_consecutive_unique_idex(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """
     This is similar to np.unique, support 'return_index'
     XXX: NOT Fully testing

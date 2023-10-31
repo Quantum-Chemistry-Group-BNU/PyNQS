@@ -28,7 +28,8 @@ def local_energy(
     noa: int,
     nob: int,
     dtype=torch.double,
-    WF_LUT: WavefunctionLUT = None
+    WF_LUT: WavefunctionLUT = None,
+    use_unique: bool = True,
 ) -> Tuple[Tensor, Tensor, Tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
@@ -37,7 +38,7 @@ def local_energy(
         x: (1, sorb)/(batch, sorb) -> comb_x: (batch, ncomb, sorb)/(ncomb, sorb)
     2. Compute matrix element <x|H|x'> (1, ncomb)/(batch, ncomb)
     3. psi(x), psi(comb_x)[ncomb] using NAQS,
-       meanwhile use WaveFunction LookUp-Table coming from sampling. 
+       meanwhile use WaveFunction LookUp-Table coming from sampling.
     4. calculate the local energy
 
     Return:
@@ -52,13 +53,20 @@ def local_energy(
 
     dim: int = x.dim()
     assert dim == 2
+    use_LUT: bool = True if WF_LUT is not None else False
     batch: int = x.shape[0]
     t0 = time.time_ns()
     device = h1e.device
 
-    # x1: [batch, comb, sorb], comb_x: [batch, comb, bra_len]
-    comb_x, x1 = get_comb_tensor(x, sorb, nele, noa, nob, True)
-    bra_len: int = comb_x.shape[2]
+    if use_unique:
+        # x1: [n_unique, sorb], comb_x: [batch, comb, bra_len]
+        comb_x, _ = get_comb_tensor(x, sorb, nele, noa, nob, False)
+        bra_len: int = comb_x.shape[2]
+    else:
+        # x1: [batch * comb, sorb], comb_x: [batch, comb, bra_len]
+        comb_x, x1 = get_comb_tensor(x, sorb, nele, noa, nob, True)
+        x1 = x1.reshape(-1, sorb)
+        bra_len = comb_x.shape[2]
 
     # calculate matrix <x|H|x'>
     t1 = time.time_ns()
@@ -72,20 +80,38 @@ def local_energy(
     # and has been implemented in wavefunction ansatz,
     # if testing, use keyword: 'use_unique = False/True'.
     with torch.no_grad():
-        # unique, index = torch.unique(comb_x.reshape(-1, bra_len), dim=0, return_inverse=True)
-        # unique_x1 = onv_to_tensor(unique, sorb)
-        # psi_x1 = torch.index_select(ansatz(unique_x1), 0, index).reshape(batch, -1)
-        if x1.numel() != 0:
-            psi_x1 = ansatz(x1.reshape(-1, sorb), WF_LUT=WF_LUT).reshape(batch, -1)  # [batch, comb]
+        if comb_x.numel() != 0:
+            if use_LUT:
+                batch_before_lut = batch * comb_x.size(1)  # batch * comb
+                lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(comb_x.reshape(-1, bra_len))
+            if use_unique:
+                if use_LUT:
+                    comb_x = comb_x.reshape(-1, bra_len)[lut_not_idx]
+                else:
+                    comb_x = comb_x.reshape(-1, bra_len)
+                unique_comb, inverse = torch.unique(
+                    comb_x, dim=0, return_inverse=True
+                )
+                x1 = onv_to_tensor(unique_comb, sorb)  # x1: [n_unique, sorb]
+                psi0 = torch.index_select(ansatz(x1), 0, inverse) # [n_unique]
+            else:
+                if use_LUT:
+                    x1 = x1[lut_not_idx]
+                psi0 = ansatz(x1)  # [batch * comb]
+
+            if use_LUT:
+                psi = torch.empty(batch_before_lut, device=device, dtype=psi0.dtype)
+                psi[lut_idx] = lut_value.to(psi0.dtype)
+                psi[lut_not_idx] = psi0
+                psi_x1 = psi.reshape(batch, -1)
+            else:
+                psi_x1 = psi0.reshape(batch, -1)
         else:
             comb = comb_hij.size(1)
             psi_x1 = torch.zeros(batch, comb, device=device, dtype=dtype)
-    # print(torch.cuda.mem_get_info())
-    # print(prof.table())
-    # exit()
 
     if x.is_cuda:
-        torch.cuda.synchronize(h1e.device)
+        torch.cuda.synchronize(device)
     t3 = time.time_ns()
 
     if batch == 1:
