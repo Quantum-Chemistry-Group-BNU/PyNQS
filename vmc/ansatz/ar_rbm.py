@@ -1,20 +1,12 @@
-import random
-import time
+
 import torch
 import torch.nn.functional as F
 
 from typing import Union, List, Callable, Tuple
 from torch import nn, Tensor
 
-from utils.public_function import (
-    get_fock_space,
-    given_onstate,
-    state_to_string,
-    multinomial_tensor,
-    WavefunctionLUT,
-)
-from libs.C_extension import onv_to_tensor, constrain_make_charts, tensor_to_onv
-from vmc.ansatz import RNNWavefunction, RBMWavefunction
+from utils.public_function import multinomial_tensor, torch_lexsort
+from libs.C_extension import constrain_make_charts
 
 
 class RBMSites(nn.Module):
@@ -86,8 +78,8 @@ class RBMSites(nn.Module):
         self.use_unique = use_unique
 
     def extra_repr(self) -> str:
-        s = f"sites, {self.ar_sites}, common weights: {self.common_weight}, "
-        s += f"activations: {self.activation_type},\n"
+        s = f"sites: {self.ar_sites}, common weights: {self.common_weight}\n"
+        s += f"use unique: {self.use_unique}, activations: {self.activation_type},\n"
         s += f"num_visible: {self.num_visible}, num_hidden: {self.num_hidden}, shape weights: {tuple(self.weights.shape)}"
         return s
 
@@ -215,8 +207,14 @@ class RBMSites(nn.Module):
         x = (x + 1) / 2  # 1/-1 -> 1/0
         # remove duplicate onstate, dose not support auto-backward
         use_unique = self.use_unique and (not x.requires_grad)
+        if use_unique:
+            # sorted x, avoid repeated sorting using 'torch.unique'
+            sorted_idx = torch_lexsort(
+                keys=list(map(torch.flatten, reversed(x[:, : self.sorb // 2].split(1, dim=1))))
+            )
+            x = x[sorted_idx]
+            original_idx = torch.argsort(sorted_idx)
 
-        use_LUT: bool = False
         nbatch, sorb = tuple(x.size())  # (nbatch, sorb)
 
         prob_lst: List[Tensor] = []
@@ -238,7 +236,7 @@ class RBMSites(nn.Module):
                 elif 1 <= k <= self.sorb // 2:
                     # x0: (n_unique, 2), index_unique_i: (nbatch)
                     # input tensor is already sorted, torch.unique_consecutive is faster.
-                    x0, inverse_i = torch.unique(x[:, :k], dim=0, return_inverse=True)
+                    x0, inverse_i = torch.unique_consecutive(x[:, :k], dim=0, return_inverse=True)
                 else:
                     # Repeated states may be sparse, so not unique
                     x0 = x[:, :k]
@@ -278,7 +276,10 @@ class RBMSites(nn.Module):
             else:
                 num_down.add_(x[..., k])
         # print(torch.stack(prob_lst, dim=1))
-        return prob
+        if use_unique:
+            return prob[original_idx]
+        else:
+            return prob
 
     def psi_two_sites(self, x: Tensor, k: int) -> Tensor:
         # x: (nbatch, k)
@@ -310,6 +311,13 @@ class RBMSites(nn.Module):
         x = (x + 1) / 2  # 1/-1 -> 1/0
         # remove duplicate onstate, dose not support auto-backward
         use_unique = self.use_unique and (not x.requires_grad)
+        if use_unique:
+            # sorted x, avoid repeated sorting using 'torch.unique'
+            sorted_idx = torch_lexsort(
+                keys=list(map(torch.flatten, reversed(x[:, : self.sorb // 2].split(1, dim=1))))
+            )
+            x = x[sorted_idx]
+            original_idx = torch.argsort(sorted_idx)
 
         nbatch, sorb = tuple(x.size())  # (nbatch, sorb)
         # prob_lst: List[Tensor] = []
@@ -379,8 +387,11 @@ class RBMSites(nn.Module):
 
             num_up.add_(x[..., k])
             num_down.add_(x[..., k + 1])
-        # print(torch.stack(prob_lst, dim=1))
-        return prob
+
+        if use_unique:
+            return prob[original_idx]
+        else:
+            return prob
 
     @torch.no_grad()
     def ar_sampling_one_sites(self, n_sample: int) -> Tuple[Tensor, Tensor, Tensor]:

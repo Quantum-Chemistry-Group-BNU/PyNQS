@@ -55,6 +55,7 @@ def total_energy(
 
     # for step, (ons, idx) in enumerate(loader):
     # for ons, idx in loader: # why is slower than using split?
+    logger.info(f"nbatch: {nbatch}, dim: {dim}, split: {int(np.ceil(dim/nbatch))}")
     for ons, idx in zip(x.split(nbatch), idx_lst.split(nbatch)):
         eloc_lst[idx], psi_lst[idx], x_time = local_energy(
             ons,

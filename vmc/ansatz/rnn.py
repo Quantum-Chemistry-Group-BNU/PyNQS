@@ -11,7 +11,7 @@ from torch.nn.parameter import Parameter
 from utils.public_function import (
     multinomial_tensor,
     torch_consecutive_unique_idex,
-    torch_unique_index,
+    torch_lexsort,
 )
 from libs.C_extension import tensor_to_onv
 
@@ -37,6 +37,7 @@ class RNNWavefunction(nn.Module):
         self.num_hiddens = num_hiddens
         self.num_layers = num_layers
         self.symmetry = symmetry
+        self.rnn_type = rnn_type
         if rnn_type == "complex":
             self.compute_phase = True
         elif rnn_type == "real":
@@ -61,6 +62,10 @@ class RNNWavefunction(nn.Module):
         self.unoccupied = torch.tensor([0.0], **self.factory_kwargs)
 
         self.use_unique = use_unique
+
+    def extra_repr(self) -> str:
+        s = f"RNN type: {self.rnn_type}, use unique: {self.use_unique}"
+        return s
 
     def rnn(self, x: Tensor, hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
         output, hidden_state = self.GRU(x, hidden_state)
@@ -128,6 +133,14 @@ class RNNWavefunction(nn.Module):
         # Initialize the RNN hidden state
         if use_unique:
             hidden_state: Tensor = None
+            # sorted x, avoid repeated sorting using 'torch.unique'
+            sorted_idx = torch_lexsort(
+                keys=list(
+                    map(torch.flatten, reversed(x.squeeze(1)[:, : self.sorb // 2].split(1, dim=1)))
+                )
+            )
+            x = x[sorted_idx]
+            original_idx = torch.argsort(sorted_idx)
         else:
             hidden_state = torch.zeros(
                 self.num_layers, nbatch, self.num_hiddens, **self.factory_kwargs
@@ -154,8 +167,9 @@ class RNNWavefunction(nn.Module):
                         inverse_i = torch.zeros(nbatch, dtype=torch.int64, device=self.device)
                     else:
                         # input tensor is already sorted, torch.unique_consecutive is faster.
-                        # TODO: torch_consecutive_unique_idex or torch_unique_index
-                        inverse_i, index_i = torch_unique_index(x[..., :i].squeeze(1), dim=0)[1:3]
+                        inverse_i, index_i = torch_consecutive_unique_idex(
+                            x[..., :i].squeeze(1), dim=0
+                        )[1:3]
                         x0 = x0[index_i]
                     if i == 0:
                         hidden_state = torch.zeros(
@@ -222,7 +236,10 @@ class RNNWavefunction(nn.Module):
         else:
             wf = amp
 
-        return wf
+        if use_unique:
+            return wf[original_idx]
+        else:
+            return wf
 
     @torch.no_grad()
     def ar_sampling(self, n_sample: int) -> Tuple[Tensor, Tensor, Tensor]:
