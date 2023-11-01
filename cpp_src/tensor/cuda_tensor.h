@@ -5,7 +5,10 @@
 #include "../cuda/kernel.h"
 #include "../cuda/excitation_cuda.h"
 #include "utils_tensor.h"
+
+#ifdef MAGMA
 #include "magma_v2.h"
+#endif // MAGMA
 
 Tensor tensor_to_onv_tensor_cuda(const Tensor &bra_tensor, const int sorb);
 
@@ -26,10 +29,12 @@ Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
                            const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                            const int sorb, const int nele);
 
+#ifdef MAGMA
 // data: 1dim, data_index(3, nphysical, nbatch)
 tuple_tensor_2d mps_vbatch_tensor(const Tensor &mps_data,
                                   const Tensor &data_index, const int nphysical,
                                   int64_t batch);
+#endif // MAGMA
 
 Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
                                const int sorb);
@@ -48,4 +53,4 @@ Tensor constrain_make_charts_cuda(const Tensor &sym_index);
 tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key,
                                       const Tensor &wf_value, const Tensor &onv,
                                       const int sorb, const bool little_endian);
-#endif
+#endif // GPU

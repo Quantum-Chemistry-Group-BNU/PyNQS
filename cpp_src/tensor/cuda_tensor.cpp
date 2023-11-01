@@ -169,6 +169,7 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
   return std::make_tuple(comb, comb_bit);
 }
 
+#ifdef MAGMA
 tuple_tensor_2d mps_vbatch_tensor(const Tensor &mps_data,
                                   const Tensor &data_info, const int nphysical,
                                   int64_t batch = 5000) {
@@ -202,6 +203,7 @@ tuple_tensor_2d mps_vbatch_tensor(const Tensor &mps_data,
                             .reshape({n, nphysical});
   return std::make_tuple(result, std::move(flops_tensor.to(mps_data.device())));
 }
+#endif // MAGMA
 
 Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
                                const int sorb) {

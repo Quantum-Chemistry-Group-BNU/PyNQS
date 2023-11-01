@@ -1,4 +1,5 @@
 #ifdef GPU
+#ifdef MAGMA
 #pragma once
 
 #include <c10/cuda/CUDAException.h>
@@ -16,5 +17,5 @@ std::vector<double> dgemv_vbatch_tensor(const Tensor &data, const Tensor &data_i
                          const Tensor &dr, const Tensor &dc,
                          const int nphysical, const int64_t nbatch,
                          Tensor result);
-
-#endif
+#endif //MAGMA
+#endif // GPU

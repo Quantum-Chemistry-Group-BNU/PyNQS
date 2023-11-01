@@ -124,8 +124,13 @@ tuple_tensor_2d mps_vbatch(const Tensor mps_data, const Tensor data_index,
     return mps_vbatch_tensor_cpu(mps_data.to(torch::kCPU),
                                  data_index.to(torch::kCPU), nphysical);
 #ifdef GPU
+#ifdef MAGMA
   } else {
     return mps_vbatch_tensor(mps_data, data_index, nphysical, batch);
+#else   // MAGMA
+  } else {
+    return mps_vbatch_tensor_cpu(mps_data, data_index, nphysical);
+#endif  // MAGMA
 #endif
   }
 }
@@ -266,7 +271,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "make charts for two sites");
   m.def("wavefunction_lut", &wavefunction_lut, py::arg("bra_key"),
         py::arg("wf_value"), py::arg("onv"), py::arg("sorb"),
-        py::arg("little_endian") = true, "wavefunction lookup-table binary-search implement");
+        py::arg("little_endian") = true,
+        "wavefunction lookup-table binary-search implement");
 
-  m.def("wavefunction_lut_map", &wavefunction_lut_map, "unordered map implement not binary search");
+  m.def("wavefunction_lut_map", &wavefunction_lut_map,
+        "unordered map implement not binary search");
 }

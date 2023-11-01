@@ -98,6 +98,7 @@
     "-I/home/zbwu/soft/magma-2.6.1/include/", // magma
     //"-nocudainc", // check kernel functions <<< >>>
     "-DGPU=1",
+    "-DMAGMA=1",
     "-nocudalib",
     //"--cuda-path=/opt/cuda",
     // "-L/opt/cuda/lib64",

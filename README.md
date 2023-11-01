@@ -26,6 +26,8 @@ A simple function calculates &lt;n|H|m> using the Pytorch tensor in CPU or GPU.
 > ls  # you can find the 'setup.py', Check compilers CC and CXX
 # cpu cuda common tensor compile.sh setup.py
 # set magma_DIR and torch_DIR in 'setup.py'
+# if not use magma, set 'use_magma: bool = False'
+# magma: Matrix Algebra on GPU and Multicore Architectures
 > python setup.py develop # begin compile
 # ....
 > mv C_extension.so ../libs/   # move 'C_extension.so' to '../libs' 
