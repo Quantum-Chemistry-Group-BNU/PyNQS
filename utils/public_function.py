@@ -142,6 +142,7 @@ def get_nbatch(
     m = comb_memory() * n_sample_unique
 
     if device != torch.device("cpu"):
+        torch.cuda.empty_cache()
         mem_available = torch.cuda.mem_get_info(device)[0] / (1 << 30)  # GiB
         Max_memory = min(mem_available, Max_memory)
     if m / Max_memory >= alpha:

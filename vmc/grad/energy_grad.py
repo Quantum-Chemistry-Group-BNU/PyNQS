@@ -188,6 +188,9 @@ def _ad_grad(
     if get_rank() == 0:
         logger.debug(f"Reduce-loss: {reduce_loss[0].item():.4E}", master=True)
 
+    del loss1, loss2
+    if states.is_cuda:
+        torch.cuda.empty_cache()
     return psi.detach()
 
 
