@@ -494,6 +494,10 @@ class Sampler:
             use_unique=self.use_unique,
             dtype=self.dtype,
         )
+        # e_total = -2.33233
+        # eloc = torch.rand(sample.size(0), device=self.device, dtype=self.dtype)
+        # stats_dict = {}
+        # placeholders = torch.zeros(1, device=self.device, dtype=self.dtype)
         return e_total, eloc, placeholders, stats_dict
 
     def __repr__(self) -> str:

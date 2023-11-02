@@ -1,5 +1,7 @@
 import torch
-import torch.distributed as dist
+import numpy as np
+
+from torch.nn.parallel import DistributedDataParallel as DDP
 from typing import List, Tuple, Union
 from torch import Tensor, nn
 from loguru import logger
@@ -9,18 +11,16 @@ from utils.distributed import (
     get_world_size,
     get_rank,
     synchronize,
-    gather_tensor,
-    scatter_tensor,
 )
 
 
 def energy_grad(
-    nqs: nn.Module,
+    nqs: Union[nn.Module, DDP],
     states: Tensor,
     state_prob: Tensor,
     eloc: Tensor,
     eloc_mean: Union[complex, float],
-    exact: bool = False,
+    alpha: int = 1,
     dtype=torch.double,
     method: str = None,
     dlnPsi_lst: List[Tensor] = None,
@@ -37,8 +37,7 @@ def energy_grad(
         states(Tensor): the onv of samples, 2D(n_sample, onv)
         states_prob(Tensor): the probability of per-samples coming from sampling or exact calculating 1D(n_sample).
         eloc(Tensor): the local energy, 1D(n_sample)
-        exact(bool): if exact sampling, default: False. if exact == True, state_prob will be recalculated
-            prob = psi * psi.conj() / psi.norm()**2
+        alpha(int), the batch of AD-grad. default: 1
         dtype(torch.dtype): the dtype of nqs, if using 'AD', torch.complex128 is necessary. default: torch.double
         method_grad(str): the method of calculating energy grad, default: 'AD'
         dlnPsi_lst(List[Tensor]): Per-sample-ln-gradient,default: None.
@@ -50,14 +49,14 @@ def energy_grad(
     """
     if dlnPsi_lst is not None:
         # if dlnPis_lst is given, energy grad will be directly calculated when using SR method
-        psi = _analytical_grad(nqs, states, state_prob, eloc, exact, dtype, method, dlnPsi_lst)
+        psi = _analytical_grad(nqs, states, state_prob, eloc, dtype, method, dlnPsi_lst)
     else:
         if method is None:
             method = "AD"
         if method == "AD":
-            psi = _ad_grad(nqs, states, state_prob, eloc, eloc_mean, exact, dtype)
+            psi = _ad_grad(nqs, states, state_prob, eloc, eloc_mean, alpha, dtype)
         elif method == "analytic" or "num_diff":
-            psi = _analytical_grad(nqs, states, state_prob, eloc, eloc_mean, exact, dtype, method)
+            psi = _analytical_grad(nqs, states, state_prob, eloc, eloc_mean, dtype, method)
         else:
             raise TypeError(f"method {method} must be in ('AD', 'analytic', 'num_diff')")
 
@@ -70,7 +69,6 @@ def _analytical_grad(
     state_prob: Tensor,
     eloc: Tensor,
     eloc_mean: Union[complex, float],
-    exact: bool = False,
     dtype=torch.double,
     method: str = "analytic",
     dlnPsi_lst: List[Tensor] = None,
@@ -122,12 +120,12 @@ def _analytical_grad(
 
 
 def _ad_grad(
-    nqs: nn.Module,
+    nqs: DDP,
     states: Tensor,
     state_prob: Tensor,
     eloc: Tensor,
     eloc_mean: Union[complex, float],
-    exact: bool = False,
+    alpha: int = 1,
     dtype=torch.double,
 ) -> Tensor:
     """
@@ -135,47 +133,61 @@ def _ad_grad(
      F_p = 2R(<O* * eloc> - <O*><eloc>)
      O* = dPsi(x)/psi(x)
     """
-    psi = nqs(states.requires_grad_()).to(dtype)
-    # with torch.no_grad():
-    #     # This is pretty redundance, this is the same eloc calculation
-    #     if exact:
-    #         world_size = get_world_size()
-    #         device = states.device
-    #         # gather psi from all rank
-    #         psi_all = gather_tensor(psi, device, world_size, master_rank=0)
-    #         synchronize()
-    #         if get_rank() == 0:
-    #             psi_all = torch.cat(psi_all)
-    #             state_prob_all = psi_all * psi_all.conj() / psi_all.norm() ** 2
-    #         else:
-    #             state_prob_all = None
-    #         # Scatter state_prob to very rank
-    #         state_prob = scatter_tensor(state_prob_all, device, dtype, world_size, master_rank=0)
-    #         state_prob *= world_size
-    #         synchronize()
-    #         # assure the length of state_prob == dim
-    #         assert state_prob.shape[0] == psi.shape[0]
-    #         del psi_all, state_prob_all
+    device = states.device
+    dim = states.size(0)
+    idx_lst = torch.arange(dim).to(device)
+    nbatch = int(dim / alpha)
+    loss_sum = torch.zeros(1, device=device, dtype=torch.double)
+    idx_lst = torch.empty(alpha, dtype=torch.int64).fill_(nbatch)
+    idx_lst[-1] = dim - (idx_lst.size(0) - 1) * nbatch
+    idx_lst: List[int] = idx_lst.cumsum(dim=0).tolist()
 
-    state_prob = state_prob.real.to(dtype)
-    eloc = eloc.to(dtype)
+    begin = 0
+    
+    # disable gradient synchronizations in the rank
+    with nqs.no_sync():
+        for i in range(len(idx_lst) - 1):
+            end = idx_lst[i]
+            psi = nqs(states[begin:end].requires_grad_()).to(dtype)
 
-    # F_p = 2R(<O* * eloc> - <O*><eloc>)
+            state_prob_batch = state_prob[begin:end].real.to(dtype)
+            eloc_batch = eloc[begin:end].to(dtype)
+
+            log_psi = psi.log()
+            if torch.any(torch.isnan(log_psi)):
+                raise ValueError(
+                    f"There are negative numbers in the log-psi, please use complex128"
+                )
+            # loss1 = torch.einsum("i, i, i ->", eloc_batch, log_psi.conj(), state_prob_batch)
+            # loss2 = eloc_mean * torch.einsum("i, i ->", log_psi.conj(), state_prob_batch)
+            # avoid empty tensor
+            loss1 = torch.sum(eloc_batch * log_psi.conj() * state_prob_batch)
+            loss2 = eloc_mean * torch.sum(log_psi.conj() * state_prob_batch)
+            loss = 2 * (loss1 - loss2).real
+            loss.backward()
+            loss_sum += loss.detach()
+            begin = end
+
+    # synchronization gradient in the rank, rather inelegant below code!!
+    end = idx_lst[-1]
+    psi = nqs(states[begin:end].requires_grad_()).to(dtype)
+    state_prob_batch = state_prob[begin:end].real.to(dtype)
+    eloc_batch = eloc[begin:end].to(dtype)
     log_psi = psi.log()
     if torch.any(torch.isnan(log_psi)):
         raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
-    loss1 = torch.einsum("i, i, i ->", eloc, log_psi.conj(), state_prob)
-    # loss2 = torch.einsum("i, i ->", eloc, state_prob) * torch.einsum("i, i ->", log_psi.conj(), state_prob)
-    loss2 = eloc_mean * torch.einsum("i, i ->", log_psi.conj(), state_prob)
+    loss1 = torch.sum(eloc_batch * log_psi.conj() * state_prob_batch)
+    loss2 = eloc_mean * torch.sum(log_psi.conj() * state_prob_batch)
     loss = 2 * (loss1 - loss2).real
-    logger.debug(f"loss: {loss:.4E}")
+    loss.backward()
+    loss_sum += loss.detach()
 
-    reduce_loss = all_reduce_tensor(loss, world_size=get_world_size(), in_place=False)
+    logger.debug(f"loss: {loss_sum.item():.4E}")
+    reduce_loss = all_reduce_tensor(loss_sum, world_size=get_world_size(), in_place=False)
     synchronize()
     if get_rank() == 0:
         logger.debug(f"Reduce-loss: {reduce_loss[0].item():.4E}", master=True)
 
-    loss.backward()
     return psi.detach()
 
 

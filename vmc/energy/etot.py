@@ -2,7 +2,7 @@ import time
 import torch
 import numpy as np
 
-from typing import Tuple, Callable, Union
+from typing import Tuple, Callable, Union, List
 from torch import Tensor
 from loguru import logger
 
@@ -39,25 +39,24 @@ def total_energy(
                     else zeros-tensor.
         statistics: ...
     """
+    t0 = time.time_ns()
     dim: int = x.shape[0]
     device = x.device
     eloc_lst = torch.zeros(dim, device=device).to(dtype)
     psi_lst = torch.zeros_like(eloc_lst)
-    idx_lst = torch.arange(dim).to(device)
     time_lst = []
     statistics = {}
+    idx_lst = torch.empty(int(np.ceil(dim / nbatch)), dtype=torch.int64).fill_(nbatch)
+    idx_lst[-1] = dim - (idx_lst.size(0) - 1) * nbatch
+    idx_lst: List[int] = idx_lst.cumsum(dim=0).tolist()
 
-    # calculate the total energy using splits
-    t0 = time.time_ns()
-    # ons_dataset = Data.TensorDataset(x, idx_lst)
-    # loader = Data.DataLoader(dataset=ons_dataset, batch_size=nbatch,
-    #                           shuffle=False, drop_last=False)
-
-    # for step, (ons, idx) in enumerate(loader):
-    # for ons, idx in loader: # why is slower than using split?
-    logger.info(f"nbatch: {nbatch}, dim: {dim}, split: {int(np.ceil(dim/nbatch))}")
-    for ons, idx in zip(x.split(nbatch), idx_lst.split(nbatch)):
-        eloc_lst[idx], psi_lst[idx], x_time = local_energy(
+    # Calculate local energy in batches, better method?
+    logger.info(f"nbatch: {nbatch}, dim: {dim}, split: {len(idx_lst)}")
+    begin = 0
+    for i in range(len(idx_lst)):
+        end = idx_lst[i]
+        ons = x[begin:end]
+        eloc, psi, x_time = local_energy(
             ons,
             h1e,
             h2e,
@@ -70,9 +69,10 @@ def total_energy(
             WF_LUT=WF_LUT,
             use_unique=use_unique,
         )
-        # y = torch.zeros(0, ons.shape[1], dtype=torch.uint8, device=ons.device)
+        eloc_lst[begin:end] = eloc
+        psi_lst[begin:end] = psi
         time_lst.append(x_time)
-
+        begin = end
     # check local energy
     if torch.any(torch.isnan(eloc_lst)):
         raise ValueError(f"The Local energy exists nan")

@@ -56,7 +56,7 @@ class VMCOptimizer:
         lr_sch_params: dict = None,
         max_iter: int = 2000,
         dtype: Dtype = None,
-        HF_init: int = None,
+        HF_init: int = 0,
         external_model: any = None,
         only_sample: bool = False,
         pre_CI: CIWavefunction = None,
@@ -66,6 +66,7 @@ class VMCOptimizer:
         method_jacobian: str = "vector",
         interval: int = 100,
         prefix: str = "VMC",
+        alpha: int = 1,
     ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -92,11 +93,12 @@ class VMCOptimizer:
         else:
             self.lr_scheduler = None
 
-        self.HF_init = HF_init
+        self.HF_init = int(HF_init)
         self.sr: bool = sr
         self.method_jacobian: str = method_jacobian if self.sr else None
         self.max_iter = max_iter
         self.method_grad = method_grad
+        self.alpha = int(alpha)
 
         # Sample
         self.sampler_param = sampler_param
@@ -188,7 +190,7 @@ class VMCOptimizer:
             logger.info(f"Begin VMC iteration: {time.ctime()}", master=True)
         for epoch in range(self.max_iter):
             t0 = time.time_ns()
-            if self.HF_init is None or epoch < self.HF_init:
+            if  epoch < self.HF_init:
                 initial_state = self.onstate[random.randrange(self.dim)].clone().detach()
             else:
                 initial_state = self.onstate[0].clone().detach()
@@ -244,7 +246,7 @@ class VMCOptimizer:
                     state_prob,
                     eloc,
                     eloc_mean,
-                    self.exact,
+                    self.alpha,
                     self.dtype,
                     self.method_grad,
                 )
@@ -428,12 +430,12 @@ class VMCOptimizer:
         ax.set_xlabel("Iteration Time")
         ax.set_yscale("log")
         ax.set_ylabel("Gradients")
-        plt.title(os.path.split(prefix)[1]) # remove path
+        plt.title(os.path.split(prefix)[1])  # remove path
         plt.legend(loc="best")
 
         plt.subplots_adjust(wspace=0, hspace=0.5)
-        plt.tight_layout()
-        plt.savefig(prefix + ".png", format="png", dpi=1000)
+        # plt.tight_layout(pad=0.5, h_pad=0.5, w_pad=0.5)
+        plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches='tight')
         plt.close()
 
         # save energy, ||g||, max_|g|
