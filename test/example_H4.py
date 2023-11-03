@@ -18,12 +18,11 @@ from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string
 from utils.integral import read_integral, integral_pyscf
 from utils import convert_onv, get_fock_space
 from utils.loggings import dist_print
-from vmc.ansatz import RBMWavefunction, RNNWavefunction
+from vmc.ansatz import RBMWavefunction, RNNWavefunction, RBMSites
 from vmc.optim import VMCOptimizer, GD
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise
 from libs.C_extension import onv_to_tensor
 
-from ar_rbm import RBMSites
 if __name__ == "__main__":
     # dist.init_process_group("nccl")
     dist.init_process_group("gloo")
@@ -137,6 +136,8 @@ if __name__ == "__main__":
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
+        "use_LUT": True,
+        "use_unique": True,
         "max_memory": 4,
         "alpha": 0.025,
         "method_sample": "AR", # only support AR-sampling
@@ -170,9 +171,9 @@ if __name__ == "__main__":
         electron_info=electron_info,
         max_iter=2000,
         interval=10,
-        HF_init=0,
+        MAX_AD_DIM=-1,
         sr=False, # using SR method
-        pre_CI=ucisd_wf,  # using SR method
+        pre_CI=ucisd_wf,
         pre_train_info=pre_train_info,
         method_grad="AD",
         method_jacobian="vector", # calculate energy grad using auto difference
