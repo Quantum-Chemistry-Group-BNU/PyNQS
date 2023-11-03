@@ -12,6 +12,7 @@ from utils.distributed import (
     get_rank,
     synchronize,
 )
+from utils.public_function import MemoryTrack
 
 
 def energy_grad(
@@ -20,7 +21,7 @@ def energy_grad(
     state_prob: Tensor,
     eloc: Tensor,
     eloc_mean: Union[complex, float],
-    alpha: int = 1,
+    AD_MAX_DIM: int = -1,
     dtype=torch.double,
     method: str = None,
     dlnPsi_lst: List[Tensor] = None,
@@ -37,7 +38,7 @@ def energy_grad(
         states(Tensor): the onv of samples, 2D(n_sample, onv)
         states_prob(Tensor): the probability of per-samples coming from sampling or exact calculating 1D(n_sample).
         eloc(Tensor): the local energy, 1D(n_sample)
-        alpha(int), the batch of AD-grad. default: 1
+        AD_MAX_DIM(int), the max of dim when using loss.backward(), default: -1, not limitation.
         dtype(torch.dtype): the dtype of nqs, if using 'AD', torch.complex128 is necessary. default: torch.double
         method_grad(str): the method of calculating energy grad, default: 'AD'
         dlnPsi_lst(List[Tensor]): Per-sample-ln-gradient,default: None.
@@ -54,7 +55,7 @@ def energy_grad(
         if method is None:
             method = "AD"
         if method == "AD":
-            psi = _ad_grad(nqs, states, state_prob, eloc, eloc_mean, alpha, dtype)
+            psi = _ad_grad(nqs, states, state_prob, eloc, eloc_mean, dtype, AD_MAX_DIM)
         elif method == "analytic" or "num_diff":
             psi = _analytical_grad(nqs, states, state_prob, eloc, eloc_mean, dtype, method)
         else:
@@ -104,7 +105,6 @@ def _analytical_grad(
 
     grad_update_lst: List[Tensor] = []
     n_sample = states.shape[0]
-    # breakpoint()
     for dws in dlnPsi_lst:
         # (n_sample, n_para), two dim
         dlnPsi = dws.reshape(n_sample, -1).to(dtype)
@@ -125,8 +125,8 @@ def _ad_grad(
     state_prob: Tensor,
     eloc: Tensor,
     eloc_mean: Union[complex, float],
-    alpha: int = 1,
     dtype=torch.double,
+    AD_MAX_DIM: int = -1,
 ) -> Tensor:
     """
     Use auto-diff calculate energy grad
@@ -135,52 +135,51 @@ def _ad_grad(
     """
     device = states.device
     dim = states.size(0)
-    idx_lst = torch.arange(dim).to(device)
-    nbatch = int(dim / alpha)
     loss_sum = torch.zeros(1, device=device, dtype=torch.double)
+
+    # split dim batch
+    if AD_MAX_DIM == -1:
+        alpha = 1
+    else:
+        alpha = int((dim - 1) / AD_MAX_DIM + 1)
+    nbatch = int(dim / alpha)
     idx_lst = torch.empty(alpha, dtype=torch.int64).fill_(nbatch)
     idx_lst[-1] = dim - (idx_lst.size(0) - 1) * nbatch
     idx_lst: List[int] = idx_lst.cumsum(dim=0).tolist()
 
-    begin = 0
-    
-    # disable gradient synchronizations in the rank
-    with nqs.no_sync():
-        for i in range(len(idx_lst) - 1):
-            end = idx_lst[i]
-            psi = nqs(states[begin:end].requires_grad_()).to(dtype)
+    def batch_loss_backward(begin: int, end: int) -> None:
+        nonlocal loss_sum
+        log_psi = nqs(states[begin:end].requires_grad_()).to(dtype).log()
 
-            state_prob_batch = state_prob[begin:end].real.to(dtype)
-            eloc_batch = eloc[begin:end].to(dtype)
+        state_prob_batch = state_prob[begin:end].real.to(dtype)
+        eloc_batch = eloc[begin:end].to(dtype)
 
-            log_psi = psi.log()
-            if torch.any(torch.isnan(log_psi)):
-                raise ValueError(
-                    f"There are negative numbers in the log-psi, please use complex128"
-                )
-            # loss1 = torch.einsum("i, i, i ->", eloc_batch, log_psi.conj(), state_prob_batch)
-            # loss2 = eloc_mean * torch.einsum("i, i ->", log_psi.conj(), state_prob_batch)
-            # avoid empty tensor
-            loss1 = torch.sum(eloc_batch * log_psi.conj() * state_prob_batch)
-            loss2 = eloc_mean * torch.sum(log_psi.conj() * state_prob_batch)
-            loss = 2 * (loss1 - loss2).real
-            loss.backward()
-            loss_sum += loss.detach()
-            begin = end
+        if torch.any(torch.isnan(log_psi)):
+            raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
+        # loss1 = torch.einsum("i, i, i ->", eloc_batch, log_psi.conj(), state_prob_batch)
+        # loss2 = eloc_mean * torch.einsum("i, i ->", log_psi.conj(), state_prob_batch)
+        # avoid empty tensor
+        loss1 = torch.sum(eloc_batch * log_psi.conj() * state_prob_batch)
+        loss2 = eloc_mean * torch.sum(log_psi.conj() * state_prob_batch)
+        loss = 2 * (loss1 - loss2).real
+        loss.backward()
+        loss_sum += loss.detach()
 
-    # synchronization gradient in the rank, rather inelegant below code!!
-    end = idx_lst[-1]
-    psi = nqs(states[begin:end].requires_grad_()).to(dtype)
-    state_prob_batch = state_prob[begin:end].real.to(dtype)
-    eloc_batch = eloc[begin:end].to(dtype)
-    log_psi = psi.log()
-    if torch.any(torch.isnan(log_psi)):
-        raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
-    loss1 = torch.sum(eloc_batch * log_psi.conj() * state_prob_batch)
-    loss2 = eloc_mean * torch.sum(log_psi.conj() * state_prob_batch)
-    loss = 2 * (loss1 - loss2).real
-    loss.backward()
-    loss_sum += loss.detach()
+        del state_prob_batch, log_psi, loss
+
+    with MemoryTrack(device) as track:
+        begin = 0
+        # disable gradient synchronizations in the rank
+        with nqs.no_sync():
+            for i in range(len(idx_lst) - 1):
+                end = idx_lst[i]
+                batch_loss_backward(begin, end)
+                begin = end
+                track.manually_clean_cache()
+
+        end = idx_lst[-1]
+        # synchronization gradient in the rank
+        batch_loss_backward(begin, end)
 
     logger.debug(f"loss: {loss_sum.item():.4E}")
     reduce_loss = all_reduce_tensor(loss_sum, world_size=get_world_size(), in_place=False)
@@ -188,10 +187,8 @@ def _ad_grad(
     if get_rank() == 0:
         logger.debug(f"Reduce-loss: {reduce_loss[0].item():.4E}", master=True)
 
-    del loss1, loss2
-    if states.is_cuda:
-        torch.cuda.empty_cache()
-    return psi.detach()
+    placeholders = torch.zeros(1, device=device, dtype=dtype)
+    return placeholders
 
 
 def _numerical_differentiation(

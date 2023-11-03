@@ -8,8 +8,7 @@ from loguru import logger
 
 from .eloc import local_energy
 from utils.distributed import gather_tensor, get_world_size, synchronize, get_rank, scatter_tensor
-from utils.public_function import WavefunctionLUT
-
+from utils.public_function import WavefunctionLUT, MemoryTrack
 
 def total_energy(
     x: Tensor,
@@ -52,27 +51,31 @@ def total_energy(
 
     # Calculate local energy in batches, better method?
     logger.info(f"nbatch: {nbatch}, dim: {dim}, split: {len(idx_lst)}")
-    begin = 0
-    for i in range(len(idx_lst)):
-        end = idx_lst[i]
-        ons = x[begin:end]
-        eloc, psi, x_time = local_energy(
-            ons,
-            h1e,
-            h2e,
-            ansatz,
-            sorb,
-            nele,
-            noa,
-            nob,
-            dtype=dtype,
-            WF_LUT=WF_LUT,
-            use_unique=use_unique,
-        )
-        eloc_lst[begin:end] = eloc
-        psi_lst[begin:end] = psi
-        time_lst.append(x_time)
-        begin = end
+
+    with MemoryTrack(device) as track:
+        begin = 0
+        for i in range(len(idx_lst)):
+            end = idx_lst[i]
+            ons = x[begin:end]
+            eloc, psi, x_time = local_energy(
+                ons,
+                h1e,
+                h2e,
+                ansatz,
+                sorb,
+                nele,
+                noa,
+                nob,
+                dtype=dtype,
+                WF_LUT=WF_LUT,
+                use_unique=use_unique,
+            )
+            eloc_lst[begin:end] = eloc
+            psi_lst[begin:end] = psi
+            time_lst.append(x_time)
+            begin = end
+        track.manually_clean_cache((eloc, psi))
+    
     # check local energy
     if torch.any(torch.isnan(eloc_lst)):
         raise ValueError(f"The Local energy exists nan")

@@ -66,7 +66,7 @@ class VMCOptimizer:
         method_jacobian: str = "vector",
         interval: int = 100,
         prefix: str = "VMC",
-        alpha: int = 1,
+        MAX_AD_DIM: int = -1,
     ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -98,7 +98,7 @@ class VMCOptimizer:
         self.method_jacobian: str = method_jacobian if self.sr else None
         self.max_iter = max_iter
         self.method_grad = method_grad
-        self.alpha = int(alpha)
+        self.MAX_AD_DIM = MAX_AD_DIM
 
         # Sample
         self.sampler_param = sampler_param
@@ -190,7 +190,7 @@ class VMCOptimizer:
             logger.info(f"Begin VMC iteration: {time.ctime()}", master=True)
         for epoch in range(self.max_iter):
             t0 = time.time_ns()
-            if  epoch < self.HF_init:
+            if epoch < self.HF_init:
                 initial_state = self.onstate[random.randrange(self.dim)].clone().detach()
             else:
                 initial_state = self.onstate[0].clone().detach()
@@ -246,7 +246,7 @@ class VMCOptimizer:
                     state_prob,
                     eloc,
                     eloc_mean,
-                    self.alpha,
+                    self.MAX_AD_DIM,
                     self.dtype,
                     self.method_grad,
                 )
@@ -435,7 +435,7 @@ class VMCOptimizer:
 
         plt.subplots_adjust(wspace=0, hspace=0.5)
         # plt.tight_layout(pad=0.5, h_pad=0.5, w_pad=0.5)
-        plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches='tight')
+        plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches="tight")
         plt.close()
 
         # save energy, ||g||, max_|g|
