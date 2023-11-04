@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn.functional as F
 
@@ -205,17 +204,22 @@ class RBMSites(nn.Module):
             x = x.unsqueeze(0)
 
         x = (x + 1) / 2  # 1/-1 -> 1/0
+        nbatch, _ = tuple(x.size())  # (nbatch, sorb)
+
         # remove duplicate onstate, dose not support auto-backward
         use_unique = self.use_unique and (not x.requires_grad)
+        unique_sorb: int = self.sorb // 2
         if use_unique:
+            # avoid sorted too much orbital, unique_sorb >= 2
+            unique_sorb = min(
+                int(torch.tensor(nbatch / 1024 + 1).log2().ceil() + 1), self.sorb // 2
+            )
             # sorted x, avoid repeated sorting using 'torch.unique'
             sorted_idx = torch_lexsort(
                 keys=list(map(torch.flatten, reversed(x[:, : self.sorb // 2].split(1, dim=1))))
             )
             x = x[sorted_idx]
             original_idx = torch.argsort(sorted_idx)
-
-        nbatch, sorb = tuple(x.size())  # (nbatch, sorb)
 
         prob_lst: List[Tensor] = []
         prob = torch.ones(nbatch, **self.factory_kwargs)
@@ -233,7 +237,7 @@ class RBMSites(nn.Module):
                 if k == 0:
                     x0 = x[:1, :k]  # empty tensor, shape: [1, 0]
                     inverse_i = torch.zeros(nbatch, dtype=torch.int64, device=self.device)
-                elif 1 <= k <= self.sorb // 2:
+                elif 1 <= k <= unique_sorb:
                     # x0: (n_unique, 2), index_unique_i: (nbatch)
                     # input tensor is already sorted, torch.unique_consecutive is faster.
                     x0, inverse_i = torch.unique_consecutive(x[:, :k], dim=0, return_inverse=True)
@@ -241,7 +245,7 @@ class RBMSites(nn.Module):
                     # Repeated states may be sparse, so not unique
                     x0 = x[:, :k]
                     inverse_i = None
-                if k <= self.sorb // 2:
+                if k <= unique_sorb:
                     y0 = self.psi_one_sites(x0, k)[inverse_i]  # (nbatch, 2)
                 else:
                     y0 = self.psi_one_sites(x0, k)  # (nbatch, 2)
@@ -309,17 +313,23 @@ class RBMSites(nn.Module):
             x = x.unsqueeze(0)
 
         x = (x + 1) / 2  # 1/-1 -> 1/0
+        nbatch, sorb = tuple(x.size())  # (nbatch, sorb)
         # remove duplicate onstate, dose not support auto-backward
+
         use_unique = self.use_unique and (not x.requires_grad)
+        unique_sorb: int = self.sorb // 2
         if use_unique:
+            # avoid sorted much orbital, unique_sorb >= 2
+            unique_sorb = min(
+                int(torch.tensor(nbatch / 1024 + 1).log2().ceil() + 1), self.sorb // 2
+            )
             # sorted x, avoid repeated sorting using 'torch.unique'
             sorted_idx = torch_lexsort(
-                keys=list(map(torch.flatten, reversed(x[:, : self.sorb // 2].split(1, dim=1))))
+                keys=list(map(torch.flatten, reversed(x[:, :unique_sorb].split(1, dim=1))))
             )
             x = x[sorted_idx]
             original_idx = torch.argsort(sorted_idx)
 
-        nbatch, sorb = tuple(x.size())  # (nbatch, sorb)
         # prob_lst: List[Tensor] = []
         prob = torch.ones(nbatch, **self.factory_kwargs)
         baselines = torch.tensor([1.0, 2.0], **self.factory_kwargs)
@@ -337,7 +347,7 @@ class RBMSites(nn.Module):
                 if k == 0:
                     x0 = x[:1, :k]  # empty tensor (1, 0)
                     inverse_i = torch.zeros(nbatch, dtype=torch.int64, device=self.device)
-                elif 1 <= k <= self.sorb // 2:
+                elif 1 <= k <= unique_sorb:
                     # x0: (n_unique, 2), index_unique_i: (nbatch)
                     # input tensor is already sorted, torch.unique_consecutive is faster.
                     x0, inverse_i = torch.unique_consecutive(x[:, :k], dim=0, return_inverse=True)
@@ -345,7 +355,7 @@ class RBMSites(nn.Module):
                     # Repeated states may be sparse, so not unique
                     x0 = x[:, :k]
                     inverse_i = None
-                if k <= self.sorb // 2:
+                if k <= unique_sorb:
                     y0 = self.psi_two_sites(x0, k)[inverse_i]  # (nbatch, 4)
                 else:
                     y0 = self.psi_two_sites(x0, k)  # (nbatch, 4)

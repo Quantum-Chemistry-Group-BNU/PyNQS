@@ -132,15 +132,17 @@ if __name__ == "__main__":
 
     sampler_param = {
         "n_sample": int(1e06),
-        "debug_exact": True, # exact optimizations
+        "debug_exact": False, # exact optimizations
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
-        "use_LUT": True,
-        "use_unique": True,
         "max_memory": 4,
         "alpha": 0.025,
         "method_sample": "AR", # only support AR-sampling
+        "use_LUT": True,
+        "use_unique": True,
+        "reduce_psi": True,
+        "eps": 1.0e-12,
     }
     opt_type = optim.AdamW
     opt_params = {"lr": 0.005, "weight_decay": 0.0001, "betas": (0.9, 0.99)}

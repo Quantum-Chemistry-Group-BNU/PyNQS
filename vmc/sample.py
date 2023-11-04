@@ -68,6 +68,8 @@ class Sampler:
         max_unique_sample: int = None,
         use_LUT: bool = False,
         use_unique: bool = True,
+        reduce_psi: bool = False,
+        eps: float = 1e-12,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -138,6 +140,11 @@ class Sampler:
 
         # Use 'torch.unique' to speed up local-energy calculations
         self.use_unique = use_unique
+
+        # ignore x' when <x|H|x'>/psi(x) < eps
+        # only apply to when psi(x)^2 is normalization in FCI-space
+        self.reduce_psi = reduce_psi
+        self.eps = eps
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -493,6 +500,8 @@ class Sampler:
             WF_LUT=WF_LUT,
             use_unique=self.use_unique,
             dtype=self.dtype,
+            reduce_psi=self.reduce_psi,
+            eps=self.eps,
         )
         # e_total = -2.33233
         # eloc = torch.rand(sample.size(0), device=self.device, dtype=self.dtype)
@@ -508,6 +517,8 @@ class Sampler:
             + f"    the number of sample: {self.n_sample}\n"
             + f"    Using LUT: {self.use_LUT}\n"
             + f"    local energy unique: {self.use_unique}\n"
+            + f"    Reduce psi: {self.reduce_psi}\n"
+            + f"    eps: {self.eps:.3E}\n"
             + f"    Therm step: {self.therm_step}\n"
             + f"    Exact sampling: {self.debug_exact}\n"
             + f"    Given CI: {self.ci_space.size(0):.3E}\n"

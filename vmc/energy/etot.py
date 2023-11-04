@@ -10,6 +10,7 @@ from .eloc import local_energy
 from utils.distributed import gather_tensor, get_world_size, synchronize, get_rank, scatter_tensor
 from utils.public_function import WavefunctionLUT, MemoryTrack
 
+
 def total_energy(
     x: Tensor,
     nbatch: int,
@@ -27,6 +28,8 @@ def total_energy(
     WF_LUT: WavefunctionLUT = None,
     use_unique: bool = True,
     dtype=torch.double,
+    reduce_psi: bool = False,
+    eps: float = 1.0e-12,
 ) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
     r"""
 
@@ -69,13 +72,15 @@ def total_energy(
                 dtype=dtype,
                 WF_LUT=WF_LUT,
                 use_unique=use_unique,
+                reduce_psi=reduce_psi,
+                eps=eps,
             )
             eloc_lst[begin:end] = eloc
             psi_lst[begin:end] = psi
             time_lst.append(x_time)
             begin = end
         track.manually_clean_cache((eloc, psi))
-    
+
     # check local energy
     if torch.any(torch.isnan(eloc_lst)):
         raise ValueError(f"The Local energy exists nan")

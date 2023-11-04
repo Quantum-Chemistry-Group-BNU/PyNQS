@@ -1,19 +1,14 @@
-import time
 import torch
-import numpy as np
-import math
 import torch.nn.functional as F
 
 from typing import Optional, Tuple, List
 from torch import nn, Tensor
-from torch.nn.parameter import Parameter
 
 from utils.public_function import (
     multinomial_tensor,
     torch_consecutive_unique_idex,
     torch_lexsort,
 )
-from libs.C_extension import tensor_to_onv
 
 
 class RNNWavefunction(nn.Module):
@@ -121,6 +116,7 @@ class RNNWavefunction(nn.Module):
         x = ((x + 1) / 2).to(torch.int64)  # 1/-1 -> 1/0
         # (nbatch, seq_len, sorb), seq_len = 1, 1: occupied, 0: unoccupied
         nbatch, _, dim = tuple(x.size())
+        unique_sorb: int = self.sorb // 2
 
         alpha = self.nele // 2
         beta = self.nele // 2
@@ -133,10 +129,14 @@ class RNNWavefunction(nn.Module):
         # Initialize the RNN hidden state
         if use_unique:
             hidden_state: Tensor = None
+            # avoid sorted much orbital, unique_sorb >= 2
+            unique_sorb = min(
+                int(torch.tensor(nbatch / 1024 + 1).log2().ceil() + 1), self.sorb // 2
+            )
             # sorted x, avoid repeated sorting using 'torch.unique'
             sorted_idx = torch_lexsort(
                 keys=list(
-                    map(torch.flatten, reversed(x.squeeze(1)[:, : self.sorb // 2].split(1, dim=1)))
+                    map(torch.flatten, reversed(x.squeeze(1)[:, :unique_sorb].split(1, dim=1)))
                 )
             )
             x = x[sorted_idx]
@@ -160,7 +160,7 @@ class RNNWavefunction(nn.Module):
                 # notice, the shape of hidden_state is different in i-th cycle,
                 # so, hidden_state must be indexed using inverse_before[index_i] or inverse_i
                 # coming from the torch.unique. this process is pretty convoluted.
-                if i <= self.sorb // 2:
+                if i <= unique_sorb:
                     # x0: (n_unique, 2), inverse_i: (nbatch), index_i: (unique)
                     if i == 0:
                         x0 = torch.zeros(1, 1, 2, **self.factory_kwargs)
@@ -181,10 +181,10 @@ class RNNWavefunction(nn.Module):
                         hidden_state = hidden_state[:, inverse_before[index_i]]
                     inverse_before = inverse_i
                 # change (n_layers, n_unique, n_hidden) => (n_layers, nbatch, n_hidden)
-                if i == self.sorb // 2 + 1:
+                if i == unique_sorb + 1:
                     hidden_state = hidden_state[:, inverse_i]
                 y0, hidden_state = self.rnn(x0, hidden_state)
-                if i <= self.sorb // 2:
+                if i <= unique_sorb:
                     y0 = y0[inverse_i]
             # not use unique
             else:
