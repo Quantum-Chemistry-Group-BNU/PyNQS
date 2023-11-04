@@ -70,6 +70,7 @@ class Sampler:
         use_unique: bool = True,
         reduce_psi: bool = False,
         eps: float = 1e-12,
+        only_AD: bool = False,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -145,6 +146,9 @@ class Sampler:
         # only apply to when psi(x)^2 is normalization in FCI-space
         self.reduce_psi = reduce_psi
         self.eps = eps
+
+        # only sampling not calculations local-energy, applies to test AD memory
+        self.only_AD = only_AD
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -483,30 +487,32 @@ class Sampler:
             self.alpha,
             device=self.device,
         )
-        e_total, eloc, placeholders, stats_dict = total_energy(
-            sample,
-            nbatch,
-            h1e=self.h1e,
-            h2e=self.h2e,
-            ansatz=self.nqs,
-            ecore=self.ecore,
-            sorb=self.sorb,
-            nele=self.nele,
-            noa=self.noa,
-            nob=self.nob,
-            state_prob=state_prob,
-            state_counts=state_counts,
-            exact=self.debug_exact,
-            WF_LUT=WF_LUT,
-            use_unique=self.use_unique,
-            dtype=self.dtype,
-            reduce_psi=self.reduce_psi,
-            eps=self.eps,
-        )
-        # e_total = -2.33233
-        # eloc = torch.rand(sample.size(0), device=self.device, dtype=self.dtype)
-        # stats_dict = {}
-        # placeholders = torch.zeros(1, device=self.device, dtype=self.dtype)
+        if not self.only_AD:
+            e_total, eloc, placeholders, stats_dict = total_energy(
+                sample,
+                nbatch,
+                h1e=self.h1e,
+                h2e=self.h2e,
+                ansatz=self.nqs,
+                ecore=self.ecore,
+                sorb=self.sorb,
+                nele=self.nele,
+                noa=self.noa,
+                nob=self.nob,
+                state_prob=state_prob,
+                state_counts=state_counts,
+                exact=self.debug_exact,
+                WF_LUT=WF_LUT,
+                use_unique=self.use_unique,
+                dtype=self.dtype,
+                reduce_psi=self.reduce_psi,
+                eps=self.eps,
+            )
+        else:
+            e_total = -2.33233
+            eloc = torch.rand(sample.size(0), device=self.device, dtype=self.dtype)
+            stats_dict = {}
+            placeholders = torch.zeros(1, device=self.device, dtype=self.dtype)
         return e_total, eloc, placeholders, stats_dict
 
     def __repr__(self) -> str:
@@ -534,5 +540,8 @@ class Sampler:
         )
 
     def _statistics(self, data: dict):
-        s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}]"
+        if self.only_AD:
+            s = f"**This Auto-grad memory testing**"
+        else:
+            s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}]"
         logger.debug(s)

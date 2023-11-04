@@ -156,8 +156,8 @@ def _local_energy_simple(
     )
     del comb_hij, comb_x  # index, unique_x1, unique
 
-    if x.is_cuda:
-        torch.cuda.empty_cache()
+    # if x.is_cuda:
+    #     torch.cuda.empty_cache()
     return eloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
 
 
@@ -270,6 +270,6 @@ def _local_energy_reduce_psi(
     if use_unique:
         del unique_comb, inverse
 
-    if x.is_cuda:
-        torch.cuda.empty_cache()
+    # if x.is_cuda:
+    #     torch.cuda.empty_cache()
     return eloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)

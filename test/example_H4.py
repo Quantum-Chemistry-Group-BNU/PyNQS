@@ -132,7 +132,7 @@ if __name__ == "__main__":
 
     sampler_param = {
         "n_sample": int(1e06),
-        "debug_exact": False, # exact optimizations
+        "debug_exact": True, # exact optimizations
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -143,6 +143,7 @@ if __name__ == "__main__":
         "use_unique": True,
         "reduce_psi": True,
         "eps": 1.0e-12,
+        "only_AD": False, # applies to test AD memory
     }
     opt_type = optim.AdamW
     opt_params = {"lr": 0.005, "weight_decay": 0.0001, "betas": (0.9, 0.99)}
