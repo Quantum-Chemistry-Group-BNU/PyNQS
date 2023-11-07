@@ -214,6 +214,7 @@ class RBMSites(nn.Module):
             unique_sorb = min(
                 int(torch.tensor(nbatch / 1024 + 1).log2().ceil() + 1), self.sorb // 2
             )
+            unique_sorb = max(2, unique_sorb)
             # sorted x, avoid repeated sorting using 'torch.unique'
             sorted_idx = torch_lexsort(
                 keys=list(map(torch.flatten, reversed(x[:, : self.sorb // 2].split(1, dim=1))))
@@ -323,6 +324,7 @@ class RBMSites(nn.Module):
             unique_sorb = min(
                 int(torch.tensor(nbatch / 1024 + 1).log2().ceil() + 1), self.sorb // 2
             )
+            unique_sorb = max(2, unique_sorb)
             # sorted x, avoid repeated sorting using 'torch.unique'
             sorted_idx = torch_lexsort(
                 keys=list(map(torch.flatten, reversed(x[:, :unique_sorb].split(1, dim=1))))

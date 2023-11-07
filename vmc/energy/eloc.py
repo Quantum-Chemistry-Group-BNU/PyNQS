@@ -58,7 +58,7 @@ def local_energy(
             t3: psi(x)
     """
     with torch.no_grad():
-        if reduce_psi:
+        if reduce_psi and eps > 0.0:
             func = _local_energy_reduce_psi
         else:
             func = _local_energy_simple
