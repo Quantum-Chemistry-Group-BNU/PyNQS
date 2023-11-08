@@ -131,7 +131,7 @@ class RNNWavefunction(nn.Module):
             hidden_state: Tensor = None
             # avoid sorted much orbital, unique_sorb >= 2
             unique_sorb = min(
-                int(torch.tensor(nbatch / 1024).log2().ceil()), self.sorb // 2
+                int(torch.tensor(nbatch / 1024 + 1).log2().ceil()), self.sorb // 2
             )
             unique_sorb = max(2, unique_sorb)
             # sorted x, avoid repeated sorting using 'torch.unique'

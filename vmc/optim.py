@@ -370,6 +370,8 @@ class VMCOptimizer:
             )
 
     def plot_figure(self, e_ref: float = None, e_lst: List[float] = None, prefix: str = "VMC"):
+        if self.rank != 0:
+            return None
         fig = plt.figure()
         ax = fig.add_subplot(2, 1, 1)
         e = np.array(self.e_lst)
@@ -408,9 +410,11 @@ class VMCOptimizer:
             ylim1 = np.max(y) + (np.min(y) - e_ref) * y_ratio
             axins.set_xlim(xlim0, xlim1)
             axins.set_ylim(ylim0, ylim1)
-            logger.info(f"Last 100th energy: {np.average(e[-100:]):.9f}", master=True)
+            last = -1 * min(len(e), 100)
+            logger.info(f"Last {abs(last)}th energy: {np.average(e[last:]):.9f}", master=True)
             logger.info(
-                f"Reference energy: {e_ref:.9f}, error: {abs((np.average(e[-100:])-e_ref)/e_ref) * 100:.6f}%"
+                f"Reference energy: {e_ref:.9f}, error: {abs((np.average(e[last:])-e_ref)/e_ref) * 100:.6f}%",
+                master=True,
             )
 
         # plot the L2-norm and max-abs of the gradients
@@ -435,7 +439,7 @@ class VMCOptimizer:
 
         plt.subplots_adjust(wspace=0, hspace=0.5)
         # plt.tight_layout(pad=0.5, h_pad=0.5, w_pad=0.5)
-        plt.savefig(prefix + ".png", format="png", dpi=1000, bbox_inches="tight")
+        plt.savefig(prefix + ".png", format="png", dpi=1000)
         plt.close()
 
         # save energy, ||g||, max_|g|

@@ -212,7 +212,7 @@ class RBMSites(nn.Module):
         if use_unique:
             # avoid sorted too much orbital, unique_sorb >= 2
             unique_sorb = min(
-                int(torch.tensor(nbatch / 1024 + 1).log2().ceil() + 1), self.sorb // 2
+                int(torch.tensor(nbatch / 1024 + 1).log2().ceil()), self.sorb // 2
             )
             unique_sorb = max(2, unique_sorb)
             # sorted x, avoid repeated sorting using 'torch.unique'

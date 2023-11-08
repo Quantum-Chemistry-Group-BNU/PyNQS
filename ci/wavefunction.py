@@ -355,7 +355,7 @@ class CITrain:
                 synchronize()
                 # sample_unique = self.sampler.ele_info.ci_space.clone()
             else:
-                sample_unique, sample_counts, state_prob = self.sampler.sampling(initial_state)
+                sample_unique, sample_counts, state_prob = self.sampler.sampling(initial_state)[:3]
 
         # XXX: This is little redundance, psi_unique have been calculated when sampling
         psi = self.model(onv_to_tensor(sample_unique, self.sorb).requires_grad_()).to(self.dtype)

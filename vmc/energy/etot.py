@@ -79,7 +79,7 @@ def total_energy(
             psi_lst[begin:end] = psi
             time_lst.append(x_time)
             begin = end
-        track.manually_clean_cache((eloc, psi))
+        # track.manually_clean_cache((eloc, psi))
 
     # check local energy
     if torch.any(torch.isnan(eloc_lst)):

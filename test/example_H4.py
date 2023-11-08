@@ -21,7 +21,9 @@ from utils.loggings import dist_print
 from vmc.ansatz import RBMWavefunction, RNNWavefunction, RBMSites
 from vmc.optim import VMCOptimizer, GD
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise
-from libs.C_extension import onv_to_tensor
+
+torch.set_default_dtype(torch.double)
+torch.set_printoptions(precision=6)
 
 if __name__ == "__main__":
     # dist.init_process_group("nccl")
