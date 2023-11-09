@@ -531,6 +531,7 @@ class Sampler:
             + f"    local energy unique: {self.use_unique}\n"
             + f"    Reduce psi: {self.reduce_psi}\n"
             + f"    eps: {self.eps:.3E}\n"
+            + f"    only use sample-space: {self.use_sample_space}\n"
             + f"    Therm step: {self.therm_step}\n"
             + f"    Exact sampling: {self.debug_exact}\n"
             + f"    Given CI: {self.ci_space.size(0):.3E}\n"

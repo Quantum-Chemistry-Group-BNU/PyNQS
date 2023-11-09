@@ -61,7 +61,6 @@ def local_energy(
             t3: psi(x)
     """
     with torch.no_grad():
-        use_sample_space = True
         if use_sample_space:
             assert WF_LUT is not None, "WF_ULT must be used if use_sample"
             func = _only_sample_space
@@ -309,6 +308,8 @@ def _only_sample_space(
     sample_value = WF_LUT.wf_value.to(dtype)
     t1 = time.time_ns()
 
+    # TODO: this is quite ugly even though right, not consider memory
+    # judge n_sample > n_SD, maybe is the better method
     comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele).to(dtype)  # (batch, n_sample)
     t2 = time.time_ns()
 
