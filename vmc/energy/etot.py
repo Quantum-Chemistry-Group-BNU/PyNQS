@@ -30,6 +30,7 @@ def total_energy(
     dtype=torch.double,
     reduce_psi: bool = False,
     eps: float = 1.0e-12,
+    use_sample_space: bool = False,
 ) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
     r"""
 
@@ -74,6 +75,7 @@ def total_energy(
                 use_unique=use_unique,
                 reduce_psi=reduce_psi,
                 eps=eps,
+                use_sample_space=use_sample_space
             )
             eloc_lst[begin:end] = eloc
             psi_lst[begin:end] = psi

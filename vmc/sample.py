@@ -71,6 +71,7 @@ class Sampler:
         reduce_psi: bool = False,
         eps: float = 1e-12,
         only_AD: bool = False,
+        use_sample_space: bool = False,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -149,6 +150,10 @@ class Sampler:
 
         # only sampling not calculations local-energy, applies to test AD memory
         self.only_AD = only_AD
+
+        # only use x' in n_unique sample not SD, dose not support exact-opt
+        # psi(x') can be looked from WaveFunction look-up table
+        self.use_sample_space = use_sample_space if not debug_exact else False
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -507,6 +512,7 @@ class Sampler:
                 dtype=self.dtype,
                 reduce_psi=self.reduce_psi,
                 eps=self.eps,
+                use_sample_space = self.use_sample_space,
             )
         else:
             e_total = -2.33233

@@ -144,6 +144,7 @@ if __name__ == "__main__":
         "use_LUT": True,
         "use_unique": True,
         "reduce_psi": True,
+        "use_sample_space": False, # only support not exact optimization
         "eps": 1.0e-12,
         "only_AD": False, # applies to test AD memory
     }

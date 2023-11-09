@@ -20,18 +20,18 @@
 \end{enumerate}
 \begin{equation}
     \begin{split}
-        loss =& 2\Re\left[\sum_{i=1}^N \ln{(\psi_i^*)} p_i eloc_i -
-            \sum_{i=1}^N p_i eloc_i \sum_{i=1}^{N}\ln{(\psi_i^*)}p_i\right] \\
-        = &2 \Re\left[\sum_{i=1}^N \ln{(\psi_i^*)} p_i eloc_i -
-            eloc_{\mathrm{mean}} \sum_{i=1}^{N}\ln{(\psi_i^*)}p_i\right] \\
-        = &2 \Re\left[\sum_{i=1}^{\textcolor{red}{n_0}} \ln{(\psi_i^*)} p_i eloc_i - 
-            eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{red}{n_0}}\ln{(\psi_i^*)}p_i\right]
-             \quad \textcolor{red}{\mathrm{rank_0}} \\
-        + & \textcolor{teal}{\cdots}\textnormal{(每个rank 计算不同batch)} \\
-        + & 2\left[\sum_{i=1}^{\textcolor{green}{n_p}} \ln{(\psi_i^*)} p_i eloc_i -
-            eloc_{\mathrm{mean}} \sum_{i=1}^{\textcolor{green}{n_p}}\ln{(\psi_i^*)}p_i\right] 
-            \quad \textcolor{green}{\mathrm{rank_p}}\\
-        &\mathrm{ s.t. } \sum_{l=0}^{p}n_l = N
+        \nabla_{\theta} E_{\theta} =& 2\Re\left[\sum_{i=1}^N \nabla_{\theta}\ln{(\psi_i^*)} p_i eloc_i -
+            \sum_{i=1}^N p_i eloc_i \sum_{i=1}^{N}\nabla_{\theta}\ln{(\psi_i^*)}p_i\right] \\
+        = &2 \Re\left[\sum_{i=1}^N \nabla_{\theta}\ln{(\psi_i^*)} p_i eloc_i -
+            \mathbb{E}[eloc] \sum_{i=1}^{N}\nabla_{\theta}\ln{(\psi_i^*)}p_i\right] \\
+        = &2 \Re\left[\sum_{i=1}^{\textcolor{red}{n_0}} \nabla_{\theta}\ln{(\psi_i^*)} p_i eloc_i -
+            \mathbb{E}[eloc] \sum_{i=1}^{\textcolor{red}{n_0}}\nabla_{\theta}\ln{(\psi_i^*)}p_i\right]
+             \quad \textcolor{red}{\mathrm{rank}_0} \\
+        + & \textcolor{teal}{\cdots}\textcolor{teal}{\mathrm{rank}_l} \\
+        + & 2\Re\left[\sum_{i=1}^{\textcolor{green}{n_p}} \nabla_{\theta}\ln{(\psi_i^*)} p_i eloc_i -
+            \mathbb{E}[eloc] \sum_{i=1}^{\textcolor{green}{n_p}}\nabla_{\theta}\ln{(\psi_i^*)}p_i\right]
+            \quad \textcolor{green}{\mathrm{rank}_p}\\
+        &\mathrm{ s.t. } \sum_{l=0}^{p}n_l = N \ \textnormal{(the number of unique sample)}
     \end{split}
 \end{equation}
 \subsection{pre-train}

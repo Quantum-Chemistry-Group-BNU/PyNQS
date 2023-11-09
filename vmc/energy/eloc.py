@@ -31,6 +31,7 @@ def local_energy(
     use_unique: bool = True,
     reduce_psi: bool = False,
     eps: float = 1e-12,
+    use_sample_space: bool = False,
 ) -> Tuple[Tensor, Tensor, Tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
@@ -46,6 +47,8 @@ def local_energy(
     use_unique(bool): remove duplicate state and this may be time-consuming. default: True
     reduce_psi(bool): ignore x' when <x|H|x'>/psi(x) < eps, default: False
     eps(float): default: 1e-12
+    use_sample_space(bool): use unique sample as x' not SD. default: False
+
     Notice:
     'reduce_psi' only applies when psi(x)^2 is normalization in FCI-space
 
@@ -58,15 +61,20 @@ def local_energy(
             t3: psi(x)
     """
     with torch.no_grad():
-        if reduce_psi and eps > 0.0:
-            func = _local_energy_reduce_psi
+        use_sample_space = True
+        if use_sample_space:
+            assert WF_LUT is not None, "WF_ULT must be used if use_sample"
+            func = _only_sample_space
         else:
-            func = _local_energy_simple
+            if reduce_psi and eps > 0.0:
+                func = _reduce_psi
+            else:
+                func = _simple
         return func(x, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype, WF_LUT, use_unique, eps)
 
 
 # TODO: how to save unique x eloc energy
-def _local_energy_simple(
+def _simple(
     x: Tensor,
     h1e: Tensor,
     h2e: Tensor,
@@ -161,7 +169,7 @@ def _local_energy_simple(
     return eloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
 
 
-def _local_energy_reduce_psi(
+def _reduce_psi(
     x: Tensor,
     h1e: Tensor,
     h2e: Tensor,
@@ -273,3 +281,55 @@ def _local_energy_reduce_psi(
     # if x.is_cuda:
     #     torch.cuda.empty_cache()
     return eloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
+
+
+def _only_sample_space(
+    x: Tensor,
+    h1e: Tensor,
+    h2e: Tensor,
+    ansatz: Union[nn.Module, Callable],
+    sorb: int,
+    nele: int,
+    noa: int,
+    nob: int,
+    dtype=torch.double,
+    WF_LUT: WavefunctionLUT = None,
+    use_unique: bool = True,
+    eps: float = 1.0e-12,
+) -> tuple[Tensor, Tensor, tuple[float, float, float]]:
+    check_para(x)
+    dim: int = x.dim()
+    assert dim == 2
+    assert WF_LUT is not None
+    batch = x.size(0)
+    # default use WaveFunction LUT
+    t0 = time.time_ns()
+
+    comb_x = WF_LUT.bra_key  # (n_sample, bra_len)
+    sample_value = WF_LUT.wf_value.to(dtype)
+    t1 = time.time_ns()
+
+    comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele).to(dtype)  # (batch, n_sample)
+    t2 = time.time_ns()
+
+    not_idx, psi_x = WF_LUT.lookup(x)[1:]
+    psi_x = psi_x.to(dtype)  # (batch)
+    # WF_LUT coming from sampling x must been found in WF_LUT.
+    assert not_idx.size(0) == 0
+
+    # <x|H|x'> * psi(x') / psi(x)
+    # TODO: how to opt the path of einsum, reduce memory use
+    # comb_hij is real, sample_value and psi_x is real or complex
+    eloc = torch.einsum("ij, j, i ->i", comb_hij, sample_value, 1 / psi_x)
+
+    t3 = time.time_ns()
+    delta0 = (t1 - t0) / 1.0e06
+    delta1 = (t2 - t1) / 1.0e06
+    delta2 = (t3 - t2) / 1.0e06
+    logger.debug(
+        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, "
+        + f"nqs time: {delta2:.3E} ms"
+    )
+
+    del comb_hij, sample_value
+    return eloc, psi_x, (delta0, delta1, delta2)
