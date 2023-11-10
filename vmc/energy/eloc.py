@@ -322,7 +322,7 @@ def _only_sample_space(
 
     t1 = time.time_ns()
     # (batch, n_comb_sd) or (batch, n_sample)
-    comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele).to(dtype)
+    comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
 
     t2 = time.time_ns()
     if sd_le_sample:
@@ -345,7 +345,8 @@ def _only_sample_space(
         # <x|H|x'> * psi(x') / psi(x)
         # XXX: how to opt the path of einsum, reduce memory use
         # comb_hij is real, sample_value and psi_x is real or complex
-        eloc = torch.einsum("ij, j, i ->i", comb_hij, sample_value, 1 / psi_x)
+        eloc = torch.sum(comb_hij * torch.div(sample_value.repeat(batch, 1).T, psi_x).T, dim=-1)
+        # eloc = torch.einsum("ij, j, i ->i", comb_hij.to(dtype), sample_value, 1 / psi_x)
 
     t3 = time.time_ns()
     delta0 = (t1 - t0) / 1.0e06
