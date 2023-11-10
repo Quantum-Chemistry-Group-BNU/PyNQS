@@ -12,7 +12,7 @@ from line_profiler import LineProfiler
 
 from libs.C_extension import get_hij_torch, get_comb_tensor, onv_to_tensor
 from utils import check_para
-from utils.public_function import WavefunctionLUT
+from utils.public_function import WavefunctionLUT, get_Num_SinglesDoubles
 
 print = partial(print, flush=True)
 
@@ -297,31 +297,55 @@ def _only_sample_space(
     eps: float = 1.0e-12,
 ) -> tuple[Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
+
+    device = x.device
     dim: int = x.dim()
     assert dim == 2
-    assert WF_LUT is not None
-    batch = x.size(0)
     # default use WaveFunction LUT
     t0 = time.time_ns()
 
-    comb_x = WF_LUT.bra_key  # (n_sample, bra_len)
-    sample_value = WF_LUT.wf_value.to(dtype)
+    batch = x.size(0)
+    n_comb_sd = get_Num_SinglesDoubles(sorb, noa, nob) + 1
+    n_sample = WF_LUT.bra_key.size(0)
+
+    # XXX: reduce memory usage
+    # memory usage: batch * n_comb_sd * (sorb - 1/64 + 1) / 8 / 2**20 MiB
+    # maybe n_comb_sd * batch <= n_sample maybe be better
+    sd_le_sample: bool = n_comb_sd <= n_sample
+
+    if sd_le_sample:
+        # (batch, n_comb_sd, bra_len)
+        comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
+    else:
+        # (n_sample, bra_len)
+        comb_x = WF_LUT.bra_key
+
     t1 = time.time_ns()
+    # (batch, n_comb_sd) or (batch, n_sample)
+    comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele).to(dtype)
 
-    # TODO: this is quite ugly even though right, not consider memory
-    # judge n_sample > n_SD, maybe is the better method
-    comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele).to(dtype)  # (batch, n_sample)
     t2 = time.time_ns()
+    if sd_le_sample:
+        bra_len = comb_x.size(2)
+        psi_x1 = torch.zeros(batch * n_comb_sd, device=device, dtype=dtype)
+        lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(comb_x.reshape(-1, bra_len))
+        psi_x1[lut_idx] = lut_value
+        psi_x1 = psi_x1.reshape(batch, n_comb_sd)
 
-    not_idx, psi_x = WF_LUT.lookup(x)[1:]
-    psi_x = psi_x.to(dtype)  # (batch)
-    # WF_LUT coming from sampling x must been found in WF_LUT.
-    assert not_idx.size(0) == 0
+        # <x|H|x'>psi(x')/psi(x)
+        psi_x = psi_x1[..., 0].view(-1)
+        eloc = torch.sum(torch.div(psi_x1.T, psi_x).T * comb_hij, -1)  # (batch)
+    else:
+        sample_value = WF_LUT.wf_value.to(dtype)
+        not_idx, psi_x = WF_LUT.lookup(x)[1:]
+        psi_x = psi_x.to(dtype)  # (batch)
+        # WF_LUT coming from sampling x must been found in WF_LUT.
+        assert not_idx.size(0) == 0
 
-    # <x|H|x'> * psi(x') / psi(x)
-    # TODO: how to opt the path of einsum, reduce memory use
-    # comb_hij is real, sample_value and psi_x is real or complex
-    eloc = torch.einsum("ij, j, i ->i", comb_hij, sample_value, 1 / psi_x)
+        # <x|H|x'> * psi(x') / psi(x)
+        # XXX: how to opt the path of einsum, reduce memory use
+        # comb_hij is real, sample_value and psi_x is real or complex
+        eloc = torch.einsum("ij, j, i ->i", comb_hij, sample_value, 1 / psi_x)
 
     t3 = time.time_ns()
     delta0 = (t1 - t0) / 1.0e06
@@ -332,5 +356,5 @@ def _only_sample_space(
         + f"nqs time: {delta2:.3E} ms"
     )
 
-    del comb_hij, sample_value
-    return eloc, psi_x, (delta0, delta1, delta2)
+    del comb_hij
+    return eloc.to(dtype), psi_x, (delta0, delta1, delta2)
