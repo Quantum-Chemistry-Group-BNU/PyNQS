@@ -8,7 +8,7 @@ import numpy as np
 from torch import Tensor
 from torch.distributions import Binomial
 from typing import List, Type, Tuple, Union, Literal
-from typing_extensions import Self # 3.11 support Self
+from typing_extensions import Self  # 3.11 support Self
 from dataclasses import dataclass
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv, wavefunction_lut
@@ -129,16 +129,23 @@ def get_Num_SinglesDoubles(sorb: int, noA: int, noB: int) -> int:
 
 
 def get_nbatch(
-    sorb: int, n_sample_unique: int, n_comb_sd: int, Max_memory=32, alpha=0.25, device: str = None
+    sorb: int,
+    n_sample_unique: int,
+    n_comb_sd: int,
+    Max_memory=32,
+    alpha=0.25,
+    device: str = None,
+    use_sample: bool = False,
 ) -> int:
     """
     Calculate the nbatch of total energy when using local energy
     """
 
-    def comb_memory():
-        x1 = n_comb_sd * sorb * 8 / (1 << 30) * 2  # onv_to_tensor, double, GiB
-        x2 = n_comb_sd * ((sorb - 1) // 64 + 1) * 8 / (1 << 30)  # SD, uint8, GiB
-        return x1 + x2
+    def comb_memory() -> float:
+        x = n_comb_sd * sorb * 8 / (1 << 30) * 2  # onv_to_tensor, double, GiB
+        if not use_sample:
+            x += n_comb_sd * ((sorb - 1) // 64 + 1) * 8 / (1 << 30)  # SD, uint8, GiB
+        return x
 
     m = comb_memory() * n_sample_unique
 
@@ -154,11 +161,13 @@ def get_nbatch(
     return batch
 
 
-def given_onstate(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
+def get_special_space(x: int, sorb: int, noa: int, nob: int, device=None) -> Tensor:
+    """
+    Generate all or part of FCI-state
+    """
     assert x % 2 == 0 and x <= sorb and x >= (noa + nob)
-
     # the order is different from pyscf.fci.cistring._gen_occslst(iterable, r)
-    # the '_gen_occslst' is pretty slow than 'combinations', and only is used exact optimization testing.
+    # the 'gen_occslst' is pretty slow than 'combinations', and only is used exact optimization testing.
     if x == sorb:
         from pyscf import fci
 
@@ -594,6 +603,10 @@ class WavefunctionLUT:
     def wf_value(self) -> Tensor:
         return self._wf_value
 
+    @property
+    def dtype(self):
+        return self._wf_value.dtype
+
     def to(self, device: str) -> None:
         self._bra_key = self._bra_key.to(device=device)
         self._wf_value = self._wf_value.to(device=device)
@@ -625,6 +638,7 @@ class WavefunctionLUT:
             + f"    sorb: {self.sorb}"
         )
 
+
 # XXX: how to implement the MemoryTrack?
 # ref: https://github.com/huangpan2507/Tools_Pytorch-Memory-Utils
 class MemoryTrack:
@@ -646,12 +660,13 @@ class MemoryTrack:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         for i in (exc_type, exc_val, exc_tb):
-            if i is not None: raise RuntimeError
+            if i is not None:
+                raise RuntimeError
         self.after_max_memory = self.get_max_memory(self.device)
         self.clean_memory_cache(self.device)
         self.after_memory = self.get_current_memory(self.device)
         s = f"{self.device} memory allocate: {self.after_memory:.5f} GiB, "
-        s +=f"using memory: {(self.after_max_memory-self.before_memory):.5f} GiB\n"
+        s += f"using memory: {(self.after_max_memory-self.before_memory):.5f} GiB\n"
         sys.stdout.write(s)
 
     def manually_clean_cache(self, objs: Tuple[Tensor] = None) -> None:
@@ -666,14 +681,14 @@ class MemoryTrack:
     def get_max_memory(device: torch.device) -> float:
         n = 0.0
         if device.type == "cuda":
-            n = torch.cuda.max_memory_allocated(device) / 2**30 # GiB
+            n = torch.cuda.max_memory_allocated(device) / 2**30  # GiB
         return n
 
     @staticmethod
     def get_current_memory(device: torch.device) -> float:
         n = 0.0
         if device.type == "cuda":
-            n = torch.cuda.memory_allocated(device) / 2**30 # GiB
+            n = torch.cuda.memory_allocated(device) / 2**30  # GiB
         return n
 
     @staticmethod

@@ -491,6 +491,7 @@ class Sampler:
             self.max_memory,
             self.alpha,
             device=self.device,
+            use_sample=self.use_sample_space,
         )
         if not self.only_AD:
             e_total, eloc, placeholders, stats_dict = total_energy(

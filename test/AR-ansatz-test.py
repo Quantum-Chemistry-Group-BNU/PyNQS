@@ -11,7 +11,7 @@ sys.path.append("./")
 
 from utils.public_function import (
     get_fock_space,
-    given_onstate,
+    get_special_space,
     state_to_string,
     WavefunctionLUT,
     setup_seed,
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     length = fock_space.shape[0]
     fci_space = onv_to_tensor(
-        given_onstate(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb
+        get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb
     )
     dim = fci_space.size(0)
     # random_order = random.sample(list(range(length)), length)
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     from libs.C_extension import get_comb_tensor
     from utils.public_function import WavefunctionLUT, torch_sort_onv
 
-    fci_space = given_onstate(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device)
+    fci_space = get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device)
     comb_x, x1 = get_comb_tensor(fci_space[:2], sorb, nele, nele // 2, nele // 2, True)
     print(fci_space.shape, comb_x.shape)
 

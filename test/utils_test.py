@@ -1,7 +1,7 @@
 from typing import List 
 import numpy as np 
 import torch
-from utils import given_onstate
+from utils import get_special_space
 from libs import hij_tensor as hij
 
 def read_info(filename):

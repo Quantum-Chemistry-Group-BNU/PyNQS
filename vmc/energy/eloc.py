@@ -301,7 +301,6 @@ def _only_sample_space(
     device = x.device
     dim: int = x.dim()
     assert dim == 2
-    # default use WaveFunction LUT
     t0 = time.time_ns()
 
     batch = x.size(0)
@@ -311,7 +310,7 @@ def _only_sample_space(
     # XXX: reduce memory usage
     # memory usage: batch * n_comb_sd * (sorb - 1/64 + 1) / 8 / 2**20 MiB
     # maybe n_comb_sd * batch <= n_sample maybe be better
-    sd_le_sample: bool = n_comb_sd <= n_sample
+    sd_le_sample: bool = n_comb_sd * 0.5 * batch**0.5 <= n_sample
 
     if sd_le_sample:
         # (batch, n_comb_sd, bra_len)
@@ -345,7 +344,9 @@ def _only_sample_space(
         # <x|H|x'> * psi(x') / psi(x)
         # XXX: how to opt the path of einsum, reduce memory use
         # comb_hij is real, sample_value and psi_x is real or complex
-        eloc = torch.sum(comb_hij * torch.div(sample_value.repeat(batch, 1).T, psi_x).T, dim=-1)
+        eloc = torch.sum(
+            comb_hij * torch.div(sample_value.expand(batch, n_sample).T, psi_x).T, dim=-1
+        )
         # eloc = torch.einsum("ij, j, i ->i", comb_hij.to(dtype), sample_value, 1 / psi_x)
 
     t3 = time.time_ns()
