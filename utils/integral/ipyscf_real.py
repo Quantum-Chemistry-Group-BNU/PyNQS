@@ -4,11 +4,15 @@
 #
 
 import numpy
+import numpy as np
 import functools
 from numpy import ndarray
 from typing import Tuple, List, Union
 from pyscf.scf import hf
 from pyscf import ao2mo, gto, scf, fci, cc, ci
+
+
+from .hubbard_pyscf import get_hubbard_model, get_RHF_int_h1h2
 
 __all__ = ["integral_pyscf"]
 
@@ -45,7 +49,7 @@ class Iface:
         print(ecore)
         return ecore, hmo, eri
 
-    def get_integral_FCIDUMP(self, fname='FCIDUMP'):
+    def get_integral_FCIDUMP(self, fname='FCIDUMP') -> Tuple[float, ndarray, ndarray]:
         print('\n[iface.get_integral_FCIDUMP] fname=', fname)
         with open(fname, 'r') as f:
             line = f.readline().split(',')[0].split(' ')[-1]
@@ -78,7 +82,8 @@ class Iface:
         print('finished')
         return e, int1e, int2e
 
-    def dump(self, info, fname='mole.info'):
+    @staticmethod
+    def dump(info, fname='mole.info'):
         print('\n[iface.dump] fname=', fname)
         ecore, int1e, int2e = info
         print(f"int1e: {int1e.shape} int2e: {int2e.shape}")
@@ -137,28 +142,44 @@ class Iface:
         print('finished')
         return 0
 
-
 def integral_pyscf(atom: str,
                    basis="sto-3g",
                    integral_file: str = "integral.info",
                    fci_coeff: bool = False,
-                   cisd_coeff: bool = False) -> Tuple[int, int, List[float], Union[ndarray, None]]:
-    mol = gto.Mole(atom=atom, verbose=3, basis=basis, symmetry=False)
-    mol.build()
-    sorb = mol.nao * 2
-    nele = mol.nelectron
-    mf = scf.RHF(mol)
-    mf.init_guess = 'atom'
-    mf.level_shift = 0.0
-    mf.max_cycle = 200
-    mf.conv_tol = 1.e-14
-    e_hf = mf.scf()
-    iface = Iface()
-    iface.mol = mol
-    iface.mf = mf
-    iface.nfrozen = 0
-    info = iface.get_integral(mf.mo_coeff)
-    iface.dump(info, fname=integral_file)
+                   cisd_coeff: bool = False,
+                   model_type: str = "chem",
+                   hubbard_info: tuple = None) -> Tuple[int, int, List[float], Union[ndarray, None]]:
+    MODEL_TYPE = ("Chem", "Hubbard")
+    model_type = model_type.capitalize()
+    if model_type not in MODEL_TYPE:
+        assert ValueError(f"model-type is {model_type}, but excepted in {MODEL_TYPE}")
+
+    if model_type == "Chem":
+        mol = gto.Mole(atom=atom, verbose=3, basis=basis, symmetry=False)
+        mol.build()
+        sorb = mol.nao * 2
+        nele = mol.nelectron
+        mf = scf.RHF(mol)
+        mf.init_guess = 'atom'
+        mf.level_shift = 0.0
+        mf.max_cycle = 200
+        mf.conv_tol = 1.e-14
+        e_hf = mf.scf()
+
+        # Integral interface
+        iface = Iface()
+        iface.mol = mol
+        iface.mf = mf
+        iface.nfrozen = 0
+        info = iface.get_integral(mf.mo_coeff)
+    elif model_type == "Hubbard":
+        nbas, nele = hubbard_info[:2]
+        sorb = nbas * 2
+        mol, mf, info = get_hubbard_model(*hubbard_info)
+        e_hf = mf.energy_tot()
+
+    # staticmethod
+    Iface.dump(info, fname=integral_file)
 
     if sorb <= 20:
         cisolver = fci.FCI(mf)

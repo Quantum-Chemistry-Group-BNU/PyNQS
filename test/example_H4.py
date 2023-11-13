@@ -45,7 +45,8 @@ if __name__ == "__main__":
             atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
         integral_file = tempfile.mkstemp()[1]
         sorb, nele, e_lst, fci_amp, ucisd_amp = integral_pyscf(
-            atom, integral_file=integral_file, cisd_coeff=True, fci_coeff=True
+            atom, integral_file=integral_file, cisd_coeff=True, fci_coeff=True,
+            # model_type="hubbard", hubbard_info=(8, 4)
         )
         logger.info(e_lst)
 
