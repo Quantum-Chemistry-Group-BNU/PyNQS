@@ -99,4 +99,4 @@ class RBMWavefunction(nn.Module):
         if dlnPsi:
             return self.analytic_derivate(x)
         else:
-            return self.pis(x)
+            return self.psi(x)
