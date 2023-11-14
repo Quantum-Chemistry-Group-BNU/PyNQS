@@ -279,23 +279,20 @@ def constrain_make_charts(sym_idex: Tensor):
     # ).reshape(-1, 4)
 
 def wavefunction_lut(
-    bra_key: Tensor, wf_value: Tensor, onv: Tensor, sorb: int, little_endian: bool = True
-) -> Tuple[Tensor, Tensor]:
+    bra_key: Tensor, onv: Tensor, sorb: int, little_endian: bool = True) -> Tensor:
     r"""
     wavefunction lookup-table implement using binary-search, bra_len = (sorb - 1) / 64 + 1
 
     Parameters
     ----------
         bra_key(Tensor), (length, bre_len * 8) uint8, this is order with little-endian
-        wf_value(Tensor): (length) double/complex-128, wavefunction value:
         onv(Tensor): (nbatch, bra+len * 8) uint8, the onv used the looked
         little_endian(bool): the bra is little-endian(True) or large-endian.
           [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
+
     Returns
     -------
-        info(Tuple[Tensor, Tensor]):
-         info[0]: the index of onv in bra-key, if not find, set to -1. (torch.int64)
-         info[1]: the wavefunction value of onv in bra-key
+        result: the index of onv in bra-key, if not find, set to -1. (torch.int64)
 
     Example
     -------
@@ -312,10 +309,6 @@ def wavefunction_lut(
         dtype=torch.uint8,
     )
     >>> sorb = 4
-
-    >>> value = torch.arange(6) * 0.1
-    >>> value = torch.complex(value, value)
-
     >>> onv = torch.tensor(
         [
             [12, 0, 0, 0, 0, 0, 0, 0],
@@ -327,8 +320,7 @@ def wavefunction_lut(
         ],
         dtype=torch.uint8,
     )
-    >>> info = wavefunction_lut(key, value, onv, sorb)
+    >>> info = wavefunction_lut(key, onv, sorb)
     >>> print(info)
-    tensor([2, 4, 1, -1, 5]), tensor([0.2000+0.2000j, 0.4000+0.4000j, 0.1000+0.1000j, 0.0000+0.0000j,
-        0.5000+0.5000j])
+    tensor([2, 4, 1, -1, 5])
     """

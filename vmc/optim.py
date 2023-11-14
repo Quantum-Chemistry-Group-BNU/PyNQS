@@ -399,7 +399,7 @@ class VMCOptimizer:
             if e_lst is not None:
                 for i in range(len(e_lst)):
                     axins.axhline(e_lst[i], color=plt.get_cmap("Accent")(i), ls="--")
-            zone_left = len(e) - len(e) // 10
+            zone_left = len(e) - len(e) // 10 - 1
             zone_right = len(e) - 1
             x_ratio = 0
             y_ratio = 1

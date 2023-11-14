@@ -323,15 +323,12 @@ Tensor constrain_make_charts_cuda(const Tensor &sym_index) {
   return result;
 }
 
-tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key,
-                                      const Tensor &wf_value, const Tensor &onv,
-                                      const int sorb,
-                                      const bool little_endian = true) {
+Tensor wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
+                             const int sorb, const bool little_endian = true) {
   // bra_key: (length, bra_len * 8)
-  // wf_value: nbatch if not use_complex else nbatch * 2
   // onv: (nbatch, bra_len * 8)
   // little_endian: the order of the bra_key, default is little-endian
-  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 +
+  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
   const int64_t bra_len = (sorb - 1) / 64 + 1;
   const int64_t nbatch = onv.size(0);
   int64_t length = bra_key.size(0);
@@ -346,6 +343,7 @@ tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key,
   int64_t *result_ptr = result.data_ptr<int64_t>();
   binary_search_BigInteger_cuda(bra_key_ptr, onv_ptr, result_ptr, nbatch,
                                 length, bra_len, little_endian);
-  Tensor idx = torch::masked_select(result, result.gt(-1));
-  return std::make_tuple(result, wf_value.index_select(0, idx));
+  return result;
+  // Tensor idx = torch::masked_select(result, result.gt(-1));
+  // return std::make_tuple(result, wf_value.index_select(0, idx));
 }

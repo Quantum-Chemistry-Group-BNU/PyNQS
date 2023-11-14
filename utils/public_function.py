@@ -619,15 +619,16 @@ class WavefunctionLUT:
              value: the wavefunction value of onv in bra-key
         """
         # XXX: not-idx implemented in c++ may be faster than the following.
-        idx_array, value = wavefunction_lut(self._bra_key, self._wf_value, onv, self.sorb)
+        idx_array = wavefunction_lut(self._bra_key, onv, self.sorb)
         nbatch = onv.size(0)
         device = onv.device
-        bool_array = idx_array.gt(-1)  # if not found, set to -1
+        mask = idx_array.gt(-1)  # if not found, set to -1
         baseline = torch.arange(nbatch, device=device, dtype=torch.int64)
 
-        # the index of onv  in/not int bra-key
-        onv_idx = baseline[bool_array]
-        onv_not_idx = baseline[torch.logical_not(bool_array)]
+        # the index of onv in/not int bra-key
+        onv_idx = baseline[mask]
+        onv_not_idx = baseline[torch.logical_not(mask)]
+        value = self._wf_value[idx_array.masked_select(mask)]
         return (onv_idx, onv_not_idx, value)
 
     def __repr__(self) -> str:

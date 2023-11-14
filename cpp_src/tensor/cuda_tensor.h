@@ -50,7 +50,6 @@ Tensor merge_sample_cuda(const Tensor &idx, const Tensor &counts,
 
 Tensor constrain_make_charts_cuda(const Tensor &sym_index);
 
-tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key,
-                                      const Tensor &wf_value, const Tensor &onv,
-                                      const int sorb, const bool little_endian);
+Tensor wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
+                             const int sorb, const bool little_endian);
 #endif // GPU

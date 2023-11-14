@@ -214,23 +214,21 @@ Tensor constrain_make_charts(const Tensor &sym_index) {
 }
 
 // wavefunction lookup-table implement using binary-search
-tuple_tensor_2d wavefunction_lut(const Tensor &bra_key, const Tensor &wf_value,
-                                 const Tensor &onv, const int sorb,
-                                 bool little_endian = true) {
+Tensor wavefunction_lut(const Tensor &bra_key, const Tensor &onv,
+                        const int sorb, bool little_endian = true) {
   /*
   bra_len = (sorb - 1) / 64 + 1;
   bra_key(Tensor): (length, bre_len * 8) uint8, this is order with little-endian
-  wf_value(Tensor): (length) double/complex-128, wavefunction value:
   onv(Tensor): (nbatch, bra+len * 8) uint8, the onv used the looked
   little_endian (bool): the bra is little-endian(True) or large-endian.
   [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
   data: 23-10-25
   */
-  if (bra_key.is_cpu() || wf_value.is_cpu() || onv.is_cpu()) {
-    return wavefunction_lut_cpu(bra_key, wf_value, onv, sorb, little_endian);
+  if (bra_key.is_cpu() || onv.is_cpu()) {
+    return wavefunction_lut_cpu(bra_key, onv, sorb, little_endian);
 #ifdef GPU
   } else {
-    return wavefunction_lut_cuda(bra_key, wf_value, onv, sorb, little_endian);
+    return wavefunction_lut_cuda(bra_key, onv, sorb, little_endian);
 #endif
   }
 }
@@ -270,8 +268,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("constrain_make_charts", &constrain_make_charts,
         "make charts for two sites");
   m.def("wavefunction_lut", &wavefunction_lut, py::arg("bra_key"),
-        py::arg("wf_value"), py::arg("onv"), py::arg("sorb"),
-        py::arg("little_endian") = true,
+        py::arg("onv"), py::arg("sorb"), py::arg("little_endian") = true,
         "wavefunction lookup-table binary-search implement");
 
   m.def("wavefunction_lut_map", &wavefunction_lut_map,

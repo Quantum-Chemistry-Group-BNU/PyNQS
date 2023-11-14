@@ -19,11 +19,11 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
                                     const int noB, bool flag_bit);
 
 Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
-                       const Tensor &h1e_tensor, const Tensor &h2e_tensor,
-                       const int sorb, const int nele);
+                          const Tensor &h1e_tensor, const Tensor &h2e_tensor,
+                          const int sorb, const int nele);
 
 Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor &onstate,
-                               const int sorb);
+                              const int sorb);
 
 tuple_tensor_2d mps_vbatch_tensor_cpu(const Tensor &mps_data,
                                       const Tensor &data_index,
@@ -40,10 +40,9 @@ Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
 
 Tensor constrain_make_charts_cpu(const Tensor &sym_index);
 
-tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key,
-                                     const Tensor &wf_value, const Tensor &onv,
-                                     const int sorb, const bool little_endian);
+Tensor wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
+                            const int sorb, const bool little_endian);
 
 tuple_tensor_2d wavefunction_lut_hash(const Tensor &bra_key,
-                                     const Tensor &wf_value, const Tensor &onv,
-                                     const int sorb);
+                                      const Tensor &wf_value, const Tensor &onv,
+                                      const int sorb);

@@ -532,12 +532,9 @@ int64_t binary_search_BigInteger(const IntType *arr, const IntType *target,
   return -1;
 }
 
-tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key,
-                                     const Tensor &wf_value, const Tensor &onv,
-                                     const int sorb,
-                                     const bool little_endian = true) {
+Tensor wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
+                            const int sorb, const bool little_endian = true) {
   // bra_key: (length, bra_len * 8)
-  // wf_value: nbatch if not use_complex else nbatch * 2
   // onv: (nbatch, bra_len * 8)
   // little_endian: the order of the bra_key, default is little-endian
   // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
@@ -559,9 +556,9 @@ tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key,
         bra_key_ptr, &onv_ptr[i * bra_len], length, bra_len, little_endian);
   }
 
-  auto idx = torch::masked_select(result, result.gt(-1));
-  return std::make_tuple(result,
-                         wf_value.index_select(0, idx));
+  return result;
+  // auto idx = torch::masked_select(result, result.gt(-1));
+  // return std::make_tuple(result, wf_value.index_select(0, idx));
 }
 
 inline std::vector<std::vector<unsigned long>> convert_space(const Tensor &bra,
@@ -606,11 +603,15 @@ tuple_tensor_2d wavefunction_lut_hash(const Tensor &bra_key,
                     .clone();
   auto idx = torch::masked_select(result, result.gt(-1));
   auto t4 = tools::get_time();
-  
-  std::cout << "Tensor-index: " << tools::get_duration_nano(t4- t3)/1.0E6 << "ms\n"
-    <<"LooKup: " <<tools::get_duration_nano(t3 -t2)/1.0E6 << "ms \n"
-    << "Make-HashMap: " << tools::get_duration_nano(t2 -t1)/1.0E6 << "ms \n"
-    << "Space: " << tools::get_duration_nano(t1 -t0)/1.0E6 << "ms \n";
+
+  std::cout << "Tensor-index: " << tools::get_duration_nano(t4 - t3) / 1.0E6
+            << "ms\n"
+            << "LooKup: " << tools::get_duration_nano(t3 - t2) / 1.0E6
+            << "ms \n"
+            << "Make-HashMap: " << tools::get_duration_nano(t2 - t1) / 1.0E6
+            << "ms \n"
+            << "Space: " << tools::get_duration_nano(t1 - t0) / 1.0E6
+            << "ms \n";
 
   return std::make_tuple(result, wf_value.index_select(0, idx));
 }
