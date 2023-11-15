@@ -326,7 +326,7 @@ def _only_sample_space(
     t2 = time.time_ns()
     if sd_le_sample:
         bra_len = comb_x.size(2)
-        psi_x1 = torch.zeros(batch * n_comb_sd, device=device, dtype=dtype)
+        psi_x1 = torch.zeros(batch * n_comb_sd, device=device, dtype=WF_LUT.dtype)
         lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(comb_x.reshape(-1, bra_len))
         psi_x1[lut_idx] = lut_value
         psi_x1 = psi_x1.reshape(batch, n_comb_sd)
@@ -335,19 +335,19 @@ def _only_sample_space(
         psi_x = psi_x1[..., 0].view(-1)
         eloc = torch.sum(torch.div(psi_x1.T, psi_x).T * comb_hij, -1)  # (batch)
     else:
-        sample_value = WF_LUT.wf_value.to(dtype)
-        not_idx, psi_x = WF_LUT.lookup(x)[1:]
-        psi_x = psi_x.to(dtype)  # (batch)
+        sample_value = WF_LUT.wf_value
+        not_idx, psi_x = WF_LUT.lookup(x)[1:]  # (batch)
         # WF_LUT coming from sampling x must been found in WF_LUT.
         assert not_idx.size(0) == 0
 
         # <x|H|x'> * psi(x') / psi(x)
         # XXX: how to opt the path of einsum, reduce memory use
         # comb_hij is real, sample_value and psi_x is real or complex
-        eloc = torch.sum(
-            comb_hij * torch.div(sample_value.expand(batch, n_sample).T, psi_x).T, dim=-1
-        )
-        # eloc = torch.einsum("ij, j, i ->i", comb_hij.to(dtype), sample_value, 1 / psi_x)
+        # eloc = torch.sum(
+        #     comb_hij * torch.div(sample_value.expand(batch, n_sample).T, psi_x).T, dim=-1
+        # )
+        # save memory than the above code.
+        eloc = torch.einsum("ij, j, i ->i", comb_hij.to(WF_LUT.dtype), sample_value, 1 / psi_x)
 
     t3 = time.time_ns()
     delta0 = (t1 - t0) / 1.0e06
