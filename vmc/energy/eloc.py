@@ -310,7 +310,7 @@ def _only_sample_space(
     # XXX: reduce memory usage
     # memory usage: batch * n_comb_sd * (sorb - 1/64 + 1) / 8 / 2**20 MiB
     # maybe n_comb_sd * batch <= n_sample maybe be better
-    sd_le_sample: bool = n_comb_sd * 0.5 * batch**0.5 <= n_sample
+    sd_le_sample: bool = n_comb_sd <= n_sample * 0.25
 
     if sd_le_sample:
         # (batch, n_comb_sd, bra_len)
