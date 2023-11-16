@@ -220,7 +220,7 @@ class CITrain:
                 loss, ovlp, model_coeff = self.sqaure_loss()
                 onstate = self.onstate
             elif self.loss_type == "sample":
-                loss, ovlp, sample_unique, sample_counts, state_prob = self.QGT_loss(sampler)
+                loss, ovlp, sample_unique, sample_counts, state_prob = self.QGT_loss(sampler, epoch)
 
             if epoch <= self.pre_max_iter:
                 loss.backward()
@@ -321,7 +321,11 @@ class CITrain:
         loss = 1 - ovlp.norm() ** 2
         return (loss, ovlp.detach(), model_CI.detach())
 
-    def QGT_loss(self, sampler: Sampler) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    def QGT_loss(
+        self,
+        sampler: Sampler,
+        epoch: int,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         r"""
         Quantum geometric tensor(QGT):
             d(psi, phi) = arccos\sqrt((<psi|phi><phi|psi>)/(<psi|psi><phi|phi>))
@@ -355,7 +359,9 @@ class CITrain:
                 synchronize()
                 # sample_unique = self.sampler.ele_info.ci_space.clone()
             else:
-                sample_unique, sample_counts, state_prob = self.sampler.sampling(initial_state)[:3]
+                sample_unique, sample_counts, state_prob = self.sampler.sampling(
+                    initial_state, epoch=epoch
+                )
 
         # XXX: This is little redundance, psi_unique have been calculated when sampling
         psi = self.model(onv_to_tensor(sample_unique, self.sorb).requires_grad_()).to(self.dtype)

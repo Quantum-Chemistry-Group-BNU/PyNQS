@@ -56,6 +56,8 @@ class Sampler:
         nqs: DDP,
         ele_info: ElectronInfo,
         n_sample: int = 100,
+        start_iter: int = 100,
+        start_n_sample: int = None,
         therm_step: int = 2000,
         debug_exact: bool = False,
         seed: int = 100,
@@ -94,7 +96,6 @@ class Sampler:
         self.nqs = nqs
         self.debug_exact = debug_exact
         self.therm_step = therm_step
-        self.n_sample = n_sample
 
         if method_sample not in self.METHOD_SAMPLE:
             raise TypeError(
@@ -133,9 +134,16 @@ class Sampler:
         )
         self.max_n_sample = max_n_sample if max_n_sample is not None else n_sample
         self.min_n_sample = n_sample
-        # self.max_n_sample += (self.rank + 1) * 10000
-        # self.min_n_sample += (self.rank + 1) * 10000
-        # self.n_sample += (self.rank + 1) * 10000
+        self.last_max_n_sample = self.max_n_sample
+
+        # In the beginning of the iteration, unique sample is quite a lot.
+        # so, set the small n_sample.
+        if start_n_sample is None and start_n_sample >= n_sample:
+            start_n_sample = n_sample
+        self.start_iter = start_iter
+        self.last_n_sample = n_sample
+        self.start_n_sample = start_n_sample
+        self.n_sample = start_n_sample
 
         # Use WaveFunction LooKup-Table to speed up local-energy calculations
         self.use_LUT = use_LUT
@@ -176,7 +184,10 @@ class Sampler:
 
     # @profile(precision=4, stream=open('MCMC_memory_profiler.log','w+'))
     def run(
-        self, initial_state: Tensor, n_sweep: int = None
+        self,
+        initial_state: Tensor,
+        epoch: int,
+        n_sweep: int = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Union[complex, float], dict]:
         t0 = time.time_ns()
         check_para(initial_state)
@@ -192,7 +203,9 @@ class Sampler:
             return ci_space_rank.detach(), sample_prob, eloc, e_total, stats_dict
 
         # AR or MCMC sampling
-        sample_unique, sample_counts, sample_prob, WF_LUT = self.sampling(initial_state, n_sweep)
+        sample_unique, sample_counts, sample_prob = self.sampling(
+            initial_state, epoch=epoch, n_sweep=n_sweep
+        )
         if self.method_sample == "MCMC":
             logger.debug(f"rank: {self.rank} Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
@@ -200,7 +213,7 @@ class Sampler:
             sample_unique,
             state_prob=sample_prob,
             state_counts=sample_counts,
-            WF_LUT=WF_LUT,
+            WF_LUT=self.WF_LUT,
         )
         # print local energy statistics information
         self._statistics(stats_dict)
@@ -225,11 +238,15 @@ class Sampler:
         return sample_unique.detach(), sample_prob, eloc, e_total, stats_dict
 
     def sampling(
-        self, initial_state: Tensor, n_sweep: int = None
-    ) -> Tuple[Tensor, Tensor, Tensor, WavefunctionLUT]:
+        self,
+        initial_state: Tensor,
+        epoch: int,
+        n_sweep: int = None,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         """
         prob is not real prob, prob = prob * world-size
         """
+        self.change_n_sample(epoch=epoch)
         if self.method_sample == "MCMC":
             sample_unique, sample_counts, sample_prob, WF_LUT = self.MCMC(initial_state, n_sweep)
         elif self.method_sample == "AR":
@@ -237,7 +254,8 @@ class Sampler:
         else:
             raise NotImplementedError(f"Other sampling has not been implemented")
 
-        return sample_unique, sample_counts, sample_prob, WF_LUT
+        self.WF_LUT = WF_LUT
+        return sample_unique, sample_counts, sample_prob
 
     def MCMC(
         self, initial_state: Tensor, n_sweep: int = None
@@ -465,6 +483,7 @@ class Sampler:
             WF_LUT: WavefunctionLUT = None
 
         del merge_counts, merge_prob, unique_all, count_all, wf_value_all
+
         return (unique_rank, counts_rank, prob_rank * self.world_size, WF_LUT)
 
     # TODO: how to calculate batch_size;
@@ -484,6 +503,7 @@ class Sampler:
             placeholders(Tensor): state prob if exact optimization, else zeros tensor
             stats_dict(dict): statistical information about sampling.
         """
+        WF_LUT = self.WF_LUT if WF_LUT is None else WF_LUT
         nbatch = get_nbatch(
             self.sorb,
             len(sample),
@@ -513,7 +533,7 @@ class Sampler:
                 dtype=self.dtype,
                 reduce_psi=self.reduce_psi,
                 eps=self.eps,
-                use_sample_space = self.use_sample_space,
+                use_sample_space=self.use_sample_space,
             )
         else:
             e_total = -2.33233
@@ -528,6 +548,7 @@ class Sampler:
             + " (\n"
             + f"    Sample method: {self.method_sample}\n"
             + f"    the number of sample: {self.n_sample}\n"
+            + f"    first {self.start_iter}-th sample: {self.start_n_sample}\n"
             + f"    Using LUT: {self.use_LUT}\n"
             + f"    local energy unique: {self.use_unique}\n"
             + f"    Reduce psi: {self.reduce_psi}\n"
@@ -553,3 +574,15 @@ class Sampler:
         else:
             s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}]"
         logger.debug(s)
+
+    def change_n_sample(self, epoch: int) -> None:
+        """
+        change the number of sample in the beginning of iteration.
+        """
+        if epoch <= self.start_iter:
+            self.n_sample = self.start_n_sample
+            self.max_n_sample = self.n_sample
+        else:
+            self.n_sample = self.last_n_sample
+            self.max_n_sample = self.last_max_n_sample
+        self.min_n_sample = self.n_sample

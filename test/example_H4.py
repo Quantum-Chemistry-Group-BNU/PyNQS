@@ -134,7 +134,9 @@ if __name__ == "__main__":
         model = DDP(ansatz)
 
     sampler_param = {
-        "n_sample": int(1e06),
+        "n_sample": int(1.0e8),
+        "start_iter": 100,
+        "start_n_sample": int(1e06),
         "debug_exact": True, # exact optimizations
         "therm_step": 10000,
         "seed": seed,
