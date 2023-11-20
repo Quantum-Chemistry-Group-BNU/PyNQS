@@ -147,6 +147,7 @@ class Sampler:
 
         # Use WaveFunction LooKup-Table to speed up local-energy calculations
         self.use_LUT = use_LUT
+        self.WF_LUT: WavefunctionLUT = None
 
         # Use 'torch.unique' to speed up local-energy calculations
         self.use_unique = use_unique
