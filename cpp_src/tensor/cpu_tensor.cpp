@@ -474,7 +474,7 @@ Tensor constrain_make_charts_cpu(const Tensor &sym_index) {
   Tensor result_tensor =
       torch::from_blob(
           result.data(), nbatch * 4,
-          torch::TensorOptions().dtype(torch::kDouble).requires_grad(true))
+          torch::TensorOptions().dtype(torch::kDouble).requires_grad(false))
           .reshape({nbatch, 4});
   return std::move(result_tensor.clone());
 }

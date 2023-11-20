@@ -314,7 +314,7 @@ Tensor constrain_make_charts_cuda(const Tensor &sym_index) {
   auto options = torch::TensorOptions()
                      .dtype(torch::kDouble)
                      .device(sym_index.device())
-                     .requires_grad(true);
+                     .requires_grad(false);
 
   Tensor result = torch::zeros({nbatch, 4}, options);
   double *result_ptr = result.data_ptr<double>();
