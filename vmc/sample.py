@@ -138,7 +138,7 @@ class Sampler:
 
         # In the beginning of the iteration, unique sample is quite a lot.
         # so, set the small n_sample.
-        if start_n_sample is None and start_n_sample >= n_sample:
+        if start_n_sample is None or start_n_sample >= n_sample:
             start_n_sample = n_sample
         self.start_iter = start_iter
         self.last_n_sample = n_sample
@@ -504,6 +504,7 @@ class Sampler:
             placeholders(Tensor): state prob if exact optimization, else zeros tensor
             stats_dict(dict): statistical information about sampling.
         """
+        # this is applied when pre-train
         WF_LUT = self.WF_LUT if WF_LUT is None else WF_LUT
         nbatch = get_nbatch(
             self.sorb,
