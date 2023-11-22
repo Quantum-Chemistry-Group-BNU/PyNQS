@@ -125,6 +125,7 @@ class RNNWavefunction(nn.Module):
         num_up = torch.zeros(nbatch, **self.factory_kwargs)
         num_down = torch.zeros(nbatch, **self.factory_kwargs)
         activations = torch.ones(nbatch, device=self.device).to(torch.bool)
+        min_i = min([self.sorb - 2 * alpha, self.sorb - 2 * beta, 2 * alpha, 2 * beta])
 
         # Initialize the RNN hidden state
         if use_unique:
@@ -197,8 +198,7 @@ class RNNWavefunction(nn.Module):
                 y0_phase = self.phase_impl(y0)  # (nbatch, 2)
 
             # Constraints Fock space -> FCI space, and the prob of the last two orbital must be is 1.0
-            # if symmetry and self.nele // 2 <= i < dim - 2: XXX: this maybe is error
-            if self.symmetry:
+            if self.symmetry and i >= min_i:
                 lower_up = baseline_up + i // 2
                 lower_down = baseline_down + i // 2
                 if i % 2 == 0:

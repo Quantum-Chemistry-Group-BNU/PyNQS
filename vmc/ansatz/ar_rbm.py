@@ -343,6 +343,7 @@ class RBMSites(nn.Module):
         num_up = torch.zeros(nbatch, **self.factory_kwargs)
         num_down = torch.zeros(nbatch, **self.factory_kwargs)
         activations = torch.ones(nbatch, device=self.device).to(torch.bool)
+        min_k = min([self.sorb - 2 * alpha, self.sorb - 2 * beta, 2 * alpha, 2 * beta])
 
         for k in range(0, self.sorb, 2):
             if use_unique:
@@ -365,8 +366,7 @@ class RBMSites(nn.Module):
                 x0 = x[:, :k]  # (nbatch, k)
                 y0 = self.psi_two_sites(x0, k)  # (nbatch, 4)
 
-            # XXX: the k lower limit is ???
-            if self.symmetry:
+            if self.symmetry and k >= min_k:
                 lower_up = baseline_up + k // 2
                 lower_down = baseline_down + k // 2
                 activations_occ0 = torch.logical_and(alpha > num_up, activations)
@@ -415,6 +415,7 @@ class RBMSites(nn.Module):
         beta = self.nele // 2
         baseline_up = alpha - self.sorb // 2
         baseline_down = beta - self.sorb // 2
+        min_k = min([self.sorb - 2 * alpha, self.sorb - 2 * beta, 2 * alpha, 2 * beta])
 
         for k in range(self.sorb):
             x0 = sample_unique  # (n_unique, k)
@@ -422,7 +423,7 @@ class RBMSites(nn.Module):
             lower_up = baseline_up + k // 2
             lower_down = baseline_down + k // 2
 
-            if self.symmetry:
+            if self.symmetry and k >= min_k:
                 n_unique = sample_unique.size(0)
                 activations = torch.ones(n_unique, device=self.device).to(torch.bool)
                 if k % 2 == 0:
