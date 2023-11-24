@@ -99,6 +99,7 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(self.c_proj(y))
         return y, kv_cache
 
+    # NO USE
     def forward_fixed_bs(self, x, kv_cache=None):
         # fixed batch size infer of kv cache
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
