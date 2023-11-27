@@ -9,7 +9,7 @@ from functools import partial
 from typing import List, Union, Callable, Tuple
 from torch import nn, Tensor
 
-from nanogpt.model import GPT, GPTConfig, get_decoder_amp
+from .nanogpt.model import GPT, GPTConfig, get_decoder_amp
 
 from vmc.ansatz.utils import symmetry_mask, OrbitalBlock, SoftmaxLogProbAmps
 from utils.public_function import multinomial_tensor
@@ -135,7 +135,8 @@ class DecoderWaveFunction(nn.Module):
                 device=self.device,
                 out_activation=None,
             )
-            self.phase_layers.append(phase_i)
+            self.phase_layers.append(phase_i.to(self.device))
+            self.phase_layers = nn.ModuleList(self.phase_layers)
 
         # amp and phase activation
         self.amp_activation = amp_activation()
@@ -268,10 +269,13 @@ class DecoderWaveFunction(nn.Module):
 
         if self.compute_phase:
             phases = self.phase_layers[0](sample_unique * 2 - 1)
-            index = self.state_to_int(sample_unique[:, -2:]).reshape(-1, 1)
-            phases = phases.gather(1, index).reshape(-1)
+            index = self.state_to_int(sample_unique[:, -2:]).view(-1, 1)
+            phases = phases.gather(1, index).view(-1)
 
-        wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
+        if self.compute_phase:
+            wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
+        else:
+            wf = (amps_log * 0.5).exp()
 
         return sample_unique, sample_counts, wf
 
@@ -299,23 +303,24 @@ class DecoderWaveFunction(nn.Module):
             # breakpoint()
             amp_k_log = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
             # amp_k_log = torch.where(amp_k_log.isinf(), torch.full_like(amp_k_log, -30), amp_k_log)
-            # print(amp_mask)
-            # print(amp_k_log)
 
             # torch "-inf" * 0 = "nan", so use index, (nbatch, 1)
-            # index = (x[:, k : k + 2] * baselines).sum(dim=1, keepdim=True).long()
-            index = self.state_to_int(x[:, k : k + 2]).reshape(-1, 1)
-            amps_log += amp_k_log.gather(1, index).reshape(-1)
+            index = self.state_to_int(x[:, k : k + 2]).view(-1, 1)
+            amps_log += amp_k_log.gather(1, index).view(-1)
             # amp_list.append( amp_k_log.gather(1, index).reshape(-1))
 
             num_up.add_(x[..., k])
             num_down.add_(x[..., k + 1])
 
-        phases = phase.gather(1, index).reshape(-1)
+        if self.compute_phase:
+            phases = phase.gather(1, index).view(-1)
         # breakpoint()
         # print(torch.stack(amp_list, dim=1).exp())
-        wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
-        del phases, phase, amps_log, amp, amp_k, amp_k_log, index
+        if self.compute_phase:
+            wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
+        else:
+            wf = (amps_log * 0.5).exp()
+        del amps_log, amp, amp_k, amp_k_log, index
         return wf
 
     @torch.no_grad()
@@ -390,7 +395,7 @@ if __name__ == "__main__":
         wf_type="complex",
         n_layers=2,
         device="cpu",
-        d_model=16,
+        d_model=8,
         n_heads=4,
         phase_hidden_size=[16, 16],
     )

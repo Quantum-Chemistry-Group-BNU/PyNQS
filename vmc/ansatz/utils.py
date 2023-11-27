@@ -7,7 +7,7 @@ from torch import Tensor, nn
 from libs.C_extension import constrain_make_charts
 
 
-@torch.no_grad
+@torch.no_grad()
 def symmetry_mask(
     k: int,
     num_up: Tensor,
@@ -36,8 +36,8 @@ def _two_sites_symmetry(
     min_k: int,
     num_up: Tensor,
     num_down: Tensor,
-    device: str = None,
 ) -> Tensor:
+    device = num_down.device
     nbatch = num_up.size(0)
     activations = torch.ones(nbatch, device=device, dtype=torch.bool)
     baseline_up = alpha - sorb // 2
@@ -71,8 +71,8 @@ def _one_sites_symmetry(
     min_k: int,
     num_up: Tensor,
     num_down: Tensor,
-    device: str = None,
 ) -> Tensor:
+    device = num_down.device
     nbatch = num_up.size(0)
     baseline_up = alpha - sorb // 2
     baseline_down = beta - sorb // 2
