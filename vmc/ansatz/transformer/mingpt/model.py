@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from utils import CfgNode
+from vmc.ansatz.transformer.mingpt.utils import CfgNode
 
 
 class NewGELU(nn.Module):
@@ -449,7 +449,7 @@ def get_decoder_amp(
     d_model: int = 32,
     n_layers: int = 6,
     n_heads: int = 8,
-    p_dropout: float = 0.0,
+    dropout: float = 0.0,
 ) -> tuple[GPT, CfgNode]:
     r"""Wrapper of decoder amplitude.
 
@@ -489,9 +489,9 @@ def get_decoder_amp(
     model_config.n_layer = n_layers
     model_config.n_head = n_heads
     model_config.n_embd = d_model
-    model_config.embd_pdrop = p_dropout
-    model_config.resid_pdrop = p_dropout
-    model_config.attn_pdrop = p_dropout
+    model_config.embd_pdrop = dropout
+    model_config.resid_pdrop = dropout
+    model_config.attn_pdrop = dropout
 
     model = GPT(model_config)
     print(model_config)

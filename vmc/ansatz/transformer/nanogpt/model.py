@@ -53,7 +53,7 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
 
 
         if kv_cache is not None:
@@ -65,6 +65,7 @@ class CausalSelfAttention(nn.Module):
 
             k = torch.cat((k_past, k), dim=1)
             v = torch.cat((v_past, v), dim=1)
+            kv_cache = (k, v)
             k = k.view(B, -1, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
             q = q.view(B, -1, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
             v = v.view(B, -1, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
@@ -88,7 +89,7 @@ class CausalSelfAttention(nn.Module):
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        return y
+        return y, kv_cache
 
 class MLP(nn.Module):
 
@@ -144,7 +145,7 @@ class GPT(nn.Module):
 
         # TODO: sc23: vocab_size + 1
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd), 
+            wte = nn.Embedding(config.vocab_size + 1, config.n_embd), 
             wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
@@ -155,7 +156,9 @@ class GPT(nn.Module):
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+
+        # TODO:(zbwu-11-27): why
+        # self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
         # init all weights
         self.apply(self._init_weights)
@@ -360,7 +363,7 @@ class GPT(nn.Module):
 
         return idx
 
-
+from typing import Tuple
 def get_decoder_amp(
     n_qubits: int,
     d_model: int = 32,
@@ -368,7 +371,7 @@ def get_decoder_amp(
     n_heads: int = 8,
     dropout: float = 0.0,
     bias: bool = True
-) -> GPT:
+) -> Tuple[GPT, GPTConfig]:
     r"""Wrapper of decoder amplitude.
 
     Args:
@@ -398,7 +401,7 @@ def get_decoder_amp(
     config.n_embd = d_model
     config.dropout = dropout
     config.bias = bias
-    
+
     model = GPT(config)
 
     return model, config
