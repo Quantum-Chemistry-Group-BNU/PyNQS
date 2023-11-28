@@ -7,7 +7,7 @@ from torch import nn, Tensor
 # import sys; sys.path.append("./")
 
 from vmc.ansatz.transformer.nanogpt.model import GPT, GPTConfig, get_decoder_amp
-from vmc.ansatz.utils import symmetry_mask, OrbitalBlock, SoftmaxLogProbAmps
+from vmc.ansatz.utils import symmetry_mask, OrbitalBlock, SoftmaxLogProbAmps, joint_next_samples
 from utils.public_function import multinomial_tensor
 
 
@@ -142,59 +142,18 @@ class DecoderWaveFunction(nn.Module):
         s = f"amplitude-activations: {self.amp_activation}\n"
         s += f"phase-activations: {self.phase_activation}\n"
         phase_num = 0
+        net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
         for i in range(len(self.phase_layers)):
-            phase_num += sum(p.numel() for p in self.phase_layers[i].parameters() if p.grad is None)
-        amp_param = sum(p.numel() for p in self.amp_layers.parameters() if p.grad is None)
-        s += f"params: phase: {phase_num}, amplitude: {amp_param}\n"
-        s += f"phase-layers:\n{self.phase_layers}"
+            phase_num += net_param_num(self.phase_layers[i])
+        amp_param = net_param_num(self.amp_layers)
+        s += f"params: phase: {phase_num}, amplitude: {amp_param}"
         return s
-
-    def _joint_next_sample_two_sites(self, tensor: Tensor) -> Tensor:
-        """
-        tensor: (nbatch, k)
-        return: x: (nbatch * 4, k + 2)
-        """
-        nbatch, k = tuple(tensor.shape)
-        maybe = [self.empty, self.a, self.b, self.full]
-        x = torch.empty(nbatch * 4, k + 2, **self.factory_kwargs)
-        for i in range(4):
-            x[i * nbatch : (i + 1) * nbatch, -2:] = maybe[i].repeat(nbatch, 1)
-
-        x[:, :-2] = tensor.repeat(4, 1)
-
-        return x
-
-    def _joint_next_sample_one_sites(self, tensor: Tensor) -> Tensor:
-        """
-        tensor: (nbatch, k)
-        return: x: (nbatch * 2, k + 1)
-        """
-        nbatch, k = tuple(tensor.shape)
-        maybe = [self.unoccupied, self.occupied]
-        x = torch.empty(nbatch * 2, k + 1, **self.factory_kwargs)
-        for i in range(2):
-            x[i * nbatch : (i + 1) * nbatch, -1:] = maybe[i].repeat(nbatch, 1)
-
-        x[:, :-1] = tensor.repeat(2, 1)
-
-        return x
 
     def joint_next_samples(self, unique_sample: Tensor) -> Tensor:
         """
         Creative the next possible unique sample
-        unique_sample: (nbatch, k)
-        repeat method: [u1, u1, u1, u1] / [u1, u1]
-        Returns:
-            the next uniques_sample:
-                (nbatch * 2, k +1) if self.ar_sites = 1
-                (nbatch * 4, k + 2) if self.ar_sites = 2
         """
-        if self.ar_sites == 2:
-            return self._joint_next_sample_two_sites(unique_sample)
-        elif self.ar_sites == 1:
-            return self._joint_next_sample_one_sites(unique_sample)
-        else:
-            raise NotImplementedError
+        return joint_next_samples(unique_sample, sites=self.ar_sites)
 
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
         """
@@ -364,47 +323,3 @@ class DecoderWaveFunction(nn.Module):
             wf_value: the wavefunction of unique sample
         """
         return self.forward_sample(n_sample=n_sample)
-
-
-if __name__ == "__main__":
-    import numpy as np
-    from utils.public_function import get_special_space, setup_seed, get_fock_space
-    from libs.C_extension import onv_to_tensor
-
-    torch.set_default_dtype(torch.double)
-    setup_seed(111)
-
-    sorb = 6
-    nele = 4
-    noa = nele // 2
-    nob = nele - noa
-
-    fci_space = onv_to_tensor(get_special_space(sorb, sorb, noa, nob), sorb)
-    fock_space = onv_to_tensor(get_fock_space(sorb), sorb)
-    symmetry = True
-    if symmetry:
-        space = fci_space
-    else:
-        space = fock_space
-    print(f"space shape: {tuple(space.size())}")
-    # fci_space = torch.from_numpy(np.load("states.npy")).to(torch.double)
-
-    transformer = DecoderWaveFunction(
-        sorb=sorb,
-        nele=nele,
-        alpha_nele=noa,
-        beta_nele=nob,
-        use_symmetry=symmetry,
-        wf_type="complex",
-        n_layers=2,
-        device="cpu",
-        d_model=8,
-        n_heads=4,
-        phase_hidden_size=[16, 16],
-    )
-    model = transformer
-    print(model)
-    samples, counts, psi1 = model.forward_sample(n_sample=100000000)
-    print(counts / counts.sum())
-    psi = model((samples * 2 - 1).requires_grad_())
-    assert torch.allclose(psi, psi1)
