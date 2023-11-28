@@ -19,7 +19,7 @@ from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string
 from utils.integral import read_integral, integral_pyscf
 from utils import convert_onv, get_fock_space
 from utils.loggings import dist_print
-from vmc.ansatz import RBMWavefunction, RNNWavefunction, RBMSites
+from vmc.ansatz import RBMWavefunction, RNNWavefunction, RBMSites, DecoderWaveFunction
 from vmc.optim import VMCOptimizer, GD
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise
 from libs.C_extension import onv_to_tensor
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     # local_rank = int(os.environ["LOCAL_RANK"])
     local_rank = 0
     # seed =int(time.time_ns() % 2**31)
-    seed = 333
+    seed = 111
     setup_seed(seed)
     # if device == "cuda":
     #     torch.cuda.set_device(local_rank)
@@ -82,7 +82,7 @@ if __name__ == "__main__":
     #         },
     #         "H8-2.00.pth",
     #     )
-    e = torch.load("./molecule/H10-2.00.pth", map_location="cpu")
+    e = torch.load("./molecule/H6-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -134,9 +134,24 @@ if __name__ == "__main__":
         ar_sites=1,
         activation_type="cos",
     )
-    
-    ansatz = rnn
-    # summary(rnn, input_size=(int(1.0e6), 20))
+    d_model = 8
+    n_warmup = 1000
+    transformer = DecoderWaveFunction(
+        sorb=sorb,
+        nele=nele,
+        alpha_nele=nele//2,
+        beta_nele=nele//2,
+        use_symmetry=True,
+        wf_type="complex",
+        n_layers=2,
+        device=device,
+        d_model=d_model,
+        n_heads=4,
+        phase_hidden_size=[16, 16],
+    )
+
+    ansatz = transformer
+    # summary(ansatz, input_size=(int(1.0e6), 20))
     # breakpoint()
     if device == "cuda":
         model = DDP(ansatz, device_ids=[local_rank], output_device=local_rank)
@@ -144,32 +159,37 @@ if __name__ == "__main__":
     else:
         model = DDP(ansatz)
 
+    # breakpoint()
     # model = DDP(model, device_ids=[local_rank], output_device=local_rank)
     # torch.save({"model": model.state_dict(), "h1e": h1e, "h2e": h2e}, "test.pth")
     sampler_param = {
         "n_sample": int(1.0e8),
-        "debug_exact": False,
+        "debug_exact": True,
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
         "max_memory": 4,
         "alpha": 0.15,
         "method_sample": "AR",
-        "use_LUT": True,
+        "use_LUT": False,
         "use_unique": True,
         "reduce_psi": False,
         "use_sample_space": False,
         "eps": 1.0e-10,
         "only_AD": False,
     }
-    opt_type = optim.Adam
-    opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
+    opt_type = optim.AdamW
+    opt_params = {"lr": 1.0, "betas": (0.9, 0.99), "weight_decay": 0.0}
     # opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
     # lr_scheduler = optim.lr_scheduler.MultiStepLR
     # lr_sch_params = {"milestones": [3000, 4500, 5500], "gamma": 0.20}
     lr_scheduler = optim.lr_scheduler.LambdaLR
-    lambda1 = lambda step: (1 + step / 5000) ** -1
-    lr_sch_params = {"lr_lambda": lambda1}
+    # lambda1 = lambda step: (1 + step / 5000) ** -1
+    # lr_sch_params = {"lr_lambda": lambda1}
+
+    lr_transformer = lambda step: (d_model ** (-0.5)) * min((step + 1) **(-0.50), step * n_warmup**(-1.50))
+    lr_sch_params = {"lr_lambda": lr_transformer}
+
     dtype = Dtype(dtype=torch.complex128, device=device)
     # dtype = Dtype(dtype=torch.double, device=device)
     # print(f"rank: {dist.get_rank()}, size: {dist.get_world_size()}")
@@ -184,7 +204,7 @@ if __name__ == "__main__":
         sampler_param=sampler_param,
         only_sample=False,
         electron_info=electron_info,
-        max_iter=10000,
+        max_iter=5000,
         interval=200,
         MAX_AD_DIM=-1,
         sr=False,
@@ -192,7 +212,7 @@ if __name__ == "__main__":
         pre_train_info=pre_train_info,
         method_grad="AD",
         method_jacobian="vector",
-        prefix="./tmp/vmc-" + str(seed),
+        prefix="./tmp/H6-1.60-" + str(seed),
     )
     # opt_vmc.pre_train()
     opt_vmc.run()

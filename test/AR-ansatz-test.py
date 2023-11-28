@@ -17,7 +17,7 @@ from utils.public_function import (
     setup_seed,
 )
 from libs.C_extension import onv_to_tensor, constrain_make_charts, tensor_to_onv
-from vmc.ansatz import RNNWavefunction, RBMWavefunction, RBMSites
+from vmc.ansatz import RNNWavefunction, RBMWavefunction, RBMSites, DecoderWaveFunction
 
 
 @torch.no_grad()
@@ -59,8 +59,8 @@ if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
     device = "cuda"
-    sorb = 16
-    nele = 8
+    sorb = 8
+    nele = 4
     alpha = 1
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     length = fock_space.shape[0]
@@ -68,6 +68,8 @@ if __name__ == "__main__":
         get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb
     )
     dim = fci_space.size(0)
+    AD_TEST = False
+    SAMPLE_TEST = True
     # random_order = random.sample(list(range(length)), length)
     # fock_space = fock_space[random_order]
 
@@ -93,9 +95,26 @@ if __name__ == "__main__":
         device=device,
     )
     rbm = RBMWavefunction(sorb, alpha=alpha, init_weight=0.005, rbm_type="cos")
-    model = rnn
 
-    if False:
+    symmetry = True
+    transformer = DecoderWaveFunction(
+        sorb=sorb,
+        nele=nele,
+        alpha_nele=nele//2,
+        beta_nele=nele//2,
+        use_symmetry=symmetry,
+        wf_type="complex",
+        n_layers=2,
+        device=device,
+        d_model=8,
+        n_heads=4,
+        phase_hidden_size=[16, 16],
+    )
+
+    model = transformer
+    print(model)
+
+    if AD_TEST:
         model.zero_grad()
         print(fci_space.requires_grad)
         psi = model(fci_space[12].requires_grad_())
@@ -111,51 +130,52 @@ if __name__ == "__main__":
 
         print("Num-diff")
         print(_numerical_differentiation(model, fci_space[12].reshape(-1, sorb))[0].sum(dim=0))
-        exit()
-    dict1 = {}
-    from libs.C_extension import get_comb_tensor
-    from utils.public_function import WavefunctionLUT, torch_sort_onv
 
-    fci_space = get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device)
-    comb_x, x1 = get_comb_tensor(fci_space[:2], sorb, nele, nele // 2, nele // 2, True)
-    print(fci_space.shape, comb_x.shape)
+    # Test LUT
+    # from libs.C_extension import get_comb_tensor
+    # from utils.public_function import WavefunctionLUT, torch_sort_onv
 
-    key = comb_x[0]  # [torch_sort_onv(comb_x[0])]
-    psi = model(x1[0])
+    # fci_space = get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device)
+    # comb_x, x1 = get_comb_tensor(fci_space[:2], sorb, nele, nele // 2, nele // 2, True)
+    # print(fci_space.shape, comb_x.shape)
 
-    t = WavefunctionLUT(key, psi, sorb, device)
-    onv_idx, onv_not_idx, value = t.lookup(fci_space)
+    # key = comb_x[0]  # [torch_sort_onv(comb_x[0])]
+    # psi = model(x1[0])
 
-    value1 = model(onv_to_tensor(fci_space, sorb))
-    assert torch.allclose(value1[onv_idx], value, atol=1e-12)
+    # t = WavefunctionLUT(key, psi, sorb, device)
+    # onv_idx, onv_not_idx, value = t.lookup(fci_space)
+
+    # value1 = model(onv_to_tensor(fci_space, sorb))
+    # assert torch.allclose(value1[onv_idx], value, atol=1e-12)
 
     print(f"Psi^2")
-    psi = model(onv_to_tensor(fci_space, sorb))
+    psi = model(fci_space)
 
     print((psi * psi.conj()).sum().item())
-
     # Testing use_unique
     # for i in range(comb_x.size(0)):
     #     psi1 = model(x1[i], use_unique=False)
     #     psi2 = model(x1[i], use_unique=True)
     #     assert torch.allclose(psi1, psi2, atol=1e-10)
     # fci_space = onv_to_tensor(fci_space, sorb)
-    # for i in range(dim):
-    #     s = state_to_string(fci_space[i], vcc_one=True)[0]
-    #     dict1[s] = psi[i].detach().norm().item() ** 2
+    # Testing sample
+    if SAMPLE_TEST:
+        dict1 ={}
+        for i in range(dim):
+            s = state_to_string(fci_space[i], vcc_one=True)[0]
+            dict1[s] = psi[i].detach().norm().item() ** 2
 
-    sample_unique, sample_counts, wf_value = model.ar_sampling(int(1e12))
+        sample_unique, sample_counts, wf_value = model.ar_sampling(int(1e12))
 
-    print(torch.allclose(wf_value, model((sample_unique * 2 - 1)), atol=1e-10))
-    exit()
-    prob = sample_counts / sample_counts.sum()
-    print(f"n sample: {sample_counts.sum().item():.4E}")
-    dict2 = {}
-    for i in range(sample_unique.size(0)):
-        s = state_to_string(sample_unique[i], vcc_one=False)[0]
-        dict2[s] = prob[i].item()
+        print(torch.allclose(wf_value, model((sample_unique * 2 - 1)), atol=1e-10))
+        prob = sample_counts / sample_counts.sum()
+        print(f"n sample: {sample_counts.sum().item():.4E}")
+        dict2 = {}
+        for i in range(sample_unique.size(0)):
+            s = state_to_string(sample_unique[i], vcc_one=False)[0]
+            dict2[s] = prob[i].item()
 
-    print(f"ONV     psi^2   sample-prob")
-    for key in dict1.keys():
-        if key in dict2.keys():
-            print(f"{key} {dict1[key]:.7f}  {dict2[key]:.7f}")
+        print(f"ONV     psi^2   sample-prob")
+        for key in dict1.keys():
+            if key in dict2.keys():
+                print(f"{key} {dict1[key]:.7f}  {dict2[key]:.7f}")
