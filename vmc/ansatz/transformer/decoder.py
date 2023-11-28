@@ -1,16 +1,12 @@
 import torch
-import torch.nn.functional as F
-
-import sys
-
-sys.path.append("./")
 
 from functools import partial
 from typing import List, Union, Callable, Tuple
 from torch import nn, Tensor
 
-from .nanogpt.model import GPT, GPTConfig, get_decoder_amp
+# import sys; sys.path.append("./")
 
+from vmc.ansatz.transformer.nanogpt.model import GPT, GPTConfig, get_decoder_amp
 from vmc.ansatz.utils import symmetry_mask, OrbitalBlock, SoftmaxLogProbAmps
 from utils.public_function import multinomial_tensor
 
@@ -284,6 +280,13 @@ class DecoderWaveFunction(nn.Module):
         if x.dim() == 1:
             x = x.unsqueeze(0)
 
+        if x.numel() == 0:
+            empty = torch.zeros(0, **self.factory_kwargs)
+            if self.compute_phase:
+                return torch.complex(empty, empty)
+            else:
+                return empty
+
         nbatch = x.size(0)
         num_up = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
         num_down = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
@@ -405,10 +408,3 @@ if __name__ == "__main__":
     print(counts / counts.sum())
     psi = model((samples * 2 - 1).requires_grad_())
     assert torch.allclose(psi, psi1)
-    # for p in model.parameters():
-    #     print(p, p.dtype)
-    # psi = model(space)
-    # print(f"psi^2: {psi.norm().pow(2).item():.12f}")
-    loss = psi.norm()
-    breakpoint()
-    # loss.backward()
