@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Union, Callable
 from torch import nn, Tensor
 
 from utils.public_function import (
@@ -9,6 +9,7 @@ from utils.public_function import (
     torch_consecutive_unique_idex,
     torch_lexsort,
 )
+from vmc.ansatz.utils import OrbitalBlock
 
 
 class RNNWavefunction(nn.Module):
@@ -23,6 +24,14 @@ class RNNWavefunction(nn.Module):
         symmetry: bool = True,
         device: str = None,
         use_unique: bool = True,
+        common_linear: bool = False,
+        combine_amp_phase: bool = True,
+        phase_hidden_size: List[int] = [32, 32],
+        phase_use_embedding: bool = False,
+        phase_hidden_activation: Union[nn.Module, Callable] = nn.ReLU,
+        phase_bias: bool = True,
+        phase_batch_norm: bool = False,
+        phase_norm_momentum=0.1,
     ) -> None:
         super(RNNWavefunction, self).__init__()
         self.device = device
@@ -50,7 +59,40 @@ class RNNWavefunction(nn.Module):
             **self.factory_kwargs,
         )
         # self.GRU = nn.GRUCell(input_size=2, hidden_size=num_hiddens, **self.factory_kwargs)
-        self.linear = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
+        self.linear_amp = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
+
+        self.common_linear = common_linear
+        self.combine_amp_phase = combine_amp_phase
+        if self.compute_phase and self.combine_amp_phase:
+            if not self.common_linear:
+                self.linear_phase = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
+            else:
+                self.linear_phase = self.linear_amp
+
+        n_in = self.sorb
+        self.n_out_phase = 2
+        self.phase_hidden_size = phase_hidden_size
+        self.phase_hidden_activation = phase_hidden_activation
+        self.phase_use_embedding = phase_use_embedding
+        self.phase_bias = phase_bias
+        self.phase_batch_norm = phase_batch_norm
+        self.phase_norm_momentum = phase_norm_momentum
+        self.phase_layers: List[OrbitalBlock] = []
+        if self.compute_phase and not self.combine_amp_phase:
+            phase_i = OrbitalBlock(
+                num_in=n_in,
+                n_hid=self.phase_hidden_size,
+                num_out=self.n_out_phase,
+                hidden_activation=self.phase_hidden_activation,
+                use_embedding=self.phase_use_embedding,
+                bias=self.phase_bias,
+                batch_norm=self.phase_batch_norm,
+                batch_norm_momentum=self.phase_norm_momentum,
+                device=self.device,
+                out_activation=None,
+            )
+            self.phase_layers.append(phase_i.to(self.device))
+            self.phase_layers = nn.ModuleList(self.phase_layers)
 
         # self.reset_parameter()
         self.occupied = torch.tensor([1.0], **self.factory_kwargs)
@@ -59,7 +101,21 @@ class RNNWavefunction(nn.Module):
         self.use_unique = use_unique
 
     def extra_repr(self) -> str:
-        s = f"RNN type: {self.rnn_type}, use unique: {self.use_unique}"
+        s = f"RNN type: {self.rnn_type}, use unique: {self.use_unique}\n"
+        s += f"amplitude and phase common Linear: {self.common_linear}, "
+        s += f"combined amplitude and phase layers: {self.combine_amp_phase}\n"
+        net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
+        gru_num = net_param_num(self.GRU)
+        amp_num = net_param_num(self.linear_amp)
+        s += f"params: GRU: {gru_num}, amp: {amp_num}, "
+        if self.compute_phase:
+            if not self.combine_amp_phase:
+                impl = self.phase_layers[0]
+                # phase_num = sum(p.numel() for p in self.phase_layers[0].parameters() if p.grad is None)
+            else:
+                impl = self.linear_phase
+            phase_num = net_param_num(impl)
+            s += f"phase: {phase_num}"
         return s
 
     def rnn(self, x: Tensor, hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
@@ -75,11 +131,11 @@ class RNNWavefunction(nn.Module):
 
     def amp_impl(self, x: Tensor) -> Tensor:
         # x: (nbatch, 2)
-        return self.linear(x).softmax(dim=1).sqrt()
+        return self.linear_amp(x).softmax(dim=1).sqrt()
 
     def phase_impl(self, x: Tensor) -> Tensor:
         # x: (nbatch, 2)
-        return torch.pi * (F.softsign(self.linear(x)))
+        return torch.pi * (F.softsign(self.linear_phase(x)))
 
     def heavy_side(self, x: Tensor) -> Tensor:
         sign = torch.sign(torch.sign(x) + 0.1)
@@ -131,9 +187,7 @@ class RNNWavefunction(nn.Module):
         if use_unique:
             hidden_state: Tensor = None
             # avoid sorted much orbital, unique_sorb >= 2
-            unique_sorb = min(
-                int(torch.tensor(nbatch / 1024 + 1).log2().ceil()), self.sorb // 2
-            )
+            unique_sorb = min(int(torch.tensor(nbatch / 1024 + 1).log2().ceil()), self.sorb // 2)
             unique_sorb = max(2, unique_sorb)
             # sorted x, avoid repeated sorting using 'torch.unique'
             sorted_idx = torch_lexsort(
@@ -194,7 +248,7 @@ class RNNWavefunction(nn.Module):
                 y0, hidden_state = self.rnn(x0, hidden_state)  # (nbatch, 2)
 
             y0_amp = self.amp_impl(y0)  # (nbatch, 2)
-            if self.compute_phase:
+            if self.compute_phase and self.combine_amp_phase:
                 y0_phase = self.phase_impl(y0)  # (nbatch, 2)
 
             # Constraints Fock space -> FCI space, and the prob of the last two orbital must be is 1.0
@@ -223,16 +277,21 @@ class RNNWavefunction(nn.Module):
             # avoid In-place when auto-grad
             amp = torch.mul(amp, amp_i)
             # amp.append(amp_i)
-            if self.compute_phase:
+            if self.compute_phase and self.combine_amp_phase:
                 phase_i = (y0_phase * x0.squeeze(1)).sum(dim=1)  # (nbatch)
                 # avoid In-place when auto-grad
                 phase = torch.add(phase, phase_i)
                 # phase.add_(phase_i)
 
+        if self.compute_phase and not self.combine_amp_phase:
+            phase_input = x.masked_fill(x == 0, -1).double().squeeze(1)  # (nbatch, 2)
+            phase = (self.phase_layers[0](phase_input) * x0.squeeze(1)).sum(dim=1)  # (nbatch)
+
         # Complex |psi> = \exp(i phase) * \sqrt(prob)
         # Real positive |psi> = \sqrt(prob)
         # amp = torch.stack(amp, dim=1).prod(dim=1)  # (nbatch)
         if self.compute_phase:
+            # breakpoint()
             wf = torch.complex(torch.zeros_like(phase), phase).exp() * amp
         else:
             wf = amp
@@ -271,7 +330,7 @@ class RNNWavefunction(nn.Module):
             # y0: (n_unique, 2)
             y0, hidden_state = self.rnn(x0, hidden_state)
             y0_amp = self.amp_impl(y0)  # (n_unique, 2)
-            if self.compute_phase:
+            if self.compute_phase and self.combine_amp_phase:
                 y0_phase = self.phase_impl(y0)  # (n_unique, 2)
             lower_up = baseline_up + i // 2
             lower_down = baseline_down + i // 2
@@ -301,7 +360,7 @@ class RNNWavefunction(nn.Module):
 
             # update wavefunction value that is similar to updating sample-unique
             amp = torch.mul(amp.unsqueeze(1).repeat(1, 2), y0_amp).T.flatten()[idx_count]
-            if self.compute_phase:
+            if self.compute_phase and self.combine_amp_phase:
                 phase = torch.add(phase.unsqueeze(1).repeat(1, 2), y0_phase).T.flatten()[idx_count]
 
             # update hidden_state, from: (.., n_unique, ...) to (...,n_unique_next, ...)
@@ -311,6 +370,10 @@ class RNNWavefunction(nn.Module):
                 .to(**self.factory_kwargs)
                 .unsqueeze(1)
             )  # (n_unique, 1, 2)
+
+        if self.compute_phase and not self.combine_amp_phase:
+            phase_input = (sample_unique * 2 - 1).double().squeeze(1)  # (nbatch, 2) +1/-1
+            phase = (self.phase_layers[0](phase_input) * x0.squeeze(1)).sum(dim=1)  # (nbatch)
 
         if self.compute_phase:
             wf = torch.complex(torch.zeros_like(phase), phase).exp() * amp
