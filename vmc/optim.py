@@ -13,6 +13,7 @@ from line_profiler import LineProfiler
 from functools import partial
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
+from torch.optim.lr_scheduler import LRScheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
 
@@ -52,15 +53,17 @@ class VMCOptimizer:
         electron_info: ElectronInfo,
         opt_type: Optimizer = torch.optim.Adam,
         opt_params: dict = {"lr": 0.005, "weight_decay": 0.001},
-        lr_scheduler=None,
+        lr_scheduler: LRScheduler = None,
         lr_sch_params: dict = None,
         max_iter: int = 2000,
         dtype: Dtype = None,
         HF_init: int = 0,
         external_model: any = None,
+        check_point: str = None,
         only_sample: bool = False,
         pre_CI: CIWavefunction = None,
         pre_train_info: dict = None,
+        noise_lambda: float = 0.05,
         method_grad: str = "AD",
         sr: bool = False,
         method_jacobian: str = "vector",
@@ -133,6 +136,7 @@ class VMCOptimizer:
         # pre-train CI wavefunction
         self.pre_CI = pre_CI
         self.pre_train_info = pre_train_info
+        self.noise_lambda = noise_lambda
 
         # save model
         if int(interval) != 1:
@@ -144,6 +148,10 @@ class VMCOptimizer:
         if self.rank == 0:
             logger.info(f"Save model interval: {self.nprt}", master=True)
         self.prefix = prefix
+
+        # read checkpoint file:
+        if check_point is not None:
+            self.read_checkpoint(check_point)
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -169,6 +177,16 @@ class VMCOptimizer:
         # notice h1e, he2 may be different even if the coordinate and basis are the same.
         self.h1e: Tensor = state["h1e"]
         self.h2e: Tensor = state["h2e"]
+
+    def read_checkpoint(self, checkpoint: str):
+        if self.rank == 0:
+            s = f"Read model/optimizer/scheduler from {checkpoint}"
+            logger.info(s, master=True)
+        x = torch.load(checkpoint, map_location=self.device)
+        self.model.load_state_dict(x["model"])
+        self.opt.load_state_dict(x["optimizer"])
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.load_state_dict(x["scheduler"])
 
     def dump_input(self):
         if self.rank == 0:
@@ -319,6 +337,23 @@ class VMCOptimizer:
                 master=True,
             )
 
+    def noise_tune(self, noise_lambda: float = None) -> None:
+        """
+        NoisyTune
+        ref: https://aclanthology.org/2022.acl-short.76.pdf
+        """
+        if noise_lambda is None:
+            noise_lambda = self.noise_lambda
+        if noise_lambda > 0.0:
+            for name, para in self.model.named_parameters():
+                dtype = para.dtype
+                device = para.device
+                self.model.state_dict()[name][:] += (
+                    (torch.rand(para.size(), device=device, dtype=dtype) - 0.5)
+                    * noise_lambda
+                    * torch.std(para)
+                )
+
     def pre_train(self, prefix: str = None):
         if prefix is None:
             prefix = self.prefix
@@ -335,6 +370,9 @@ class VMCOptimizer:
         if self.rank == 0:
             logger.info(f"pre-train:\n{t}", master=True)
         t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
+
+        # Add noise 
+        self.noise_tune(self.noise_lambda)
         del t
 
     def summary(self, e_ref: float = None, e_lst: List[float] = None, prefix: str = None):
