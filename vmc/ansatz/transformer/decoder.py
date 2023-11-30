@@ -35,6 +35,7 @@ class DecoderWaveFunction(nn.Module):
         phase_norm_momentum=0.1,
         amp_activation: Union[nn.Module, Callable] = SoftmaxLogProbAmps,
         phase_activation: Union[nn.Module, Callable] = None,
+        n_out_phase: int = 1,
     ) -> None:
         super(DecoderWaveFunction, self).__init__()
 
@@ -107,8 +108,13 @@ class DecoderWaveFunction(nn.Module):
         self.amp_layers = self.amp_layers.to(self.device)
 
         # XXX: NOT-Fully Test
+        if phase_use_embedding:
+            raise NotImplementedError(f"Phases layer embedding will be implemented in future")
         n_in = self.sorb
-        self.n_out_phase = 4 if self.ar_sites == 2 else 2
+        if n_out_phase == 1:
+            self.n_out_phase = n_out_phase
+        else:
+            self.n_out_phase = 4 if self.ar_sites == 2 else 2
         self.phase_hidden_size = phase_hidden_size
         self.phase_use_embedding = phase_use_embedding
         self.phase_hidden_activation = phase_hidden_activation
@@ -224,8 +230,11 @@ class DecoderWaveFunction(nn.Module):
 
         if self.compute_phase:
             phases = self.phase_layers[0](sample_unique * 2 - 1)
-            index = self.state_to_int(sample_unique[:, -2:]).view(-1, 1)
-            phases = phases.gather(1, index).view(-1)
+            if self.n_out_phase == 1:
+                phases = phases.view(-1)
+            else:
+                index = self.state_to_int(sample_unique[:, -2:]).view(-1, 1)
+                phases = phases.gather(1, index).view(-1)
 
         if self.compute_phase:
             wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
@@ -275,7 +284,10 @@ class DecoderWaveFunction(nn.Module):
             num_down.add_(x[..., k + 1])
 
         if self.compute_phase:
-            phases = phase.gather(1, index).view(-1)
+            if self.n_out_phase == 1:
+                phases = phase.view(-1)
+            else:
+                phases = phase.gather(1, index).view(-1)
         # breakpoint()
         # print(torch.stack(amp_list, dim=1).exp())
         if self.compute_phase:

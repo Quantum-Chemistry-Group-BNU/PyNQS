@@ -32,6 +32,7 @@ class RNNWavefunction(nn.Module):
         phase_bias: bool = True,
         phase_batch_norm: bool = False,
         phase_norm_momentum=0.1,
+        n_out_phase: int = 1,
     ) -> None:
         super(RNNWavefunction, self).__init__()
         self.device = device
@@ -70,7 +71,9 @@ class RNNWavefunction(nn.Module):
                 self.linear_phase = self.linear_amp
 
         n_in = self.sorb
-        self.n_out_phase = 2
+        if phase_use_embedding:
+            raise NotImplementedError(f"Phases layer embedding will be implemented in future")
+        self.n_out_phase = n_out_phase
         self.phase_hidden_size = phase_hidden_size
         self.phase_hidden_activation = phase_hidden_activation
         self.phase_use_embedding = phase_use_embedding
@@ -285,7 +288,11 @@ class RNNWavefunction(nn.Module):
 
         if self.compute_phase and not self.combine_amp_phase:
             phase_input = x.masked_fill(x == 0, -1).double().squeeze(1)  # (nbatch, 2)
-            phase = (self.phase_layers[0](phase_input) * x0.squeeze(1)).sum(dim=1)  # (nbatch)
+            phase_i = self.phase_layers[0](phase_input)
+            if self.n_out_phase == 1:
+                phase = phase_i.view(-1)
+            else:
+                phase = (phase_i * x0.squeeze(1)).sum(dim=1)  # (nbatch)
 
         # Complex |psi> = \exp(i phase) * \sqrt(prob)
         # Real positive |psi> = \sqrt(prob)
@@ -373,7 +380,11 @@ class RNNWavefunction(nn.Module):
 
         if self.compute_phase and not self.combine_amp_phase:
             phase_input = (sample_unique * 2 - 1).double().squeeze(1)  # (nbatch, 2) +1/-1
-            phase = (self.phase_layers[0](phase_input) * x0.squeeze(1)).sum(dim=1)  # (nbatch)
+            phase_i = self.phase_layers[0](phase_input)
+            if self.n_out_phase == 1:
+                phase = phase_i.view(-1)
+            else:
+                phase = (phase_i * x0.squeeze(1)).sum(dim=1)  # (nbatch)
 
         if self.compute_phase:
             wf = torch.complex(torch.zeros_like(phase), phase).exp() * amp
