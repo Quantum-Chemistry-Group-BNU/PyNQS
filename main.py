@@ -82,7 +82,7 @@ if __name__ == "__main__":
     #         },
     #         "H8-2.00.pth",
     #     )
-    e = torch.load("./molecule/H6-1.60.pth", map_location="cpu")
+    e = torch.load("./molecule/H8-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -123,7 +123,9 @@ if __name__ == "__main__":
         device=device,
         common_linear=False,
         combine_amp_phase=False,
-        phase_hidden_size=[24, 24],
+        phase_batch_norm=False,
+        phase_hidden_size=[64, 64],
+        n_out_phase=1,
     ).to(device=device)
     rbm = RBMWavefunction(sorb, alpha=2, device=device, rbm_type="cos")
 
@@ -137,7 +139,7 @@ if __name__ == "__main__":
         ar_sites=1,
         activation_type="cos",
     )
-    d_model = 8
+    d_model = 16
     n_warmup = 2000
     transformer = DecoderWaveFunction(
         sorb=sorb,
@@ -146,14 +148,15 @@ if __name__ == "__main__":
         beta_nele=nele//2,
         use_symmetry=True,
         wf_type="complex",
-        n_layers=2,
+        n_layers=4,
         device=device,
         d_model=d_model,
         n_heads=4,
-        phase_hidden_size=[24, 24],
+        phase_hidden_size=[512, 521],
+        n_out_phase=4,
     )
 
-    ansatz = transformer
+    ansatz = rnn
     print(sum(map(torch.numel, ansatz.parameters())))
     # breakpoint()
     # summary(ansatz, input_size=(int(1.0e6), 20))
@@ -176,7 +179,7 @@ if __name__ == "__main__":
         "max_memory": 4,
         "alpha": 0.15,
         "method_sample": "AR",
-        "use_LUT": False,
+        "use_LUT": True,
         "use_unique": True,
         "reduce_psi": False,
         "use_sample_space": False,
@@ -209,19 +212,20 @@ if __name__ == "__main__":
         sampler_param=sampler_param,
         only_sample=False,
         electron_info=electron_info,
-        max_iter=20,
-        interval=20,
+        max_iter=5000,
+        interval=200,
         MAX_AD_DIM=-1,
         sr=False,
         pre_CI=ucisd_wf,
         pre_train_info=pre_train_info,
         noise_lambda=0.0,
-        check_point="./tmp/vmc-111-pre-train-checkpoint.pth",
+        # check_point="./tmp/vmc-111-pre-train-checkpoint.pth",
         method_grad="AD",
         method_jacobian="vector",
-        prefix="./tmp/vmc-" + str(seed),
+        prefix="./tmp/H8-1.60-rnn-phase-64-64-" + str(seed),
     )
     # opt_vmc.pre_train()
+    # breakpoint()
     opt_vmc.run()
     e_ref = e_lst[0]
     print(e_lst, seed)

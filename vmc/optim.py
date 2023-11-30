@@ -92,9 +92,9 @@ class VMCOptimizer:
         # Read parameters from an external model or model
         self.opt: Optimizer = opt_type(self.model.parameters(), **opt_params)
         if lr_sch_params is not None and lr_scheduler is not None:
-            self.lr_scheduler = lr_scheduler(self.opt, **lr_sch_params)
+            self.lr_scheduler: LRScheduler = lr_scheduler(self.opt, **lr_sch_params)
         else:
-            self.lr_scheduler = None
+            self.lr_scheduler: LRScheduler = None
 
         self.HF_init = int(HF_init)
         self.sr: bool = sr
