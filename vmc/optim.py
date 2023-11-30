@@ -223,13 +223,14 @@ class VMCOptimizer:
             state, state_prob, eloc, e_total, stats = self.sampler.run(initial_state, epoch=epoch)
             # All_Reduce mean local energy
             eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
-            logger.debug(f"eloc-mean: {eloc_mean.real:.5f}{eloc_mean.imag:+.5f}j")
+            logger.debug(f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j")
             all_reduce_tensor(eloc_mean, world_size=self.world_size)
             synchronize()
 
             e_total = eloc_mean.item().real + self.ecore
             if self.rank == 0:
-                logger.info(f"eloc-mean: {eloc_mean.real:.5f}{eloc_mean.imag:+.5f}j", master=True)
+                logger.info(f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j",
+                            master=True)
                 self.e_lst.append(e_total)
             # self.stats_lst.append(stats)
 
