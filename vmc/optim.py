@@ -116,7 +116,7 @@ class VMCOptimizer:
 
         # record optim
         self.n_para = len(list(self.model.parameters()))
-        self.grad_e_lst: List[Tensor] = [[] for _ in range(self.n_para)]
+        self.grad_e_lst = [[], []] # grad_L2, grad_max
         self.e_lst: List[float] = []
         self.stats_lst: List[dict] = []
         self.time_sample: List[float] = []
@@ -275,11 +275,13 @@ class VMCOptimizer:
 
             # save the energy grad
             if self.rank == 0:
+                x: List[np.ndarray] = []
                 for i, param in enumerate(self.model.parameters()):
                     if param.grad is not None:
-                        self.grad_e_lst[i].append(param.grad.reshape(-1).detach().to("cpu").numpy())
-                    else:
-                        self.grad_e_lst[i].append(np.zeros(param.numel()))
+                        x.append(param.grad.reshape(-1).detach().to("cpu").numpy())
+                x = np.concatenate(x)
+                self.grad_e_lst[0].append(np.linalg.norm(x))
+                self.grad_e_lst[1].append(np.abs(x).max())
 
             t2 = time.time_ns()
             # TODO: synchronize
@@ -456,17 +458,8 @@ class VMCOptimizer:
                 master=True,
             )
 
-        # plot the L2-norm and max-abs of the gradients
-        param_L2: List[np.ndarray] = []
-        param_max: List[np.ndarray] = []
-        for i in range(self.n_para):
-            x = np.linalg.norm(np.array(self.grad_e_lst[i]), axis=1)  # ||g||
-            param_L2.append(x)
-            x1 = np.abs(np.array(self.grad_e_lst[i])).max(axis=1)  # max
-            param_max.append(x1)
-        param_L2 = np.stack(param_L2, axis=1).sum(axis=1)
-        param_max = np.stack(param_max, axis=1).max(axis=1)
-
+        param_L2 = np.asarray(self.grad_e_lst[0])
+        param_max = np.asarray(self.grad_e_lst[1])
         ax = fig.add_subplot(2, 1, 2)
         ax.plot(np.arange(len(param_L2))[idx:], param_L2[idx:], label="||g||")
         ax.plot(np.arange(len(param_max))[idx:], param_max[idx:], label="max|g|")
