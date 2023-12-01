@@ -82,7 +82,7 @@ if __name__ == "__main__":
     #         },
     #         "H8-2.00.pth",
     #     )
-    e = torch.load("./molecule/H8-1.60.pth", map_location="cpu")
+    e = torch.load("./molecule/H6-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -171,7 +171,7 @@ if __name__ == "__main__":
     # model = DDP(model, device_ids=[local_rank], output_device=local_rank)
     # torch.save({"model": model.state_dict(), "h1e": h1e, "h2e": h2e}, "test.pth")
     sampler_param = {
-        "n_sample": int(1.0e8),
+        "n_sample": int(1.0e10),
         "debug_exact": True,
         "therm_step": 10000,
         "seed": seed,
@@ -212,7 +212,7 @@ if __name__ == "__main__":
         sampler_param=sampler_param,
         only_sample=False,
         electron_info=electron_info,
-        max_iter=5000,
+        max_iter=3000,
         interval=200,
         MAX_AD_DIM=-1,
         sr=False,
@@ -222,7 +222,7 @@ if __name__ == "__main__":
         # check_point="./tmp/vmc-111-pre-train-checkpoint.pth",
         method_grad="AD",
         method_jacobian="vector",
-        prefix="./tmp/H8-1.60-rnn-phase-64-64-" + str(seed),
+        prefix="./tmp/vmc-new-" + str(seed),
     )
     # opt_vmc.pre_train()
     # breakpoint()

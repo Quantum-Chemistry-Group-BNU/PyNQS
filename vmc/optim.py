@@ -143,8 +143,6 @@ class VMCOptimizer:
             self.nprt = int(self.max_iter / interval)
         else:
             self.nprt = 1
-        self.model_dict_lst: List[nn.Module] = []
-        self.opt_dict_lst: List[dict] = []
         if self.rank == 0:
             logger.info(f"Save model interval: {self.nprt}", master=True)
         self.prefix = prefix
@@ -298,8 +296,6 @@ class VMCOptimizer:
                 if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
                     checkpoint_file = f"{self.prefix}-checkpoint.pth"
                     logger.info(f"Save model/opt state: -> {checkpoint_file}", master=True)
-                    self.model_dict_lst.append(deepcopy(self.model_raw.state_dict()))
-                    self.opt_dict_lst.append(deepcopy(self.opt.state_dict()))
                     lr = self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
                     torch.save(
                         {
@@ -404,8 +400,6 @@ class VMCOptimizer:
                     "sampler_param": self.sampler_param,
                     "h1e": self.h1e,
                     "h2e": self.h2e,
-                    "model_dict": self.model_dict_lst,
-                    "opt_dict": self.opt_dict_lst,
                 },
                 model_file,
             )
