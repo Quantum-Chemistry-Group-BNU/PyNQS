@@ -123,8 +123,8 @@ def read_integral(
             import warnings
             from scipy import special
 
-            n1 = special.comb(noa + sorb // 2, noa, exact=True)
-            n2 = special.comb(nob + sorb // 2, nob, exact=True)
+            n1 = special.comb(sorb // 2, noa, exact=True)
+            n2 = special.comb(sorb // 2, nob, exact=True)
             fci_size = n1 * n2
             warnings.warn(
                 f"The CI-space({onstate.size(0):.3E}) is part of the FCI-space({fci_size:.3E})"
