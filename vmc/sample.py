@@ -584,7 +584,8 @@ class Sampler:
         if epoch <= self.start_iter:
             self.n_sample = self.start_n_sample
             self.max_n_sample = self.n_sample
-        else:
+            self.min_n_sample = self.n_sample
+        elif epoch == self.start_iter + 1:
             self.n_sample = self.last_n_sample
             self.max_n_sample = self.last_max_n_sample
-        self.min_n_sample = self.n_sample
+            self.min_n_sample = self.n_sample
