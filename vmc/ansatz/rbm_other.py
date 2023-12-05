@@ -3,10 +3,12 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 import numpy as np
 
-from typing import Union, Any, Tuple
+from typing import Union, Any, Tuple, Union, Callable, List
 
 from utils.public_function import multinomial_tensor, torch_lexsort
 from libs.C_extension import constrain_make_charts
+
+from vmc.ansatz.utils import OrbitalBlock
 class IsingRBM(nn.Module):
     __constants__ = ["num_visible"]
 
@@ -86,6 +88,17 @@ class ARRBM(nn.Module):
         use_share_para: bool = False,
         normal: bool = True,
         cut_0:bool = True,
+        # 添加相位所用
+        compute_phase = True,
+        common_linear: bool = False,
+        combine_amp_phase: bool = True,
+        phase_hidden_size: List[int] = [32, 32],
+        phase_use_embedding: bool = False,
+        phase_hidden_activation: Union[nn.Module, Callable] = nn.ReLU,
+        phase_bias: bool = True,
+        phase_batch_norm: bool = False,
+        phase_norm_momentum=0.1,
+        n_out_phase: int = 1,
     ) -> None:
         super(ARRBM, self).__init__()
 
@@ -140,6 +153,36 @@ class ARRBM(nn.Module):
         self.normal = normal
         self.factory_kwargs = {"device": self.device, "dtype": self.param_dtype}
         self.use_unique = True
+
+        # 用于增加相位
+        self.compute_phase = compute_phase
+        n_in = self.num_visible
+        if phase_use_embedding:
+            raise NotImplementedError(f"Phases layer embedding will be implemented in future")
+        self.n_out_phase = n_out_phase
+        self.phase_hidden_size = phase_hidden_size
+        self.phase_hidden_activation = phase_hidden_activation
+        self.phase_use_embedding = phase_use_embedding
+        self.phase_bias = phase_bias
+        self.phase_batch_norm = phase_batch_norm
+        self.phase_norm_momentum = phase_norm_momentum
+        self.phase_layers: List[OrbitalBlock] = []
+        if self.compute_phase:
+            phase_i = OrbitalBlock(
+                num_in=n_in,
+                n_hid=self.phase_hidden_size,
+                num_out=self.n_out_phase,
+                hidden_activation=self.phase_hidden_activation,
+                use_embedding=self.phase_use_embedding,
+                bias=self.phase_bias,
+                batch_norm=self.phase_batch_norm,
+                batch_norm_momentum=self.phase_norm_momentum,
+                device=self.device,
+                out_activation=None,
+            )
+            self.phase_layers.append(phase_i.to(self.device))
+            self.phase_layers = nn.ModuleList(self.phase_layers)
+
     def trans01(self, input):
         if input.numel() > 0:
             if torch.min(input) == -1:
@@ -281,6 +324,15 @@ class ARRBM(nn.Module):
         for i in range(self.vis_dim):
             psi_1= self.cond_psi(vis_input,i)
             vis_output = vis_output * psi_1
+        
+        if self.compute_phase:
+            phase_input = vis_input.masked_fill(vis_input == 0, -1).double().squeeze(1)  # (nbatch, 2)
+            phase_i = self.phase_layers[0](phase_input)
+            if self.n_out_phase == 1:
+                phase = phase_i.view(-1)
+        if self.compute_phase:
+            # breakpoint()
+            vis_output = torch.complex(torch.zeros_like(phase), phase).exp() * vis_output
         return vis_output
 
     def joint_next_sample(self, tensor: Tensor) -> Tensor: # 用以查看产生下一个样本的可能态
@@ -308,7 +360,10 @@ class ARRBM(nn.Module):
         sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
         sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
         wf_value = torch.ones(1, **self.factory_kwargs)
-
+        if self.compute_phase:
+            phase = torch.zeros(1, **self.factory_kwargs)
+        else:
+            phase: Tensor = None
         if self.spin: 
             vis_dim = self.num_visible // 2
         else:
@@ -349,5 +404,10 @@ class ARRBM(nn.Module):
             sample_unique = self.joint_next_sample(sample_unique)[idx_count]
 
             # update wavefunction value that is similar to updating sample-unique
-            wf_value = torch.mul(wf_value.unsqueeze(1).repeat(1, self.batch_add), y0).T.flatten()[idx_count]
-        return sample_unique.long(), sample_counts, wf_value
+            amp = torch.mul(wf_value.unsqueeze(1).repeat(1, self.batch_add), y0).T.flatten()[idx_count]
+
+            if self.compute_phase:
+                wf = torch.complex(torch.zeros_like(phase), phase).exp() * amp
+            else:
+                wf = amp
+        return sample_unique.long(), sample_counts, wf
