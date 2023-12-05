@@ -16,7 +16,10 @@ if sys_name == "myarch":
     os.environ["CXX"] = "g++-11"
     os.environ["CUDA_HOME"] = '/home/zbwu/soft/anaconda3'
     os.environ["MAX_JOBS"] = '4' # ninja 
-
+elif sys_name == "sugon": # DCU sugon
+    os.environ["CC"] = "gcc"
+    os.environ["CXX"] = "g++"
+    os.environ["MAX_JOBS"] = '4'
 # notice ninja is necessary for CUDA compile
 
 from setuptools import setup

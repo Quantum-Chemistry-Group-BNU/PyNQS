@@ -13,7 +13,6 @@ from line_profiler import LineProfiler
 from functools import partial
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
-from torch.optim.lr_scheduler import LRScheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
 
@@ -37,6 +36,12 @@ from utils import ElectronInfo, Dtype, state_to_string
 from libs.C_extension import onv_to_tensor
 
 print = partial(print, flush=True)
+
+TORCH_VERSION: str = torch.__version__
+if TORCH_VERSION >= "2.0.0":
+    from torch.optim.lr_scheduler import LRScheduler
+else:
+    from torch.optim.lr_scheduler import _LRScheduler as LRScheduler
 
 
 class VMCOptimizer:
@@ -116,7 +121,7 @@ class VMCOptimizer:
 
         # record optim
         self.n_para = len(list(self.model.parameters()))
-        self.grad_e_lst = [[], []] # grad_L2, grad_max
+        self.grad_e_lst = [[], []]  # grad_L2, grad_max
         self.e_lst: List[float] = []
         self.stats_lst: List[dict] = []
         self.time_sample: List[float] = []
@@ -227,8 +232,10 @@ class VMCOptimizer:
 
             e_total = eloc_mean.item().real + self.ecore
             if self.rank == 0:
-                logger.info(f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j",
-                            master=True)
+                logger.info(
+                    f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j",
+                    master=True,
+                )
                 self.e_lst.append(e_total)
             # self.stats_lst.append(stats)
 
@@ -370,7 +377,7 @@ class VMCOptimizer:
             logger.info(f"pre-train:\n{t}", master=True)
         t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
 
-        # Add noise 
+        # Add noise
         self.noise_tune(self.noise_lambda)
         del t
 
