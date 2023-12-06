@@ -9,17 +9,39 @@ import os
 import platform
 import os.path as osp
 
-sys_name = platform.node()
+sys_name = "myarch"
 print(f"sys_name: {sys_name}")
+use_magma: bool = True # use "magma" cuda math-library
+
 if sys_name == "myarch":
     os.environ["CC"] = "gcc-11"
     os.environ["CXX"] = "g++-11"
     os.environ["CUDA_HOME"] = '/home/zbwu/soft/anaconda3'
-    os.environ["MAX_JOBS"] = '4' # ninja 
-elif sys_name == "sugon": # DCU sugon
+    os.environ["MAX_JOBS"] = '4' # ninja
+    use_mamga = True
+    torch_DIR = "home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch"
+    magma_DIR = "/home/zbwu/soft/magma-2.6.1"
+    CUDA_LIB = "/home/zbwu/soft/anaconda3/lib"
+elif sys_name == "dell2":  # Dell-A100-40GiB-PCIE
     os.environ["CC"] = "gcc"
     os.environ["CXX"] = "g++"
     os.environ["MAX_JOBS"] = '4'
+    use_magam = True
+    torch_DIR ="/home/dell/anaconda3/envs/pytorch2/lib/python3.9/site-packages/torch"
+    magma_DIR = "/home/dell/users/lzd/magma/magma-2.6.1"
+    CUDA_LIB = "/home/dell/anaconda3/pytorch2/lib"
+elif sys_name == "sugon": #  DCU sugon
+    os.environ["CC"] = "gcc"
+    os.environ["CXX"] = "g++"
+    os.environ["MAX_JOBS"] = '4'
+    use_magam = False
+    env = "/work/home/ac9yhmo1d1/software/miniconda3/envs/torch1.13_py3.10_dtk23.10/lib/"
+    torch_DIR = env + "python3.10/site-packages/torch"
+    magma_DIR = ""
+    CUDA_LIB = ""
+else:
+    raise NotImplementedError
+
 # notice ninja is necessary for CUDA compile
 
 from setuptools import setup
@@ -37,7 +59,7 @@ setup(
     description=s,
     long_description=s,
     ext_modules=[
-        Compile_mode
+        COMPILE_MODE
     ],
     cmdclass={
         'build_ext': BuildExtension.with_options(no_python_abi_suffix=True)
@@ -52,8 +74,8 @@ do
         case "${device}" in 
             CPU) 
                 echo -e "\033[36mComplie CPU code\033[0m"
-                sed -i '17a from torch.utils.cpp_extension import CppExtension' setup.py
-                sed -i '23a\
+                sed -i '/from torch.utils/a from torch.utils.cpp_extension import CppExtension' setup.py
+                sed -i '/C_extension/a \
 include_dirs = [osp.join(ROOT_DIR)]\
 sources = [i for i in glob.glob("*/*.cpp") if "cuda" not in i and "magma" not in i ]\
 print(sources)\
@@ -64,23 +86,20 @@ include_dirs=include_dirs,\
 extra_compile_args={"cxx": ["-O3", "-std=c++17", "-UGPU"]}\
 )\
 ' setup.py
-                sed -i "s/Compile_mode/CPU_VERSION/" setup.py
+                sed -i "s/COMPILE_MODE/CPU_VERSION/" setup.py
                 ;;
             GPU)
                 echo -e "\033[36mComplie CPU and GPU code\033[0m"
-                sed -i '17a from torch.utils.cpp_extension import CUDAExtension' setup.py
-                sed -i '23a\
+                sed -i '/from torch.utils/a from torch.utils.cpp_extension import CUDAExtension' setup.py
+                sed -i '/C_extension/a \
 sources = glob.glob("*/*.cpp") + glob.glob("*/*.cu")\
-torch_DIR ="home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch"\
 torch_LIB = torch_DIR + "/lib"\
-use_magma: bool = True # use "magma" cuda math-library\
 if use_magma:\
-    magma_DIR = "/home/zbwu/soft/magma-2.6.1"\
     magma_INCLUDE = magma_DIR +"/include"\
     magma_LIB = magma_DIR + "/lib"\
     include_dirs = [osp.join(ROOT_DIR), magma_INCLUDE]\
     cxx_param = ["-O3", "-std=c++17", "-DGPU=1", "-lcudadevrt", "-DMAGMA=1","-DMAGMA_ILP64","-lmagma"]\
-    library_dirs=["/home/zbwu/soft/anaconda3/lib", magma_LIB]\
+    library_dirs=[CUDA_LIB, magma_LIB]\
     extra_link_args= {\
                       "-Wl,-rpath,"+magma_LIB,\
                       "-L"+magma_LIB,\
@@ -91,7 +110,7 @@ else:\
     sources = [i for i in sources if "magma" not in i ]\
     include_dirs =[osp.join(ROOT_DIR)]\
     cxx_param = ["-O3", "-std=c++17", "-DGPU=1", "-lcudadevrt"]\
-    library_dirs = ["/home/zbwu/soft/anaconda3/lib"]\
+    library_dirs = [CUDA_LIB]\
     extra_link_args = {"-Wl,-rpath,"+torch_LIB}\
 print(sources)\
 CUDA_VERSION = CUDAExtension(\
@@ -106,7 +125,7 @@ CUDA_VERSION = CUDAExtension(\
     extra_link_args= extra_link_args\
 )\
 ' setup.py
-            sed -i "s/Compile_mode/CUDA_VERSION/" setup.py
+            sed -i "s/COMPILE_MODE/CUDA_VERSION/" setup.py
                     ;;
             *) echo -e "\033[31mdevice parameter ${device} error, using 'CPU' or 'GPU'\033[0m" 
                exit 1
