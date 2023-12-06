@@ -18,7 +18,7 @@ if sys_name == "myarch":
     os.environ["CXX"] = "g++-11"
     os.environ["CUDA_HOME"] = '/home/zbwu/soft/anaconda3'
     os.environ["MAX_JOBS"] = '4' # ninja
-    use_mamga = True
+    use_magma = True
     torch_DIR = "home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch"
     magma_DIR = "/home/zbwu/soft/magma-2.6.1"
     CUDA_LIB = "/home/zbwu/soft/anaconda3/lib"
@@ -26,7 +26,7 @@ elif sys_name == "dell2":  # Dell-A100-40GiB-PCIE
     os.environ["CC"] = "gcc"
     os.environ["CXX"] = "g++"
     os.environ["MAX_JOBS"] = '4'
-    use_magam = True
+    use_magma = True
     torch_DIR ="/home/dell/anaconda3/envs/pytorch2/lib/python3.9/site-packages/torch"
     magma_DIR = "/home/dell/users/lzd/magma/magma-2.6.1"
     CUDA_LIB = "/home/dell/anaconda3/pytorch2/lib"
@@ -34,10 +34,9 @@ elif sys_name == "sugon": #  DCU sugon
     os.environ["CC"] = "gcc"
     os.environ["CXX"] = "g++"
     os.environ["MAX_JOBS"] = '4'
-    use_magam = False
+    use_magma = False
     env = "/work/home/ac9yhmo1d1/software/miniconda3/envs/torch1.13_py3.10_dtk23.10/lib/"
     torch_DIR = env + "python3.10/site-packages/torch"
-    magma_DIR = ""
     CUDA_LIB = ""
 else:
     raise NotImplementedError
