@@ -148,7 +148,7 @@ class DecoderWaveFunction(nn.Module):
         s = f"amplitude-activations: {self.amp_activation}\n"
         s += f"phase-activations: {self.phase_activation}\n"
         phase_num = 0
-        net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
+        net_param_num = lambda net: sum(p.numel() for p in net.parameters())
         for i in range(len(self.phase_layers)):
             phase_num += net_param_num(self.phase_layers[i])
         amp_param = net_param_num(self.amp_layers)

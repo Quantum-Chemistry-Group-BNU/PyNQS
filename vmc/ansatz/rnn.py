@@ -107,7 +107,7 @@ class RNNWavefunction(nn.Module):
         s = f"RNN type: {self.rnn_type}, use unique: {self.use_unique}\n"
         s += f"amplitude and phase common Linear: {self.common_linear}, "
         s += f"combined amplitude and phase layers: {self.combine_amp_phase}\n"
-        net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
+        net_param_num = lambda net: sum(p.numel() for p in net.parameters())
         gru_num = net_param_num(self.GRU)
         amp_num = net_param_num(self.linear_amp)
         s += f"params: GRU: {gru_num}, amp: {amp_num}, "
