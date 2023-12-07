@@ -345,12 +345,6 @@ def _only_sample_space(
         # print(f"{(T2-T1)/1.0e6:.5f} ms, {(T3-T2)/1.0e6:.5f} ms")
         # print(torch.allclose(eloc, eloc1))
 
-        # T4 = time.time_ns()
-        # psi_x = psi_x1[..., 0].view(-1)
-        # eloc = torch.einsum("ij, ij, i ->i", comb_hij.to(dtype), psi_x1, 1 / psi_x)
-        # T5 = time.time_ns()
-        # print(f"{(T5 - T4)/1.0e06:.5f} ms")
-        # print(torch.allclose(eloc, eloc1))
         # breakpoint()
     else:
         sample_value = WF_LUT.wf_value
