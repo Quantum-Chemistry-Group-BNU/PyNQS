@@ -82,7 +82,7 @@ if __name__ == "__main__":
     #         },
     #         "H8-2.00.pth",
     #     )
-    e = torch.load("./molecule/H6-1.60.pth", map_location="cpu")
+    e = torch.load("./molecule/H10-2.00.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -156,7 +156,10 @@ if __name__ == "__main__":
         n_out_phase=4,
     )
 
-    ansatz = rnn
+    ansatz = transformer
+    net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
+    print(net_param_num(ansatz))
+    breakpoint()
     print(sum(map(torch.numel, ansatz.parameters())))
     # breakpoint()
     # summary(ansatz, input_size=(int(1.0e6), 20))
@@ -172,17 +175,17 @@ if __name__ == "__main__":
     # torch.save({"model": model.state_dict(), "h1e": h1e, "h2e": h2e}, "test.pth")
     sampler_param = {
         "n_sample": int(1.0e10),
-        "debug_exact": True,
+        "debug_exact": False,
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
-        "max_memory": 4,
+        "max_memory": 0.4,
         "alpha": 0.15,
         "method_sample": "AR",
         "use_LUT": True,
         "use_unique": True,
         "reduce_psi": False,
-        "use_sample_space": False,
+        "use_sample_space": True,
         "eps": 1.0e-10,
         "only_AD": False,
     }

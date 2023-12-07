@@ -130,34 +130,101 @@ def get_Num_SinglesDoubles(sorb: int, noA: int, noB: int) -> int:
 
 def get_nbatch(
     sorb: int,
-    n_sample_unique: int,
-    n_comb_sd: int,
-    Max_memory=32,
-    alpha=0.25,
-    device: str = None,
+    n_sample: int,
+    n_sd: int,
+    Max_memory: float = 32,
+    alpha: float = 0.25,
+    device: torch.device = None,
     use_sample: bool = False,
+    dtype=torch.double,
 ) -> int:
     """
     Calculate the nbatch of total energy when using local energy
     """
+    if use_sample:
+        func = _get_nbatch_sample_space
+    else:
+        func = _get_nbatch_simple
 
+    return func(sorb, n_sample, n_sd, Max_memory, alpha, device, dtype)
+
+
+def _get_nbatch_simple(
+    sorb: int,
+    n_sample: int,
+    n_sd: int,
+    Max_memory: float = 32,
+    alpha: float = 0.25,
+    device: torch.device = None,
+    dtype=torch.double,
+) -> int:
     def comb_memory() -> float:
-        x = n_comb_sd * sorb * 8 / (1 << 30) * 2  # onv_to_tensor, double, GiB
-        if not use_sample:
-            x += n_comb_sd * ((sorb - 1) // 64 + 1) * 8 / (1 << 30)  # SD, uint8, GiB
+        x = n_sd * sorb * 8 / (1 << 30) * 2  # onv_to_tensor, double, GiB
         return x
 
-    m = comb_memory() * n_sample_unique
+    m = comb_memory() * n_sample
 
-    if device != torch.device("cpu"):
+    if device.type != "cpu":
         torch.cuda.empty_cache()
         mem_available = torch.cuda.mem_get_info(device)[0] / (1 << 30)  # GiB
         Max_memory = min(mem_available, Max_memory)
     if m / Max_memory >= alpha:
         batch = int(Max_memory / (comb_memory()) * alpha)
     else:
-        batch = n_sample_unique
-    # print(f"{m / Max_memory * 100:.3f} %, alpha = {alpha * 100:.3f} , batch: {batch}")
+        batch = n_sample
+    return batch
+
+
+def _get_nbatch_sample_space(
+    sorb: int,
+    n_sample: int,
+    n_sd: int,
+    Max_memory: float = 32,
+    alpha: float = 0.25,
+    device: torch.device = None,
+    dtype=torch.double,
+) -> int:
+    """
+    Calculate the nbatch of total energy when using local energy in sample-space
+    """
+    bra_len: int = (sorb - 1) // 64 + 1
+    is_complex: bool = False
+    sd_le_sample: bool = n_sd <= n_sample * 0.25
+
+    if dtype == torch.double:
+        is_complex = False
+    elif dtype == torch.complex128:
+        is_complex = True
+    else:
+        raise NotImplementedError
+
+    # Hij (n_batch, n_sd) double
+    # psi(x') (nbatch, n_sd) double/complex128
+    # psi(x): (nbatch) double/complex128
+    # comb_x: (nbatch * n_sd , bra_len * 8)  # uint8
+    # binary search: idx * 4, mask, int64; value (double/complex128)
+    # eloc value * 2 (double/complex128)
+    if sd_le_sample:
+        if is_complex:
+            m = ((3 + bra_len) * n_sd + 12) * 8 / (1 << 30)
+        else:
+            m = ((2 + bra_len) * n_sd + 8) * 8 / (1 << 30)
+    else:
+        # ignore comb_x
+        # Hij: (nbatch, n_sample)
+        # psi(x'): (n_sample)
+        # psi(x): (nbatch)
+        if is_complex:
+            m = (n_sample * 2 + 10) * 8 / (1 << 30)
+        else:
+            m = (n_sample * 1 + 6) * 8 / (1 << 30)
+
+    if device.type != "cpu":
+        torch.cuda.empty_cache()
+        mem_available = torch.cuda.mem_get_info(device)[0] / (1 << 30)  # GiB
+        Max_memory = min(mem_available, Max_memory)
+    batch = min(n_sample, int(Max_memory / m))
+
     return batch
 
 
