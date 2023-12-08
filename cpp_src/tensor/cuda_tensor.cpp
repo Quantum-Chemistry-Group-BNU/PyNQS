@@ -123,7 +123,7 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
                                      const int noB, bool flag_bit) {
   // bra_tensor: (nbatch, bra_len * 8)
   const int bra_len = (sorb - 1) / 64 + 1;
-  const int ncomb = squant::get_Num_SinglesDoubles_cuda(sorb, noA, noB) + 1;
+  const int ncomb = squant::get_Num_SinglesDoubles(sorb, noA, noB) + 1;
   const int nbatch = bra_tensor.size(0);
   Tensor comb, comb_bit;
 

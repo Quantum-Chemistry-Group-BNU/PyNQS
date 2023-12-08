@@ -8,7 +8,8 @@
 #define MAX_NV 80  // max virtual orbital
 #define MAX_NVA 40
 #define MAX_NVB 40
-#define THREAD 32
+#define THREAD 16
+#define MAX_THREAD 256
 #define VERBOSE false
 #define DEBUG false
 // #define GPU 1

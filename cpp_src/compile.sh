@@ -34,12 +34,18 @@ elif sys_name == "sugon": #  DCU sugon
     os.environ["CC"] = "gcc"
     os.environ["CXX"] = "g++"
     os.environ["MAX_JOBS"] = '4'
+    os.environ["CUDA_HOME"] = "/public/software/compiler/dtk-23.10"
     use_magma = False
     env = "/work/home/ac9yhmo1d1/software/miniconda3/envs/torch1.13_py3.10_dtk23.10/lib/"
     torch_DIR = env + "python3.10/site-packages/torch"
-    CUDA_LIB = ""
+    CUDA_LIB = "/public/software/compiler/dtk-23.10/lib"
 else:
     raise NotImplementedError
+
+if sys_name == "sugon":
+    nvcc_param = ["-O3","-MMD", "-DHIP=1","-Wno-deprecated-register" ]
+else:
+    nvcc_param = ["-O3", "-MMD", "-lcudart", "-dc", "--expt-relaxed-constexpr"]
 
 # notice ninja is necessary for CUDA compile
 
@@ -116,11 +122,12 @@ CUDA_VERSION = CUDAExtension(\
     name=s,\
     sources=sources,\
     library_dirs=library_dirs,\
-    dlink=True,\
+    dlink = False if sys_name == "sugon" else True,\
     # dlink_libraries=["cuda_link"],\
     include_dirs=include_dirs,\
-    extra_compile_args={ "cxx": cxx_param,\
-                    "nvcc": ["-O3", "-MMD", "-lcudart", "-dc", "--expt-relaxed-constexpr"]},\
+    extra_compile_args={"cxx": cxx_param,\
+                        "nvcc": nvcc_param,\
+                        },\
     extra_link_args= extra_link_args\
 )\
 ' setup.py

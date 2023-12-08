@@ -3,7 +3,7 @@
 #pragma once
 
 #include "../cuda/kernel.h"
-#include "../cuda/excitation_cuda.h"
+#include "../cpu/excitation.h"
 #include "utils_tensor.h"
 
 #ifdef MAGMA
