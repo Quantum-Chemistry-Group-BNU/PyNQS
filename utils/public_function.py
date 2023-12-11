@@ -10,9 +10,10 @@ from torch.distributions import Binomial
 from typing import List, Type, Tuple, Union, Literal
 from typing_extensions import Self  # 3.11 support Self
 from dataclasses import dataclass
+from loguru import logger
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv, wavefunction_lut
-
+from .distributed import get_rank
 
 def check_para(bra: Tensor):
     r"""
@@ -629,6 +630,17 @@ def torch_sort_onv(bra: Tensor, little_endian: bool = True) -> Tensor:
     return idx
 
 
+def split_batch_idx(dim: int, nbatch: int) -> List[int]:
+    """
+    the index of the splitting batch
+    """
+    length = int(np.ceil(dim / nbatch))
+    idx_lst = torch.empty(length, dtype=torch.int64).fill_(nbatch)
+    idx_lst[-1] = dim - (idx_lst.size(0) - 1) * nbatch
+    idx_lst = idx_lst.cumsum(dim=0).tolist()
+
+    return idx_lst
+
 class WavefunctionLUT:
     r"""
     wavefunction Lookup-Table in order to reduce psi(x) calculation in local energy
@@ -717,13 +729,16 @@ class MemoryTrack:
         self.after_memory: float = 0.0
         self.before_max_memory: float = 0.0
         self.after_max_memory: float = 0.0
+        self.rank = get_rank()
 
     def __enter__(self) -> Self:
         self.clean_memory_cache(self.device)
         self.before_max_memory = self.get_max_memory(self.device)
         self.before_memory = self.get_current_memory(self.device)
-        s = f"{self.device} memory allocated: {self.before_memory:.5f} GiB\n"
-        sys.stdout.write(s)
+        s = f"{self.device} memory allocated: {self.before_memory:.5f} GiB"
+        # sys.stdout.write(s)
+        if self.rank == 0:
+            logger.info(s, master=True)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -734,8 +749,10 @@ class MemoryTrack:
         self.clean_memory_cache(self.device)
         self.after_memory = self.get_current_memory(self.device)
         s = f"{self.device} memory allocate: {self.after_memory:.5f} GiB, "
-        s += f"using memory: {(self.after_max_memory-self.before_memory):.5f} GiB\n"
-        sys.stdout.write(s)
+        s += f"using memory: {(self.after_max_memory-self.before_memory):.5f} GiB"
+        if self.rank == 0:
+            logger.info(s, master=True)
+        # sys.stdout.write(s)
 
     def manually_clean_cache(self, objs: Tuple[Tensor] = None) -> None:
         if objs is not None:
