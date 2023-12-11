@@ -82,7 +82,7 @@ if __name__ == "__main__":
     #         },
     #         "H8-2.00.pth",
     #     )
-    e = torch.load("./molecule/H10-2.00.pth", map_location="cpu")
+    e = torch.load("./molecule/H8-2.00.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -159,7 +159,6 @@ if __name__ == "__main__":
     ansatz = transformer
     net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
     print(net_param_num(ansatz))
-    breakpoint()
     print(sum(map(torch.numel, ansatz.parameters())))
     # breakpoint()
     # summary(ansatz, input_size=(int(1.0e6), 20))
@@ -188,6 +187,9 @@ if __name__ == "__main__":
         "use_sample_space": True,
         "eps": 1.0e-10,
         "only_AD": False,
+        "use_same_tree": True,
+        "min_batch": 10000,
+        "min_tree_height": 8,
     }
     opt_type = optim.Adam
     opt_params = {"lr": 1.0, "betas": (0.9, 0.99), "weight_decay": 0.0}
@@ -215,8 +217,8 @@ if __name__ == "__main__":
         sampler_param=sampler_param,
         only_sample=False,
         electron_info=electron_info,
-        max_iter=3000,
-        interval=200,
+        max_iter=50,
+        interval=20,
         MAX_AD_DIM=-1,
         sr=False,
         pre_CI=ucisd_wf,
