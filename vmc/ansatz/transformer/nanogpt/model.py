@@ -46,8 +46,8 @@ class CausalSelfAttention(nn.Module):
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
+        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                    .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x, kv_cache=None, kv_idxs=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
@@ -55,14 +55,15 @@ class CausalSelfAttention(nn.Module):
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
 
-
+        use_kv_cache: bool = True
+        if  kv_idxs is None and kv_cache is None:
+            use_kv_cache = False
         if kv_cache is not None:
             if kv_idxs is not None:
                 k_past = torch.index_select(kv_cache[0], 0, kv_idxs)
                 v_past = torch.index_select(kv_cache[1], 0, kv_idxs)
             else:
                 k_past, v_past = kv_cache
-
             k = torch.cat((k_past, k), dim=1)
             v = torch.cat((v_past, v), dim=1)
             kv_cache = (k, v)
@@ -75,7 +76,7 @@ class CausalSelfAttention(nn.Module):
             v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
+        if self.flash and not use_kv_cache:
             # efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
         else:

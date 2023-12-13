@@ -154,6 +154,7 @@ if __name__ == "__main__":
         n_heads=4,
         phase_hidden_size=[512, 521],
         n_out_phase=4,
+        use_kv_cache=True,
     )
 
     ansatz = transformer
@@ -187,9 +188,9 @@ if __name__ == "__main__":
         "use_sample_space": True,
         "eps": 1.0e-10,
         "only_AD": False,
-        "use_same_tree": True,
-        "min_batch": 10000,
-        "min_tree_height": 8,
+        "use_same_tree": True, # different rank-sample
+        "min_batch": 1000,
+        "min_tree_height": 8, # different rank-sample
     }
     opt_type = optim.Adam
     opt_params = {"lr": 1.0, "betas": (0.9, 0.99), "weight_decay": 0.0}

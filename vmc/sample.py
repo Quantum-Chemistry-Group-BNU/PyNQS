@@ -28,6 +28,7 @@ from libs.C_extension import (
 )
 from utils import state_to_string, ElectronInfo, check_para, get_nbatch, diff_rank_seed
 from utils.distributed import (
+    all_gather_tensor,
     gather_tensor,
     scatter_tensor,
     get_rank,
@@ -132,7 +133,7 @@ class Sampler:
         self.max_memory = max_memory
         self.alpha = alpha
 
-        # unique sample, apply to AR sample
+        # unique sample, apply to AR sample, about all-rank, not single-rank
         self.max_unique_sample = (
             min(max_unique_sample, self.fci_size)
             if max_unique_sample is not None
@@ -175,9 +176,10 @@ class Sampler:
         flag2 = hasattr(self.nqs.module, "min_tree_height")
         self.sampling_batch_rank: bool = flag1 and flag2
         self.sample_min_sample_batch = min_batch
-        # min_tree_height = 8
         if min_tree_height is not None:
-            assert self.use_same_tree, f"use-same-tree{self.use_same_tree} muse be is True"
+            assert (
+                self.use_same_tree
+            ), f"use-same-tree({self.use_same_tree}) muse be is True, if use min-tree-height"
         self.sample_min_tree_height = min_tree_height
 
     def read_electron_info(self, ele_info: ElectronInfo):
@@ -378,8 +380,20 @@ class Sampler:
                 sample_unique, sample_counts, wf_value = self.nqs.module.ar_sampling(
                     self.n_sample, self.sample_min_sample_batch, self.sample_min_tree_height
                 )
+            dim = sample_unique.size(0)
+            rank_counts = torch.tensor([dim], device=self.device, dtype=torch.int64)
+            all_counts = all_gather_tensor(rank_counts, self.device, self.world_size)
+            if self.sample_min_tree_height is not None:
+                # the unique-sample of different rank is different
+                # so choose the sum
+                counts = torch.cat(all_counts).sum().item()
+            else:
+                # The unique-sample parts of different rank are the same
+                # So choose the average, and this is unreasonable
+                # duplicates should be removed
+                counts = torch.cat(all_counts).double().mean().item()
 
-            if sample_unique.size(0) >= self.max_unique_sample:
+            if int(counts) >= self.max_unique_sample:
                 # reach lower limit of samples or decreased samples times
                 self.n_sample = int(max(self.min_n_sample, self.n_sample // 10))
                 break
