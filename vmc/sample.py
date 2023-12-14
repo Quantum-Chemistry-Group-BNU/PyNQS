@@ -393,6 +393,7 @@ class Sampler:
                 # duplicates should be removed
                 counts = torch.cat(all_counts).double().mean().item()
 
+            synchronize()
             if int(counts) >= self.max_unique_sample:
                 # reach lower limit of samples or decreased samples times
                 self.n_sample = int(max(self.min_n_sample, self.n_sample // 10))

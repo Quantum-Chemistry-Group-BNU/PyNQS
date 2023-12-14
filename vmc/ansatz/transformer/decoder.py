@@ -396,6 +396,7 @@ class DecoderWaveFunction(nn.Module):
         sample_counts = sample_counts[begin:end]
         amp_k = amp_k[begin:end]
         amps_log = amps_log[begin:end]
+        kv_idxs =kv_idxs[begin: end]
 
         sample_unique, sample_counts, amp_k, amps_log, kv_idxs, _ = self._interval_sample(
             sample_unique=sample_unique,
@@ -421,7 +422,7 @@ class DecoderWaveFunction(nn.Module):
         else:
             wf = (amps_log * 0.5).exp()
 
-        while False:
+        if False:
             from utils.distributed import gather_tensor
 
             wf_all = gather_tensor(wf, self.device, self.world_size, master_rank=0)
