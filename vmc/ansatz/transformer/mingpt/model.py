@@ -450,6 +450,7 @@ def get_decoder_amp(
     n_layers: int = 6,
     n_heads: int = 8,
     dropout: float = 0.0,
+    bias: bool = True,
 ) -> tuple[GPT, CfgNode]:
     r"""Wrapper of decoder amplitude.
 

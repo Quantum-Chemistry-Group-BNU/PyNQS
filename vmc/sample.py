@@ -28,6 +28,7 @@ from libs.C_extension import (
 )
 from utils import state_to_string, ElectronInfo, check_para, get_nbatch, diff_rank_seed
 from utils.distributed import (
+    all_gather_tensor,
     gather_tensor,
     scatter_tensor,
     get_rank,
@@ -66,6 +67,7 @@ class Sampler:
         alpha: float = 0.25,
         dtype=torch.double,
         method_sample="MCMC",
+        use_same_tree: bool = False,
         max_n_sample: int = None,
         max_unique_sample: int = None,
         use_LUT: bool = False,
@@ -74,6 +76,8 @@ class Sampler:
         eps: float = 1e-12,
         only_AD: bool = False,
         use_sample_space: bool = False,
+        min_batch: int = 10000,
+        min_tree_height: int = None,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -83,11 +87,14 @@ class Sampler:
         self.world_size = get_world_size()
         # self.seed = 22022
         # setup_seed(self.seed)
-        if not debug_exact:
+        # use_same_tree = True
+        self.use_same_tree = use_same_tree
+        if not debug_exact and not use_same_tree:
             # if sampling, very rank have the different random seed
             self.seed = diff_rank_seed(seed, rank=self.rank)
         else:
             # exact optimization does not require sampling
+            # the different rank sampling using the the same QuadTree or BinaryTree
             self.seed = seed
         logger.info((self.seed, self.rank))
 
@@ -126,7 +133,7 @@ class Sampler:
         self.max_memory = max_memory
         self.alpha = alpha
 
-        # unique sample, apply to AR sample
+        # unique sample, apply to AR sample, about all-rank, not single-rank
         self.max_unique_sample = (
             min(max_unique_sample, self.fci_size)
             if max_unique_sample is not None
@@ -163,6 +170,17 @@ class Sampler:
         # only use x' in n_unique sample not SD, dose not support exact-opt
         # psi(x') can be looked from WaveFunction look-up table
         self.use_sample_space = use_sample_space if not debug_exact else False
+
+        # nbatch-rank AR-sampling, only implemented in Transformer-ansatz
+        flag1 = hasattr(self.nqs.module, "min_batch")
+        flag2 = hasattr(self.nqs.module, "min_tree_height")
+        self.sampling_batch_rank: bool = flag1 and flag2
+        self.sample_min_sample_batch = min_batch
+        if min_tree_height is not None:
+            assert (
+                self.use_same_tree
+            ), f"use-same-tree({self.use_same_tree}) muse be is True, if use min-tree-height"
+        self.sample_min_tree_height = min_tree_height
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -356,9 +374,27 @@ class Sampler:
         t0 = time.time_ns()
         while True:
             #  0/1
-            sample_unique, sample_counts, wf_value = self.nqs.module.ar_sampling(self.n_sample)
+            if not self.sampling_batch_rank:
+                sample_unique, sample_counts, wf_value = self.nqs.module.ar_sampling(self.n_sample)
+            else:
+                sample_unique, sample_counts, wf_value = self.nqs.module.ar_sampling(
+                    self.n_sample, self.sample_min_sample_batch, self.sample_min_tree_height
+                )
+            dim = sample_unique.size(0)
+            rank_counts = torch.tensor([dim], device=self.device, dtype=torch.int64)
+            all_counts = all_gather_tensor(rank_counts, self.device, self.world_size)
+            if self.sample_min_tree_height is not None:
+                # the unique-sample of different rank is different
+                # so choose the sum
+                counts = torch.cat(all_counts).sum().item()
+            else:
+                # The unique-sample parts of different rank are the same
+                # So choose the average, and this is unreasonable
+                # duplicates should be removed
+                counts = torch.cat(all_counts).double().mean().item()
 
-            if sample_unique.size(0) >= self.max_unique_sample:
+            synchronize()
+            if int(counts) >= self.max_unique_sample:
                 # reach lower limit of samples or decreased samples times
                 self.n_sample = int(max(self.min_n_sample, self.n_sample // 10))
                 break
@@ -514,6 +550,7 @@ class Sampler:
             self.alpha,
             device=self.device,
             use_sample=self.use_sample_space,
+            dtype=self.dtype,
         )
         if not self.only_AD:
             e_total, eloc, placeholders, stats_dict = total_energy(
@@ -564,6 +601,9 @@ class Sampler:
             + f"    Singles + Doubles: {self.n_SinglesDoubles}\n"
             + f"    Max unique sample: {self.max_unique_sample:3E}\n"
             + f"    Max sample: {self.max_n_sample:3E}\n"
+            + f"    use-same-tree: {self.use_same_tree}\n"
+            + f"    min-tree-height: {self.sample_min_tree_height}\n"
+            + f"    min-nbatch: {self.sample_min_sample_batch}\n"
             + f"    Random seed: {self.seed}\n"
             + f"    alpha: {self.alpha}\n"
             + f"    max_memory: {self.max_memory}\n"

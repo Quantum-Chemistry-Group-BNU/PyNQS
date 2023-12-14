@@ -1,14 +1,21 @@
 import torch
+import numpy as np
 
 from functools import partial
-from typing import List, Union, Callable, Tuple
+from typing import List, Union, Callable, Tuple, NewType
 from torch import nn, Tensor
 
-# import sys; sys.path.append("./")
+from loguru import logger
+
+# import sys;sys.path.append("./")
 
 from vmc.ansatz.transformer.nanogpt.model import GPT, GPTConfig, get_decoder_amp
+# from vmc.ansatz.transformer.mingpt.model import get_decoder_amp
 from vmc.ansatz.utils import symmetry_mask, OrbitalBlock, SoftmaxLogProbAmps, joint_next_samples
-from utils.public_function import multinomial_tensor
+from utils.public_function import multinomial_tensor, split_batch_idx, setup_seed
+from utils.distributed import get_rank, get_world_size, synchronize
+
+KVCaches = NewType("KVCaches", List[Tuple[Tensor, Tensor]])
 
 
 class DecoderWaveFunction(nn.Module):
@@ -36,6 +43,7 @@ class DecoderWaveFunction(nn.Module):
         amp_activation: Union[nn.Module, Callable] = SoftmaxLogProbAmps,
         phase_activation: Union[nn.Module, Callable] = None,
         n_out_phase: int = 1,
+        use_kv_cache: bool = True,
     ) -> None:
         super(DecoderWaveFunction, self).__init__()
 
@@ -106,6 +114,7 @@ class DecoderWaveFunction(nn.Module):
             bias=amp_bias,
         )
         self.amp_layers = self.amp_layers.to(self.device)
+        self.use_kv_cache = use_kv_cache
 
         # XXX: NOT-Fully Test
         if phase_use_embedding:
@@ -144,9 +153,15 @@ class DecoderWaveFunction(nn.Module):
         self.amp_activation = amp_activation()
         self.phase_activation = phase_activation
 
+        self.rank = get_rank()
+        self.world_size = get_world_size()
+        self.min_batch: int = -1
+        self.min_tree_height: int = 1
+
     def extra_repr(self) -> str:
         s = f"amplitude-activations: {self.amp_activation}\n"
         s += f"phase-activations: {self.phase_activation}\n"
+        s += f"use-kv-cache: {self.use_kv_cache}"
         phase_num = 0
         net_param_num = lambda net: sum(p.numel() for p in net.parameters())
         for i in range(len(self.phase_layers)):
@@ -175,6 +190,8 @@ class DecoderWaveFunction(nn.Module):
         x: Tensor,
         i_th: int,
         ret_phase: bool = True,
+        kv_caches: KVCaches = None,
+        kv_idxs: Tensor = None,
     ) -> Tuple[Tensor, Union[Tensor, None]]:
         nbatch = x.size(0)
         amp_input = x  # +1/-1
@@ -190,7 +207,9 @@ class DecoderWaveFunction(nn.Module):
             amp_input = torch.cat((pad_st, amp_input), -1)
 
         # TODO: kv_caches and infer batch
-        amp_i = self.amp_layers(amp_input.long())  # (nbatch, 4/2)
+        amp_i = self.amp_layers(
+            amp_input.long(), kv_caches=kv_caches, kv_idxs=kv_idxs
+        )  # (nbatch, 4/2)
 
         if ret_phase and self.compute_phase and i_th == self.sorb // 2 - 1:
             phase_i = self.phase_layers[0](phase_input)  # (nbatch, 4/2)
@@ -199,18 +218,106 @@ class DecoderWaveFunction(nn.Module):
 
         return amp_i, phase_i
 
-    @torch.no_grad()
-    def forward_sample(self, n_sample: int) -> Tuple[Tensor, Tensor, Tensor]:
-        sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
-        sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
-        amps_log = torch.zeros(1, **self.factory_kwargs)
+    def batch_get_amps(
+        self,
+        x0: int,
+        k: int,
+        min_batch: int = -1,
+        kv_caches: KVCaches = None,
+        kv_idxs: Tensor = None,
+    ) -> Tensor:
+        """
+        x0: unique sample: (n-unique, k): int64
+        k: the k-th Spin–orbit: int
+        min-batch: default -1, int
 
-        # breakpoint()
-        for k in range(0, self.sorb, 2):
+        Returns:
+            amp: (n-unique, k /2 + 1, 4)
+        """
+        if x0.size(0) < min_batch or min_batch < 0:
+            amp = self._get_conditional_output(
+                x0, i_th=k, ret_phase=False, kv_caches=kv_caches, kv_idxs=kv_idxs
+            )[0]
+        else:
+            dim = x0.size(0)
+            idx_lst = split_batch_idx(dim, min_batch)
+            amp = torch.empty(dim, int(k / 2 + 1), 4, dtype=torch.double, device=self.device)
+            begin = 0
+
+            # FIXME: (zbwu-23-12-14) Needs to be optimized
+            # creative next-cache, extremely inelegant
+            # kv-cache shape
+            if self.use_kv_cache:
+                seq_length, d_model = kv_caches[0][0].shape[1:]
+                kv_rand = lambda: torch.empty(
+                    dim, seq_length + 1, d_model, dtype=torch.double, device=self.device
+                )
+                kv_caches_next: KVCaches = [(kv_rand(), kv_rand()) for _ in range(len(kv_caches))]
+
+            for idx in idx_lst:
+                end = idx
+                if self.use_kv_cache:
+                    _kv_idx = kv_idxs[begin:end]
+                    _kv_caches = [(cache[0][_kv_idx], cache[1][_kv_idx]) for cache in kv_caches]
+                else:
+                    _kv_caches = None
+                amp[begin:end] = self._get_conditional_output(
+                    x0[begin:end],
+                    i_th=k,
+                    ret_phase=False,
+                    kv_caches=_kv_caches,
+                    # kv_idxs=_kv_idx,
+                )[0]
+                if self.use_kv_cache:
+                    for cache, cache_next in zip(_kv_caches, kv_caches_next):
+                        cache_next[0][begin:end] = cache[0]  # next-batch-k-cache
+                        cache_next[1][begin:end] = cache[1]  # next-batch-v-cache
+                begin = end
+
+            if self.use_kv_cache:
+                for i in range(len(kv_caches_next)):
+                    kv_caches[i] = kv_caches_next[i]
+        return amp
+
+    def _interval_sample(
+        self,
+        sample_unique: Tensor,
+        sample_counts: Tensor,
+        amps_log: Tensor,
+        begin: int,
+        end: int,
+        min_batch: int = -1,
+        interval: int = 2,
+        kv_caches: KVCaches = None,
+        kv_idxs: Tensor = None,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, int]:
+        """
+        Sample within a given interval (begin, end, 2]
+
+        sample_unique: unique sample
+        sample_counts: the number of unique sample
+        amps_log: amplitude-log
+        begin, end: cycle in (begin, end, 2]
+        min_batch: the min-batch of forward
+        interval: default: 2
+        kv_caches: KVCaches
+        kv_idxs: Tensor
+
+        Returns:
+            sample_unique:
+            sample_counts:
+            amp_k:
+            amps_log:
+            kv_idxs:
+            l:
+        """
+        l = begin
+        for k in range(begin, end, interval):
             x0 = sample_unique
-            # (n_unique, k/2 + 1, 4)
-            amp = self._get_conditional_output(x0, i_th=k, ret_phase=False)[0]
-            # print(f"amp: {amp}")
+            amp = self.batch_get_amps(
+                x0, k=k, min_batch=min_batch, kv_caches=kv_caches, kv_idxs=kv_idxs
+            )
+            # amp = self.batch_get_amps(x0, k=k, min_batch=min_batch)
             num_up = sample_unique[:, ::2].sum(dim=1)
             num_down = sample_unique[:, 1::2].sum(dim=1)
             amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
@@ -223,13 +330,152 @@ class DecoderWaveFunction(nn.Module):
             idx_count = counts_i > 0
             sample_counts = counts_i[idx_count]
             sample_unique = self.joint_next_samples(sample_unique)[idx_count]
+            if self.use_kv_cache:
+                kv_idxs = (
+                    torch.arange(x0.size(0), device=self.device)
+                    .unsqueeze_(1)
+                    .repeat(1, 4)
+                    .T.flatten()[idx_count]
+                )
+            else:
+                kv_idxs = None
 
             amps_log = torch.add(amps_log.unsqueeze(1).repeat(1, 4), amp_k_log).T.flatten()[
                 idx_count
             ]
+            l += interval
+        return sample_unique, sample_counts, amp_k, amps_log, kv_idxs, l
+
+    @torch.no_grad()
+    def forward_sample_rank(
+        self,
+        n_sample: int,
+        min_batch: int = -1,
+        min_tree_height: int = 8,
+        kv_caches: KVCaches = None,
+        kv_idxs: Tensor = None,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
+        sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
+        amps_log = torch.zeros(1, **self.factory_kwargs)
+
+        # min_batch = 10000
+        sample_counts *= self.world_size
+        assert abs(min_batch) >= self.world_size
+        self.min_batch = min_batch
+        self.min_tree_height = min(min_tree_height, self.sorb)
+
+        if self.use_kv_cache:
+            kv_caches = [
+                (torch.tensor([], device=self.device), torch.tensor([], device=self.device))
+                for _ in range(self.model_config.n_layer)
+            ]
+        else:
+            kv_caches = None
+        kv_idxs = None
+
+        # FIXME:(zbwu-23-12-14) Multi-rank kv-cache may be wrong, NOT-Fully Test
+        sample_unique, sample_counts, amp_k, amps_log, kv_idxs, k = self._interval_sample(
+            sample_unique=sample_unique,
+            sample_counts=sample_counts,
+            amps_log=amps_log,
+            begin=0,
+            end=self.min_tree_height + 1,
+            min_batch=self.min_batch,
+            kv_caches=kv_caches,
+            kv_idxs=kv_idxs,
+        )
+        synchronize()
+
+        # the different rank sampling using the the same QuadTree or BinaryTree
+        dim = sample_unique.size(0)
+        idx_rank_lst = [0] + split_batch_idx(dim, np.ceil(dim / self.world_size))
+        begin = idx_rank_lst[self.rank]
+        end = idx_rank_lst[self.rank + 1]
+        sample_unique = sample_unique[begin:end]
+        sample_counts = sample_counts[begin:end]
+        amp_k = amp_k[begin:end]
+        amps_log = amps_log[begin:end]
+        kv_idxs =kv_idxs[begin: end]
+
+        sample_unique, sample_counts, amp_k, amps_log, kv_idxs, _ = self._interval_sample(
+            sample_unique=sample_unique,
+            sample_counts=sample_counts,
+            amps_log=amps_log,
+            begin=k,
+            end=self.sorb,
+            min_batch=self.min_batch,
+            kv_caches=kv_caches,
+            kv_idxs=kv_idxs,
+        )
 
         if self.compute_phase:
             phases = self.phase_layers[0](sample_unique * 2 - 1)
+            if self.n_out_phase == 1:
+                phases = phases.view(-1)
+            else:
+                index = self.state_to_int(sample_unique[:, -2:]).view(-1, 1)
+                phases = phases.gather(1, index).view(-1)
+
+        if self.compute_phase:
+            wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
+        else:
+            wf = (amps_log * 0.5).exp()
+
+        if False:
+            from utils.distributed import gather_tensor
+
+            wf_all = gather_tensor(wf, self.device, self.world_size, master_rank=0)
+            counts_all = gather_tensor(sample_counts, self.device, self.world_size, master_rank=0)
+            unique_all = gather_tensor(sample_unique, self.device, self.world_size, master_rank=0)
+
+            if self.rank == 0:
+                print(torch.cat(wf_all).norm() ** 2, "ssssssss")
+                wf_all = torch.cat(wf_all)
+                counts_all = torch.cat(counts_all)
+                unique_all = torch.cat(unique_all)
+                print(counts_all.sum())
+                print(counts_all.size(0))
+                torch.save(
+                    {
+                        "wf": (wf_all).to("cpu"),
+                        "counts": (counts_all).to("cpu"),
+                        "sample": (unique_all).to("cpu"),
+                    },
+                    f"{self.world_size}.pth",
+                )
+            exit()
+        return sample_unique, sample_counts, wf
+
+    @torch.no_grad()
+    def forward_sample(self, n_sample: int, min_batch: int = -1) -> Tuple[Tensor, Tensor, Tensor]:
+        sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
+        sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
+        amps_log = torch.zeros(1, **self.factory_kwargs)
+
+        self.min_batch = min_batch
+        if self.use_kv_cache:
+            kv_caches = [
+                (torch.tensor([], device=self.device), torch.tensor([], device=self.device))
+                for _ in range(self.model_config.n_layer)
+            ]
+        else:
+            kv_caches = None
+        kv_idxs = None
+
+        # breakpoint()
+        sample_unique, sample_counts, amp_k, amps_log, kv_idxs, _ = self._interval_sample(
+            sample_unique=sample_unique,
+            sample_counts=sample_counts,
+            amps_log=amps_log,
+            begin=0,
+            end=self.sorb,
+            min_batch=self.min_batch,
+            kv_caches=kv_caches,
+            kv_idxs=kv_idxs,
+        )
+        if self.compute_phase:
+            phases = self.phase_layers[0](sample_unique)
             if self.n_out_phase == 1:
                 phases = phases.view(-1)
             else:
@@ -324,7 +570,12 @@ class DecoderWaveFunction(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         return self.forward_wf(x)
 
-    def ar_sampling(self, n_sample: int) -> Tuple[Tensor, Tensor, Tensor]:
+    def ar_sampling(
+        self,
+        n_sample: int,
+        min_batch: int = -1,
+        min_tree_height: int = None,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         r"""
         ar sample
 
@@ -334,4 +585,45 @@ class DecoderWaveFunction(nn.Module):
             sample_counts: the counts of unique sample, s.t. sum(sample_counts) = n_sample
             wf_value: the wavefunction of unique sample
         """
-        return self.forward_sample(n_sample=n_sample)
+        if min_tree_height is None:
+            return self.forward_sample(n_sample, min_batch)
+        elif isinstance(min_tree_height, int):
+            return self.forward_sample_rank(n_sample, min_batch, min_tree_height)
+
+
+if __name__ == "__main__":
+    from utils.public_function import setup_seed
+
+    setup_seed(333)
+    torch.set_default_dtype(torch.double)
+    torch.set_printoptions(precision=6)
+    sorb = 12
+    nele = 6
+    device = "cuda:0"
+    d_model = 5
+    use_kv_cache = False
+    model = DecoderWaveFunction(
+        sorb=sorb,
+        nele=nele,
+        alpha_nele=nele // 2,
+        beta_nele=nele // 2,
+        use_symmetry=True,
+        wf_type="complex",
+        n_layers=1,
+        device=device,
+        d_model=d_model,
+        n_heads=1,
+        phase_hidden_size=[512, 521],
+        n_out_phase=4,
+        use_kv_cache=use_kv_cache,
+    )
+
+    sample, counts, wf = model.ar_sampling(n_sample=int(1e5), min_batch=100)
+    print(f"use-kv-cache: {use_kv_cache}")
+    # print(wf)
+    print("================Forward=============")
+    print(sample)
+    # print(model(sample))
+    wf1 = model(sample)
+    # print(wf1)
+    print(torch.allclose(wf, wf1))
