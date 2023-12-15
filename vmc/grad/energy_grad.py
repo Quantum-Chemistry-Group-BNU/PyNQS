@@ -181,11 +181,10 @@ def _ad_grad(
         # synchronization gradient in the rank
         batch_loss_backward(begin, end)
 
-    logger.debug(f"loss: {loss_sum.item():.4E}")
     reduce_loss = all_reduce_tensor(loss_sum, world_size=get_world_size(), in_place=False)
     synchronize()
     if get_rank() == 0:
-        logger.debug(f"Reduce-loss: {reduce_loss[0].item():.4E}", master=True)
+        logger.info(f"Reduce-loss: {reduce_loss[0].item():.4E}", master=True)
 
     placeholders = torch.zeros(1, device=device, dtype=dtype)
     return placeholders

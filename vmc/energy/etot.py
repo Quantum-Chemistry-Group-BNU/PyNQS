@@ -40,7 +40,6 @@ def total_energy(
         eloc_lst: local energy
         state_prob: if exact: the state-prob would be calculated again,
                     else zeros-tensor.
-        statistics: ...
     """
     t0 = time.time_ns()
     dim: int = x.shape[0]
@@ -48,13 +47,15 @@ def total_energy(
     eloc_lst = torch.zeros(dim, device=device).to(dtype)
     psi_lst = torch.zeros_like(eloc_lst)
     time_lst = []
-    statistics = {}
     idx_lst = torch.empty(int(np.ceil(dim / nbatch)), dtype=torch.int64).fill_(nbatch)
     idx_lst[-1] = dim - (idx_lst.size(0) - 1) * nbatch
     idx_lst: List[int] = idx_lst.cumsum(dim=0).tolist()
+    rank = get_rank()
 
     # Calculate local energy in batches, better method?
-    logger.info(f"nbatch: {nbatch}, dim: {dim}, split: {len(idx_lst)}")
+    if rank == 0:
+        s = f"nbatch: {nbatch}, dim: {dim}, split: {len(idx_lst)}"
+        logger.info(s, master=True)
 
     with MemoryTrack(device) as track:
         begin = 0
@@ -90,7 +91,6 @@ def total_energy(
     if exact:
         t_exact0 = time.time_ns()
         world_size = get_world_size()
-        rank = get_rank()
         # gather psi_lst from all rank
         psi_lst_all = gather_tensor(psi_lst, device, world_size, master_rank=0)
         eloc_lst_all = gather_tensor(eloc_lst, device, world_size, master_rank=0)
@@ -131,17 +131,6 @@ def total_energy(
     state_prob = state_prob.to(dtype)
     eloc_mean = torch.einsum("i, i ->", eloc_lst, state_prob)
     e_total = eloc_mean + ecore
-    if not exact:
-        if state_counts is None:
-            state_counts = torch.ones(dim, dtype=dtype, device=device)
-        n_sample = state_counts.sum()
-        variance = torch.sum((eloc_lst - eloc_mean) ** 2 * state_counts) / (n_sample - 1)
-        sd = torch.sqrt(variance)
-        se = sd / torch.sqrt(n_sample)
-        statistics["mean"] = e_total.item()
-        statistics["var"] = variance.item()
-        statistics["SD"] = sd.item()
-        statistics["SE"] = se.item()
 
     t1 = time.time_ns()
     time_lst = np.stack(time_lst, axis=0)
@@ -158,7 +147,7 @@ def total_energy(
         torch.cuda.empty_cache()
 
     if exact:
-        return e_total.item(), eloc_lst, state_prob, statistics
+        return e_total.item(), eloc_lst, state_prob
     else:
         placeholders = torch.zeros(1, device=device, dtype=dtype)
-        return e_total.item(), eloc_lst, placeholders, statistics
+        return e_total.item(), eloc_lst, placeholders

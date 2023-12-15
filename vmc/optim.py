@@ -223,25 +223,20 @@ class VMCOptimizer:
             # lp.print_stats()
             # exit()
 
-            state, state_prob, eloc, e_total, stats = self.sampler.run(initial_state, epoch=epoch)
-            # All_Reduce mean local energy
-            eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
-            logger.debug(f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j")
-            all_reduce_tensor(eloc_mean, world_size=self.world_size)
-            synchronize()
-
-            e_total = eloc_mean.item().real + self.ecore
+            state, state_prob, eloc, e_total, stats, eloc_mean = self.sampler.run(initial_state, epoch=epoch)
+            # TODO:(zbwu-23-12-15)
             if self.rank == 0:
-                logger.info(
-                    f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j",
-                    master=True,
-                )
+                s = f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j"
+                logger.info(s, master=True)
                 self.e_lst.append(e_total)
             # self.stats_lst.append(stats)
 
             if self.only_sample:
                 delta = (time.time_ns() - t0) / 1.00e06
-                logger.info(f"{epoch}-th only Sampling finished, cost time {delta:.3f} ms")
+                if self.rank == 0:
+                    s = f"{epoch}-th only Sampling finished, cost time {delta:.3f} ms\n"
+                    s += "=" * 100
+                    logger.info(s, master=True)
                 continue
 
             sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
@@ -285,8 +280,10 @@ class VMCOptimizer:
                     if param.grad is not None:
                         x.append(param.grad.reshape(-1).detach().to("cpu").numpy())
                 x = np.concatenate(x)
-                self.grad_e_lst[0].append(np.linalg.norm(x))
-                self.grad_e_lst[1].append(np.abs(x).max())
+                l2_grad = np.linalg.norm(x)
+                max_grad = np.abs(x).max()
+                self.grad_e_lst[0].append(l2_grad)
+                self.grad_e_lst[1].append(max_grad)
 
             t2 = time.time_ns()
             # TODO: synchronize
@@ -299,6 +296,8 @@ class VMCOptimizer:
             delta_update = (time.time_ns() - t2) / 1.00e09
 
             # save the checkpoint
+            # TODO(zbwu-23-12-15), different-version maybe error
+            # print logger
             if self.rank == 0:
                 if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
                     checkpoint_file = f"{self.prefix}-checkpoint.pth"
@@ -320,15 +319,12 @@ class VMCOptimizer:
             all_reduce_tensor(c, op=dist.ReduceOp.MAX)
             synchronize()
             if self.rank == 0:
-                logger.info(
-                    f"Calculating grad: {c[0].item():.3E} s, update param: {c[1].item():.3E} s",
-                    master=True,
-                )
-                logger.info(
-                    f"Total energy {e_total:.9f} a.u., cost time {c[2].item():.3E} s", master=True
-                )
-                logger.info(f"{epoch} iteration end {time.ctime()}", master=True)
-                logger.info("=" * 100, master=True)
+                s = f"Calculating grad: {c[0].item():.3E} s, update param: {c[1].item():.3E} s\n"
+                s += f"Total energy {e_total:.9f} a.u., cost time {c[2].item():.3E} s\n"
+                s += f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
+                s += f"{epoch} iteration end {time.ctime()}\n"
+                s += "=" * 100
+                logger.info(s, master=True)
                 self.time_iter.append(c[2].item())
 
             del sample_state, eloc, state, psi, c

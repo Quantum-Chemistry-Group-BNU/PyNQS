@@ -29,6 +29,7 @@ from libs.C_extension import (
 from utils import state_to_string, ElectronInfo, check_para, get_nbatch, diff_rank_seed
 from utils.distributed import (
     all_gather_tensor,
+    all_reduce_tensor,
     gather_tensor,
     scatter_tensor,
     get_rank,
@@ -207,18 +208,32 @@ class Sampler:
         initial_state: Tensor,
         epoch: int,
         n_sweep: int = None,
-    ) -> Tuple[Tensor, Tensor, Tensor, Union[complex, float], dict]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Union[complex, float], dict, Tensor]:
+        """
+        run sampling using 'MCMC' or 'AR' algorithm and calculate local energy
+
+        Parameters
+        ----------
+            initial_state(Tensor): the initial-state, only used in MCMC
+            epoch(int): the number of VMC iterations, used in changing N-sample
+            n_sweep(int): the total cycle, only used in MCMC
+
+        Returns
+        -------
+            sample_unique(Tensor): the unique of sample (Single-Rank)
+            sample_prob(Tensor): the probability of sample (Single-Rank)
+            eloc(Tensor): local energy (Single-Rank)
+            e_total(complex|float): e_total = eloc_mean + ecore (All-Rank)
+            stats_dict(dict): 'mean', 'var', 'SD', 'SE' (All-Rank)
+            eloc_mean(Tensor): the average of eloc (All-Rank)
+        """
         t0 = time.time_ns()
         check_para(initial_state)
         if self.debug_exact:
-            # if self.world_size >= 2:
-            #     raise NotImplementedError(f"Exact optimization distributed is not implemented")
             ci_space_rank = scatter_tensor(self.ci_space, self.device, torch.uint8, self.world_size)
             synchronize()
-            e_total, eloc, sample_prob, stats_dict = self.calculate_energy(ci_space_rank)
-
-            # placeholders only
-            dim = ci_space_rank.shape[0]
+            e_total, eloc, sample_prob = self.calculate_energy(ci_space_rank)
+            stats_dict = {}
             return ci_space_rank.detach(), sample_prob, eloc, e_total, stats_dict
 
         # AR or MCMC sampling
@@ -228,17 +243,21 @@ class Sampler:
         if self.method_sample == "MCMC":
             logger.debug(f"rank: {self.rank} Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
-        e_total, eloc, _, stats_dict = self.calculate_energy(
+        # Single-Rank
+        e_total, eloc, _ = self.calculate_energy(
             sample_unique,
             state_prob=sample_prob,
             state_counts=sample_counts,
             WF_LUT=self.WF_LUT,
         )
-        # print local energy statistics information
-        self._statistics(stats_dict)
+        # All-Reduce mean local energy
+        eloc_mean, stats_dict = self.statistics(e_total, eloc, sample_prob)
+        # All-Rank
+        e_total = eloc_mean.item().real + self.ecore
+        self.statistics_print(stats_dict)
 
         if self.record_sample and self.rank == 0:
-            # TODO: if given sorb(not full space), this is error.
+            # If given space(not full space), this is error.
             counts = sample_counts.to("cpu").numpy()
             sample_str = state_to_string(sample_unique, self.sorb)
             full_dict = dict.fromkeys(self.str_full, 0)
@@ -250,11 +269,12 @@ class Sampler:
 
         self.time_sample += 1
         delta = time.time_ns() - t0
-        logger.debug(f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s")
+        if self.rank == 0: 
+            logger.debug(f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s", master=True)
 
         if self.is_cuda:
             torch.cuda.empty_cache()
-        return sample_unique.detach(), sample_prob, eloc, e_total, stats_dict
+        return sample_unique.detach(), sample_prob, eloc, e_total, stats_dict, eloc_mean
 
     def sampling(
         self,
@@ -531,14 +551,13 @@ class Sampler:
         state_prob: Tensor = None,
         state_counts: Tensor = None,
         WF_LUT: WavefunctionLUT = None,
-    ) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
+    ) -> Tuple[Union[complex, float], Tensor, Tensor]:
         r"""
         Returns:
         -------
             e_total(complex|float): total energy(a.u.)
             eloc(Tensor): local energy
             placeholders(Tensor): state prob if exact optimization, else zeros tensor
-            stats_dict(dict): statistical information about sampling.
         """
         # this is applied when pre-train
         WF_LUT = self.WF_LUT if WF_LUT is None else WF_LUT
@@ -553,7 +572,7 @@ class Sampler:
             dtype=self.dtype,
         )
         if not self.only_AD:
-            e_total, eloc, placeholders, stats_dict = total_energy(
+            e_total, eloc, placeholders = total_energy(
                 sample,
                 nbatch,
                 h1e=self.h1e,
@@ -577,9 +596,8 @@ class Sampler:
         else:
             e_total = -2.33233
             eloc = torch.rand(sample.size(0), device=self.device, dtype=self.dtype)
-            stats_dict = {}
             placeholders = torch.zeros(1, device=self.device, dtype=self.dtype)
-        return e_total, eloc, placeholders, stats_dict
+        return e_total, eloc, placeholders
 
     def __repr__(self) -> str:
         return (
@@ -610,12 +628,50 @@ class Sampler:
             + ")"
         )
 
-    def _statistics(self, data: dict):
+    def statistics(
+        self,
+        e_total: Union[float, complex],
+        eloc: Tensor,
+        prob: Tensor,
+    ) -> Tuple[Tensor, dict]:
+        """
+        Calculate statistical information about local energy and eloc-mean
+        if only_AD, return placeholders
+
+        Returns
+        -------
+            eloc_mean(Tensor): the average of local energy (All-Rank)
+            statistics(dict): 'mean', 'var', 'SD', 'SE'
+        """
         if self.only_AD:
-            s = f"**This Auto-grad memory testing**"
+            eloc_mean = torch.zeros(1, dtype=torch.double, device=self.device)
+            statistics = {}
         else:
-            s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} [σ² = {data['var'].real:.3E}]"
-        logger.debug(s)
+            # All_Reduce mean local energy
+            eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
+            all_reduce_tensor(eloc_mean, world_size=self.world_size)
+            synchronize()
+            var = ((eloc - eloc_mean) ** 2 * prob).sum() * self.world_size
+            logger.info(var)
+            all_reduce_tensor(var, world_size=self.world_size)
+            logger.info(var)
+            sd = torch.sqrt(var)
+            se = sd / self.n_sample**0.5
+            statistics = {}
+            statistics["mean"] = eloc_mean.item() + self.ecore
+            statistics["var"] = var.item()
+            statistics["SD"] = sd.item()
+            statistics["SE"] = se
+        return eloc_mean, statistics
+
+    def statistics_print(self, data: dict) -> None:
+        if self.rank == 0:
+            if self.only_AD:
+                s = f"**This Auto-grad memory testing**"
+            else:
+                s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} "
+                s += f"[σ² = {data['var'].real:.3E}]"
+            logger.info(s, master=True)
 
     def change_n_sample(self, epoch: int) -> None:
         """

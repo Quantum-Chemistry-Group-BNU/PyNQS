@@ -748,7 +748,7 @@ class MemoryTrack:
         self.after_max_memory = self.get_max_memory(self.device)
         self.clean_memory_cache(self.device)
         self.after_memory = self.get_current_memory(self.device)
-        s = f"{self.device} memory allocate: {self.after_memory:.5f} GiB, "
+        s = f"{self.device} memory allocated: {self.after_memory:.5f} GiB, "
         s += f"using memory: {(self.after_max_memory-self.before_memory):.5f} GiB"
         if self.rank == 0:
             logger.info(s, master=True)
