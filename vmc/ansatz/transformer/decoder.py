@@ -248,11 +248,19 @@ class DecoderWaveFunction(nn.Module):
             # creative next-cache, extremely inelegant
             # kv-cache shape
             if self.use_kv_cache:
+                # seq_length, d_model = kv_caches[0][0].shape[1:]
+                # kv_rand = lambda: torch.empty(
+                #     dim, seq_length + 1, d_model, dtype=torch.double, device=self.device
+                # )
+                # kv_caches_next: KVCaches = [(kv_rand(), kv_rand()) for _ in range(len(kv_caches))]
+
                 seq_length, d_model = kv_caches[0][0].shape[1:]
-                kv_rand = lambda: torch.empty(
-                    dim, seq_length + 1, d_model, dtype=torch.double, device=self.device
-                )
-                kv_caches_next: KVCaches = [(kv_rand(), kv_rand()) for _ in range(len(kv_caches))]
+                kv_length = len(kv_caches)
+                shape = (kv_length, 2, dim, seq_length + 1, d_model)
+                kv_rand = torch.empty(shape, dtype=torch.double, device=self.device)
+                kv_caches_next: KVCaches = [
+                    (kv_rand[i][0], kv_rand[i][1]) for i in range(kv_length)
+                ]
 
             for idx in idx_lst:
                 end = idx
@@ -359,8 +367,7 @@ class DecoderWaveFunction(nn.Module):
         sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
         amps_log = torch.zeros(1, **self.factory_kwargs)
 
-        # min_batch = 10000
-        sample_counts *= self.world_size
+        # sample_counts *= self.world_size
         assert abs(min_batch) >= self.world_size
         self.min_batch = min_batch
         self.min_tree_height = min(min_tree_height, self.sorb)
@@ -396,7 +403,7 @@ class DecoderWaveFunction(nn.Module):
         sample_counts = sample_counts[begin:end]
         amp_k = amp_k[begin:end]
         amps_log = amps_log[begin:end]
-        kv_idxs =kv_idxs[begin: end]
+        kv_idxs = kv_idxs[begin:end]
 
         sample_unique, sample_counts, amp_k, amps_log, kv_idxs, _ = self._interval_sample(
             sample_unique=sample_unique,
