@@ -34,12 +34,14 @@ def total_energy(
 ) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
     r"""
 
+    Calculate total-energy, local-energy and state-prob
+    
     Return
     ------
-        e_total: Total energy
-        eloc_lst: local energy
+        e_total: Total energy (Single-Rank)
+        eloc_lst: local energy (Single-Rank)
         state_prob: if exact: the state-prob would be calculated again,
-                    else zeros-tensor.
+                    else zeros-tensor. (Single-Rank)
     """
     t0 = time.time_ns()
     dim: int = x.shape[0]
@@ -101,7 +103,6 @@ def total_energy(
             eloc_lst_all = torch.cat(eloc_lst_all)
             state_prob_all = (psi_lst_all * psi_lst_all.conj()).real / psi_lst_all.norm() ** 2
             state_prob_all = state_prob_all.to(dtype)
-            eloc_mean = torch.einsum("i, i ->", eloc_lst_all, state_prob_all)
         else:
             state_prob_all = None
         # Scatter state_prob to very rank

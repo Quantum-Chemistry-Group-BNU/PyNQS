@@ -233,8 +233,11 @@ class Sampler:
             ci_space_rank = scatter_tensor(self.ci_space, self.device, torch.uint8, self.world_size)
             synchronize()
             e_total, eloc, sample_prob = self.calculate_energy(ci_space_rank)
-            stats_dict = {}
-            return ci_space_rank.detach(), sample_prob, eloc, e_total, stats_dict
+            # All-Reduce mean local energy
+            eloc_mean, stats_dict = self.statistics(e_total, eloc, sample_prob)
+            # All-Rank
+            e_total = eloc_mean.item().real + self.ecore
+            return ci_space_rank.detach(), sample_prob, eloc, e_total, stats_dict, eloc_mean
 
         # AR or MCMC sampling
         sample_unique, sample_counts, sample_prob = self.sampling(
@@ -254,7 +257,6 @@ class Sampler:
         eloc_mean, stats_dict = self.statistics(e_total, eloc, sample_prob)
         # All-Rank
         e_total = eloc_mean.item().real + self.ecore
-        self.statistics_print(stats_dict)
 
         if self.record_sample and self.rank == 0:
             # If given space(not full space), this is error.
@@ -269,8 +271,9 @@ class Sampler:
 
         self.time_sample += 1
         delta = time.time_ns() - t0
-        if self.rank == 0: 
-            logger.debug(f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s", master=True)
+        if self.rank == 0:
+            s = f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s"
+            logger.info(s, master=True)
 
         if self.is_cuda:
             torch.cuda.empty_cache()
@@ -652,16 +655,18 @@ class Sampler:
             all_reduce_tensor(eloc_mean, world_size=self.world_size)
             synchronize()
             var = ((eloc - eloc_mean) ** 2 * prob).sum() * self.world_size
-            logger.info(var)
             all_reduce_tensor(var, world_size=self.world_size)
-            logger.info(var)
             sd = torch.sqrt(var)
-            se = sd / self.n_sample**0.5
+            if self.debug_exact:
+                se = torch.tensor(0.0)  # exact optimization SE is zero
+            else:
+                se = sd / self.n_sample**0.5
             statistics = {}
             statistics["mean"] = eloc_mean.item() + self.ecore
             statistics["var"] = var.item()
             statistics["SD"] = sd.item()
-            statistics["SE"] = se
+            statistics["SE"] = se.item()
+            self.statistics_print(statistics)
         return eloc_mean, statistics
 
     def statistics_print(self, data: dict) -> None:
