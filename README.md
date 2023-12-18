@@ -1,20 +1,21 @@
-# torch_Full_CI
-A simple function calculates &lt;n|H|m> using the Pytorch tensor in CPU or GPU.
+# PyNQS: Neural-Network Quantum States for Quantum Chemistry 
 
+## Requirement
 
+- Pytorch
+- pybind11
+- loguru
+- line_profiler
+- memory_profiler
+- torchinfo
 
-**Approximate process**
+## Available ansatze 
 
-![process](./docs/flowchart.png)
+1. RBM
+2. RNN
+3. Transformer
 
-**Eloc Distributed  process**
-
-![process](./docs/eloc-dist.png)
-
-
-
-
-## Installation
+## Installation 
 
 #### Compile CPP sources
 ```bash
@@ -42,4 +43,14 @@ A simple function calculates &lt;n|H|m> using the Pytorch tensor in CPU or GPU.
 > vi run.sh  # set export RUN_FILE="example_H4.py"
 > ./run.sh  # You can find the *.png, *.pth and *.npz file in ./tmp/  
 ```
+
+## Flowchart
+
+#### VMC process
+
+![process](./docs/flowchart.png)
+
+#### Eloc Distributed process
+
+![process](./docs/eloc-dist.png)
 
