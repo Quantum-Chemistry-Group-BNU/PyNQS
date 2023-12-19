@@ -249,7 +249,7 @@ class OrbitalBlock(nn.Module):
 
 
 class _MaskedSoftmaxBase(nn.Module):
-    def mask_input(self, x, mask, val):
+    def mask_input(self, x, mask, val) -> Tensor:
         if mask is not None:
             m = mask.clone()  # Don't alter original
             if m.dtype == torch.bool:
@@ -266,9 +266,41 @@ class _MaskedSoftmaxBase(nn.Module):
 class SoftmaxLogProbAmps(_MaskedSoftmaxBase):
     masked_val = float("-inf")
 
-    def forward(self, x, mask=None, dim=1):
+    def forward(self, x, mask=None, dim=1) -> Tensor:
         x_ = self.mask_input(x, mask, self.masked_val)
         return F.log_softmax(x_, dim=dim)
 
     def __repr__(self) -> str:
         return "Log-Softmax with mask"
+
+class SoftmaxSignProbAmps(_MaskedSoftmaxBase):
+    masked_val = float("-inf")
+
+    def forward(self, x, mask=None, dim=1) -> Tensor:
+        ...
+        x_ = self.mask_input(x, mask, self.masked_val)
+        sign = (x_ > 0 ) * 2 - 1
+        return (F.softmax(x_, dim=dim)) * sign
+
+    def __repr__(self) -> str:
+        return "Softmax(sign) with mask"
+
+class NormProbAmps(_MaskedSoftmaxBase):
+    masked_val = 0.0
+
+    def forward(self, x, mask=None, dim=1) -> Tensor:
+        x_ = self.mask_input(x, mask, self.masked_val)
+        return F.normalize(x_, dim=dim, eps=1e-12)
+
+    def __repr__(self) -> str:
+        return "L2-Normalize with mask"
+
+class NormAbsProbAmps(_MaskedSoftmaxBase):
+    masked_val = 0.0
+
+    def forward(self, x, mask=None, dim=1) -> Tensor:
+        x_ = self.mask_input(x, mask, self.masked_val).abs_()
+        return F.normalize(x_, dim=dim, eps=1e-12)
+
+    def __repr__(self) -> str:
+        return "L2-Normalize(Abs) with mask"

@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import warnings
 
 from functools import partial
 from typing import List, Union, Callable, Tuple, NewType
@@ -10,8 +11,17 @@ from loguru import logger
 # import sys;sys.path.append("./")
 
 from vmc.ansatz.transformer.nanogpt.model import GPT, GPTConfig, get_decoder_amp
+
 # from vmc.ansatz.transformer.mingpt.model import get_decoder_amp
-from vmc.ansatz.utils import symmetry_mask, OrbitalBlock, SoftmaxLogProbAmps, joint_next_samples
+from vmc.ansatz.utils import (
+    symmetry_mask,
+    OrbitalBlock,
+    SoftmaxLogProbAmps,
+    joint_next_samples,
+    NormProbAmps,
+    NormAbsProbAmps,
+    SoftmaxSignProbAmps,
+)
 from utils.public_function import multinomial_tensor, split_batch_idx, setup_seed
 from utils.distributed import get_rank, get_world_size, synchronize
 
@@ -19,6 +29,8 @@ KVCaches = NewType("KVCaches", List[Tuple[Tensor, Tensor]])
 
 
 class DecoderWaveFunction(nn.Module):
+    NORM_METHOD = {0: "softmax-log", 1: "norm", 2: "norm-abs", 3: "softmax-sign"}
+
     def __init__(
         self,
         sorb: int,
@@ -40,15 +52,17 @@ class DecoderWaveFunction(nn.Module):
         phase_bias: bool = True,
         phase_batch_norm: bool = False,
         phase_norm_momentum=0.1,
-        amp_activation: Union[nn.Module, Callable] = SoftmaxLogProbAmps,
         phase_activation: Union[nn.Module, Callable] = None,
         n_out_phase: int = 1,
         use_kv_cache: bool = True,
+        dtype=torch.double,
+        norm_method: int = 0,
     ) -> None:
         super(DecoderWaveFunction, self).__init__()
 
         self.device = device
-        self.factory_kwargs = {"device": self.device, "dtype": torch.double}
+        self.dtype = dtype
+        self.factory_kwargs = {"device": self.device, "dtype": self.dtype}
 
         # electron in
         self.sorb = sorb
@@ -150,7 +164,23 @@ class DecoderWaveFunction(nn.Module):
             self.phase_layers = nn.ModuleList(self.phase_layers)
 
         # amp and phase activation
-        self.amp_activation = amp_activation()
+        if norm_method not in self.NORM_METHOD:
+            raise ValueError(f"norm-method Expected {self.NORM_METHOD} but received {norm_method}")
+        self.norm_method = norm_method
+        if self.norm_method in (1, 3) and self.compute_phase:
+            warnings.warn(
+                f"Using '{self.NORM_METHOD[self.norm_method]}' normalization, already contains phase",
+                FutureWarning,
+            )
+        if self.norm_method == 0:
+            func = SoftmaxLogProbAmps
+        elif self.norm_method == 1:
+            func = NormProbAmps
+        elif self.norm_method == 2:
+            func = NormAbsProbAmps
+        else:
+            func = SoftmaxSignProbAmps
+        self.amp_activation = func()
         self.phase_activation = phase_activation
 
         self.rank = get_rank()
@@ -161,7 +191,8 @@ class DecoderWaveFunction(nn.Module):
     def extra_repr(self) -> str:
         s = f"amplitude-activations: {self.amp_activation}\n"
         s += f"phase-activations: {self.phase_activation}\n"
-        s += f"use-kv-cache: {self.use_kv_cache}"
+        s += f"use-kv-cache: {self.use_kv_cache}\n"
+        s += f"norm-method: {self.NORM_METHOD[self.norm_method]}\n"
         phase_num = 0
         net_param_num = lambda net: sum(p.numel() for p in net.parameters())
         for i in range(len(self.phase_layers)):
@@ -203,7 +234,7 @@ class DecoderWaveFunction(nn.Module):
         else:
             # +1/-1 -> 0, 1, 2, 3
             amp_input = self.state_to_int(amp_input[:, : 2 * i_th], value=-1)
-            pad_st = torch.full((nbatch, 1), 4.0, **self.factory_kwargs)
+            pad_st = torch.full((nbatch, 1), 4.0, device=self.device, dtype=torch.double)
             amp_input = torch.cat((pad_st, amp_input), -1)
 
         # TODO: kv_caches and infer batch
@@ -220,7 +251,7 @@ class DecoderWaveFunction(nn.Module):
 
     def batch_get_amps(
         self,
-        x0: int,
+        x0: Tensor,
         k: int,
         min_batch: int = -1,
         kv_caches: KVCaches = None,
@@ -241,7 +272,7 @@ class DecoderWaveFunction(nn.Module):
         else:
             dim = x0.size(0)
             idx_lst = split_batch_idx(dim, min_batch)
-            amp = torch.empty(dim, int(k / 2 + 1), 4, dtype=torch.double, device=self.device)
+            amp = torch.empty(dim, int(k / 2 + 1), 4, **self.factory_kwargs)
             begin = 0
 
             # FIXME: (zbwu-23-12-14) Needs to be optimized
@@ -257,7 +288,7 @@ class DecoderWaveFunction(nn.Module):
                 seq_length, d_model = kv_caches[0][0].shape[1:]
                 kv_length = len(kv_caches)
                 shape = (kv_length, 2, dim, seq_length + 1, d_model)
-                kv_rand = torch.empty(shape, dtype=torch.double, device=self.device)
+                kv_rand = torch.empty(shape, **self.factory_kwargs)
                 kv_caches_next: KVCaches = [
                     (kv_rand[i][0], kv_rand[i][1]) for i in range(kv_length)
                 ]
@@ -291,7 +322,7 @@ class DecoderWaveFunction(nn.Module):
         self,
         sample_unique: Tensor,
         sample_counts: Tensor,
-        amps_log: Tensor,
+        amps_value: Tensor,
         begin: int,
         end: int,
         min_batch: int = -1,
@@ -330,11 +361,16 @@ class DecoderWaveFunction(nn.Module):
             num_down = sample_unique[:, 1::2].sum(dim=1)
             amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
             amp_k = amp[:, -1, :]  # (n_unique, 4)
-            amp_k_log = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
+            amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
 
             # 0 => (0, 0), 1 =>(1, 0), 2 =>(0, 1), 3 => (1, 1)
             # (n_unique * 4)
-            counts_i = multinomial_tensor(sample_counts, amp_k_log.exp()).T.flatten()
+            if self.norm_method == 0:
+                # Log-softmax
+                counts_i = multinomial_tensor(sample_counts, amp_k_mask.exp()).T.flatten()
+            else:
+                # norm
+                counts_i = multinomial_tensor(sample_counts, amp_k_mask.pow(2)).T.flatten()
             idx_count = counts_i > 0
             sample_counts = counts_i[idx_count]
             sample_unique = self.joint_next_samples(sample_unique)[idx_count]
@@ -348,11 +384,16 @@ class DecoderWaveFunction(nn.Module):
             else:
                 kv_idxs = None
 
-            amps_log = torch.add(amps_log.unsqueeze(1).repeat(1, 4), amp_k_log).T.flatten()[
-                idx_count
-            ]
+            if self.norm_method == 0:
+                amps_value = torch.add(
+                    amps_value.unsqueeze(1).repeat(1, 4), amp_k_mask
+                ).T.flatten()[idx_count]
+            else:
+                amps_value = torch.mul(
+                    amps_value.unsqueeze(1).repeat(1, 4), amp_k_mask
+                ).T.flatten()[idx_count]
             l += interval
-        return sample_unique, sample_counts, amp_k, amps_log, kv_idxs, l
+        return sample_unique, sample_counts, amp_k, amps_value, kv_idxs, l
 
     @torch.no_grad()
     def forward_sample_rank(
@@ -365,10 +406,14 @@ class DecoderWaveFunction(nn.Module):
     ) -> Tuple[Tensor, Tensor, Tensor]:
         sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
         sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
-        amps_log = torch.zeros(1, **self.factory_kwargs)
+        if self.norm_method == 0:
+            amps_value = torch.zeros(1, **self.factory_kwargs)
+        else:
+            amps_value = torch.ones(1, **self.factory_kwargs)
 
         # sample_counts *= self.world_size
         assert abs(min_batch) >= self.world_size
+        assert min_tree_height < self.sorb - 2
         self.min_batch = min_batch
         self.min_tree_height = min(min_tree_height, self.sorb)
 
@@ -382,10 +427,10 @@ class DecoderWaveFunction(nn.Module):
         kv_idxs = None
 
         # FIXME:(zbwu-23-12-14) Multi-rank kv-cache may be wrong, NOT-Fully Test
-        sample_unique, sample_counts, amp_k, amps_log, kv_idxs, k = self._interval_sample(
+        sample_unique, sample_counts, amp_k, amps_value, kv_idxs, k = self._interval_sample(
             sample_unique=sample_unique,
             sample_counts=sample_counts,
-            amps_log=amps_log,
+            amps_value=amps_value,
             begin=0,
             end=self.min_tree_height + 1,
             min_batch=self.min_batch,
@@ -402,13 +447,14 @@ class DecoderWaveFunction(nn.Module):
         sample_unique = sample_unique[begin:end]
         sample_counts = sample_counts[begin:end]
         amp_k = amp_k[begin:end]
-        amps_log = amps_log[begin:end]
-        kv_idxs = kv_idxs[begin:end]
+        amps_value = amps_value[begin:end]
+        if self.use_kv_cache:
+            kv_idxs = kv_idxs[begin:end]
 
-        sample_unique, sample_counts, amp_k, amps_log, kv_idxs, _ = self._interval_sample(
+        sample_unique, sample_counts, amp_k, amps_value, kv_idxs, _ = self._interval_sample(
             sample_unique=sample_unique,
             sample_counts=sample_counts,
-            amps_log=amps_log,
+            amps_value=amps_value,
             begin=k,
             end=self.sorb,
             min_batch=self.min_batch,
@@ -424,10 +470,20 @@ class DecoderWaveFunction(nn.Module):
                 index = self.state_to_int(sample_unique[:, -2:]).view(-1, 1)
                 phases = phases.gather(1, index).view(-1)
 
+        if self.norm_method == 3:
+                sign = (amps_value > 0) * 2 - 1
+                amps_value = amps_value.abs().sqrt() * sign
         if self.compute_phase:
-            wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
+            phases = torch.complex(torch.zeros_like(phases), phases).exp()
+            if self.norm_method == 0:
+                wf = phases * (amps_value * 0.5).exp()
+            else:
+                wf = phases * amps_value
         else:
-            wf = (amps_log * 0.5).exp()
+            if self.norm_method == 0:
+                wf = (amps_value * 0.5).exp()
+            else:
+                wf = amps_value
 
         if False:
             from utils.distributed import gather_tensor
@@ -458,7 +514,10 @@ class DecoderWaveFunction(nn.Module):
     def forward_sample(self, n_sample: int, min_batch: int = -1) -> Tuple[Tensor, Tensor, Tensor]:
         sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
         sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
-        amps_log = torch.zeros(1, **self.factory_kwargs)
+        if self.norm_method == 0:
+            amps_value = torch.zeros(1, **self.factory_kwargs)
+        else:
+            amps_value = torch.ones(1, **self.factory_kwargs)
 
         self.min_batch = min_batch
         if self.use_kv_cache:
@@ -471,10 +530,10 @@ class DecoderWaveFunction(nn.Module):
         kv_idxs = None
 
         # breakpoint()
-        sample_unique, sample_counts, amp_k, amps_log, kv_idxs, _ = self._interval_sample(
+        sample_unique, sample_counts, amp_k, amps_value, kv_idxs, _ = self._interval_sample(
             sample_unique=sample_unique,
             sample_counts=sample_counts,
-            amps_log=amps_log,
+            amps_value=amps_value,
             begin=0,
             end=self.sorb,
             min_batch=self.min_batch,
@@ -489,10 +548,20 @@ class DecoderWaveFunction(nn.Module):
                 index = self.state_to_int(sample_unique[:, -2:]).view(-1, 1)
                 phases = phases.gather(1, index).view(-1)
 
+        if self.norm_method == 3:
+                sign = (amps_value > 0) * 2 -1
+                amps_value = amps_value.abs().sqrt() * sign
         if self.compute_phase:
-            wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
+            phases = torch.complex(torch.zeros_like(phases), phases).exp()
+            if self.norm_method == 0:
+                wf = phases * (amps_value * 0.5).exp()
+            else:
+                wf = phases * amps_value
         else:
-            wf = (amps_log * 0.5).exp()
+            if self.norm_method == 0:
+                wf = (amps_value * 0.5).exp()
+            else:
+                wf = amps_value
 
         return sample_unique, sample_counts, wf
 
@@ -511,7 +580,11 @@ class DecoderWaveFunction(nn.Module):
         nbatch = x.size(0)
         num_up = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
         num_down = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
-        amps_log = torch.zeros(nbatch, **self.factory_kwargs)
+
+        if self.norm_method == 0:
+            amps_value = torch.zeros(nbatch, **self.factory_kwargs)
+        else:
+            amps_value = torch.ones(nbatch, **self.factory_kwargs)
 
         ik = self.sorb // 2 - 1
         # amp: (nbatch, sorb//2, 4), phase: (nbatch, 4)
@@ -524,13 +597,16 @@ class DecoderWaveFunction(nn.Module):
             # (nbatch, 4)
             amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
             amp_k = amp[:, k // 2, :]  # (nbatch, 4)
-            # breakpoint()
-            amp_k_log = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
+            amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
             # amp_k_log = torch.where(amp_k_log.isinf(), torch.full_like(amp_k_log, -30), amp_k_log)
 
             # torch "-inf" * 0 = "nan", so use index, (nbatch, 1)
             index = self.state_to_int(x[:, k : k + 2]).view(-1, 1)
-            amps_log += amp_k_log.gather(1, index).view(-1)
+
+            if self.norm_method == 0:
+                amps_value += amp_k_mask.gather(1, index).view(-1)
+            else:
+                amps_value *= amp_k_mask.gather(1, index).view(-1)
             # amp_list.append( amp_k_log.gather(1, index).reshape(-1))
 
             num_up.add_(x[..., k])
@@ -541,13 +617,22 @@ class DecoderWaveFunction(nn.Module):
                 phases = phase.view(-1)
             else:
                 phases = phase.gather(1, index).view(-1)
-        # breakpoint()
         # print(torch.stack(amp_list, dim=1).exp())
+        if self.norm_method == 3:
+                sign = (amps_value > 0) * 2 -1
+                amps_value = amps_value.abs().sqrt() * sign
         if self.compute_phase:
-            wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
+            phases = torch.complex(torch.zeros_like(phases), phases).exp()
+            if self.norm_method == 0:
+                wf = phases * (amps_value * 0.5).exp()
+            else:
+                wf = phases * amps_value
         else:
-            wf = (amps_log * 0.5).exp()
-        del amps_log, amp, amp_k, amp_k_log, index
+            if self.norm_method == 0:
+                wf = (amps_value * 0.5).exp()
+            else:
+                wf = amps_value
+        del amps_value, amp, amp_k, amp_k_mask, index
         return wf
 
     @torch.no_grad()
@@ -604,18 +689,20 @@ if __name__ == "__main__":
     setup_seed(333)
     torch.set_default_dtype(torch.double)
     torch.set_printoptions(precision=6)
-    sorb = 12
-    nele = 6
+    sorb = 6
+    nele = 4
     device = "cuda:0"
     d_model = 5
-    use_kv_cache = False
+    use_kv_cache = True
+    dtype = torch.double
+    norm_method = 3
     model = DecoderWaveFunction(
         sorb=sorb,
         nele=nele,
         alpha_nele=nele // 2,
         beta_nele=nele // 2,
         use_symmetry=True,
-        wf_type="complex",
+        wf_type="real",
         n_layers=1,
         device=device,
         d_model=d_model,
@@ -623,14 +710,22 @@ if __name__ == "__main__":
         phase_hidden_size=[512, 521],
         n_out_phase=4,
         use_kv_cache=use_kv_cache,
+        dtype=dtype,
+        norm_method=norm_method,
     )
-
-    sample, counts, wf = model.ar_sampling(n_sample=int(1e5), min_batch=100)
+    sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100, min_tree_height=2)
+    # sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100)
     print(f"use-kv-cache: {use_kv_cache}")
-    # print(wf)
+    print(f"param dtype: {dtype}")
+    print(f"norm-method: {model.NORM_METHOD[norm_method]}")
+    print(wf)
     print("================Forward=============")
-    print(sample)
-    # print(model(sample))
     wf1 = model(sample)
-    # print(wf1)
-    print(torch.allclose(wf, wf1))
+    print(wf1)
+    print(f"wf^2: {wf1.norm().item():.8f}")
+    print(f"Sample-wf == forward-wf: {torch.allclose(wf, wf1)}")
+    loss = wf1.norm()
+    loss.backward()
+    for param in model.parameters():
+        print(param.grad.reshape(-1))
+        break
