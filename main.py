@@ -78,11 +78,11 @@ if __name__ == "__main__":
     #             "nele": nele,
     #             "e_lst": e_lst,
     #             "ucisd_amp": ucisd_amp,
-    #             # "fci_amp": fci_amp,
+    #             "fci_amp": fci_amp,
     #         },
-    #         "H8-2.00.pth",
+    #         "./molecule/H8-2.00.pth",
     #     )
-    e = torch.load("./molecule/H8-2.00.pth", map_location="cpu")
+    e = torch.load("./molecule/H4-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -111,7 +111,7 @@ if __name__ == "__main__":
     ucisd_wf = unpack_ucisd(ucisd_amp, sorb, nele, device=device)
     fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
     ucisd_fci_wf = ucisd_to_fci(ucisd_amp, ci_space, sorb, nele, device=device)
-    pre_train_info = {"pre_max_iter": 2000, "interval": 10, "loss_type": "sample"}
+    pre_train_info = {"pre_max_iter": 20, "interval": 10, "loss_type": "sample"}
 
     rnn = RNNWavefunction(
         sorb,
@@ -155,13 +155,13 @@ if __name__ == "__main__":
         phase_hidden_size=[512, 521],
         n_out_phase=4,
         use_kv_cache=True,
+        norm_method=1,
     )
 
     ansatz = transformer
     net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
     print(net_param_num(ansatz))
     print(sum(map(torch.numel, ansatz.parameters())))
-    # breakpoint()
     # summary(ansatz, input_size=(int(1.0e6), 20))
     # breakpoint()
     if device == "cuda":
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     # torch.save({"model": model.state_dict(), "h1e": h1e, "h2e": h2e}, "test.pth")
     sampler_param = {
         "n_sample": int(1.0e10),
-        "debug_exact": False,
+        "debug_exact": True,
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -185,12 +185,12 @@ if __name__ == "__main__":
         "use_LUT": True,
         "use_unique": True,
         "reduce_psi": False,
-        "use_sample_space": True,
+        "use_sample_space": False,
         "eps": 1.0e-10,
         "only_AD": False,
-        "use_same_tree": True, # different rank-sample
+       # "use_same_tree": True, # different rank-sample
         "min_batch": 1000,
-        "min_tree_height": 8, # different rank-sample
+       # "min_tree_height": 8, # different rank-sample
     }
     opt_type = optim.Adam
     opt_params = {"lr": 1.0, "betas": (0.9, 0.99), "weight_decay": 0.0}
@@ -218,9 +218,9 @@ if __name__ == "__main__":
         sampler_param=sampler_param,
         only_sample=False,
         electron_info=electron_info,
-        max_iter=50,
-        interval=20,
-        MAX_AD_DIM=-1,
+        max_iter=1000,
+        interval=10,
+        MAX_AD_DIM=1000,
         sr=False,
         pre_CI=ucisd_wf,
         pre_train_info=pre_train_info,
@@ -236,7 +236,6 @@ if __name__ == "__main__":
     e_ref = e_lst[0]
     print(e_lst, seed)
     opt_vmc.summary(e_ref, e_lst)
-    # print(ansatz.linear_amp.weight)
     # psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
     # psi /= psi.norm()
     # dim = ci_space.size(0)
