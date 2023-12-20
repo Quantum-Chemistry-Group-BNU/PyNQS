@@ -629,16 +629,59 @@ def torch_sort_onv(bra: Tensor, little_endian: bool = True) -> Tensor:
     del keys
     return idx
 
+def split_batch_idx(dim: int, min_batch: int) -> List[int]:
+    r"""
+    the index of the splitting batch with min-batch
 
-def split_batch_idx(dim: int, nbatch: int) -> List[int]:
+    Parameters
+    ----------
+        dim(int): the total dim
+        min-batch(int):
+
+    Returns
+    -------
+        idx_lst(List[int])
+
+    Examples
+    --------
+
+    >>> dim = 10, min_batch = 3
+    >>> idx_lst = split_batch_idx(11, 3)
+    >>> idx_lst
+    [3, 6, 9, 11]
     """
-    the index of the splitting batch
-    """
-    length = int(np.ceil(dim / nbatch))
-    idx_lst = torch.empty(length, dtype=torch.int64).fill_(nbatch)
-    idx_lst[-1] = dim - (idx_lst.size(0) - 1) * nbatch
+    length = int(np.ceil(dim / min_batch))
+    idx_lst = torch.empty(length, dtype=torch.int64).fill_(min_batch)
+    idx_lst[-1] = dim - (idx_lst.size(0) - 1) * min_batch
     idx_lst = idx_lst.cumsum(dim=0).tolist()
+    return idx_lst
 
+def split_length_idx(dim: int, length: int) -> List[int]:
+    r"""
+    the index of the splitting batch with fixed length
+
+    Parameters
+    ----------
+        dim(int): the total dim
+        length(int): the length of idx_lst
+
+    Returns
+    -------
+        idx_lst(List[int])
+
+    Examples
+    --------
+
+    >>> dim = 10, min_batch = 3
+    >>> idx_lst = split_length_idx(11, 3)
+    >>> idx_lst
+    [4, 8, 11]
+    """
+    nbatch = int(np.floor(dim/length))
+    idx_lst = torch.empty(length, dtype=torch.int64).fill_(nbatch)
+    ret = dim - nbatch * length
+    idx_lst[:ret].add_(1)
+    idx_lst = idx_lst.cumsum(dim=0).tolist()
     return idx_lst
 
 class WavefunctionLUT:

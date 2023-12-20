@@ -433,16 +433,17 @@ class Sampler:
 
         s = f"Completed {self.method_sample} Sampling: {delta:.3E} s, "
         s += f"unique sample: {sample_counts.sum().item():.3E} -> {sample_counts.size(0)}"
-        logger.info(s)
+        logger.debug(s)
+        if self.rank == 0:
+            logger.info(f"{self.method_sample} Sampling {delta:.3E}")
 
-        if True:
-            # Sample-comm, gather->merge->scatter
-            return self.gather_scatter_sample(sample_unique, sample_counts, wf_value)
-        sample_prob = sample_counts / sample_counts.sum()
-        # convert to onv
-        sample_unique = tensor_to_onv(sample_unique.to(torch.uint8), self.sorb)
+        # Sample-comm, gather->merge->scatter
+        return self.gather_scatter_sample(sample_unique, sample_counts, wf_value)
+        # sample_prob = sample_counts / sample_counts.sum()
+        # # convert to onv
+        # sample_unique = tensor_to_onv(sample_unique.to(torch.uint8), self.sorb)
 
-        return sample_unique, sample_counts, sample_prob
+        # return sample_unique, sample_counts, sample_prob
 
     def gather_scatter_sample(
         self,
@@ -515,6 +516,7 @@ class Sampler:
             # XXX: unique_rank split merge_unique when broadcast to all-rank,
             # this maybe efficiency than scatter->broadcast
             merge_unique = broadcast_tensor(merge_unique, self.device, torch.int64, master_rank=0)
+            # breakpoint()
             wf_value_unique = broadcast_tensor(
                 wf_value_unique, self.device, self.dtype, master_rank=0
             )

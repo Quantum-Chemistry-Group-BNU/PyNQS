@@ -18,6 +18,7 @@ from pyscf import fci
 from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string
 from utils.integral import read_integral, integral_pyscf
 from utils import convert_onv, get_fock_space
+from utils.distributed import get_rank
 from utils.loggings import dist_print
 from vmc.ansatz import RBMWavefunction, RNNWavefunction, RBMSites, DecoderWaveFunction
 from vmc.optim import VMCOptimizer, GD
@@ -36,6 +37,7 @@ if __name__ == "__main__":
     # dist.init_process_group("nccl")
     dist.init_process_group("gloo")
     device = "cuda"
+    # init_process(backend="nccl", device=device)
     # local_rank = int(os.environ["LOCAL_RANK"])
     local_rank = 0
     # seed =int(time.time_ns() % 2**31)
@@ -45,6 +47,7 @@ if __name__ == "__main__":
     #     torch.cuda.set_device(local_rank)
     logger.remove()
     logger.add(dist_print, format="{message}", enqueue=True, level="DEBUG")
+    rank = get_rank()
     # electronic structure information
     # if dist.get_rank() == 0:
     #     atom: str = ""
@@ -82,7 +85,7 @@ if __name__ == "__main__":
     #         },
     #         "./molecule/H8-2.00.pth",
     #     )
-    e = torch.load("./molecule/H4-1.60.pth", map_location="cpu")
+    e = torch.load("./molecule/H8-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -103,7 +106,8 @@ if __name__ == "__main__":
         "nva": (sorb - nele) // 2,
     }
     e_lst = e["e_lst"]
-    print(e_lst)
+    if rank == 0:
+        logger.info(f"e_lst: {e_lst}")
     electron_info = ElectronInfo(info_dict, device=device)
 
     # pre-train wavefunction, fci_wf and ucisd_wf
@@ -155,13 +159,14 @@ if __name__ == "__main__":
         phase_hidden_size=[512, 521],
         n_out_phase=4,
         use_kv_cache=True,
-        norm_method=1,
+        norm_method=0,
     )
 
     ansatz = transformer
-    net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
-    print(net_param_num(ansatz))
-    print(sum(map(torch.numel, ansatz.parameters())))
+    if rank == 0:
+        net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
+        logger.info(net_param_num(ansatz))
+        logger.info(sum(map(torch.numel, ansatz.parameters())))
     # summary(ansatz, input_size=(int(1.0e6), 20))
     # breakpoint()
     if device == "cuda":
@@ -175,7 +180,7 @@ if __name__ == "__main__":
     # torch.save({"model": model.state_dict(), "h1e": h1e, "h2e": h2e}, "test.pth")
     sampler_param = {
         "n_sample": int(1.0e10),
-        "debug_exact": True,
+        "debug_exact": False, # exact optimzation
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -188,9 +193,9 @@ if __name__ == "__main__":
         "use_sample_space": False,
         "eps": 1.0e-10,
         "only_AD": False,
-       # "use_same_tree": True, # different rank-sample
+        "use_same_tree": True, # different rank-sample
         "min_batch": 1000,
-       # "min_tree_height": 8, # different rank-sample
+        "min_tree_height": 4, # different rank-sample
     }
     opt_type = optim.Adam
     opt_params = {"lr": 1.0, "betas": (0.9, 0.99), "weight_decay": 0.0}
@@ -234,8 +239,9 @@ if __name__ == "__main__":
     # breakpoint()
     opt_vmc.run()
     e_ref = e_lst[0]
-    print(e_lst, seed)
     opt_vmc.summary(e_ref, e_lst)
+    if rank == 0:
+        logger.info(f"e-ref: {e_ref:.10f}, seed: {seed}")
     # psi = opt_vmc.model(onv_to_tensor(ci_space, sorb))
     # psi /= psi.norm()
     # dim = ci_space.size(0)

@@ -5,7 +5,7 @@ from typing import List, Union, Callable
 from torch import Tensor, nn
 
 from libs.C_extension import constrain_make_charts
-
+from utils.distributed import get_rank
 
 @torch.no_grad()
 def symmetry_mask(
@@ -190,15 +190,18 @@ class OrbitalBlock(nn.Module):
         self.layers = []
         # Embedding
         self.use_embedding = use_embedding
+        self.rank = get_rank()
         if use_embedding:
             self.tgt_emb = nn.Embedding(tgt_vocab_size, d_model)
             self.pos_emb = nn.Embedding(64, d_model)
             num_in = d_model
             # self.layers.append(self.tgt_emb)
-            print(f"using phase embedding tgt_vocab_size: {tgt_vocab_size}, d_model: {d_model}")
+            if self.rank == 0:
+                print(f"using phase embedding tgt_vocab_size: {tgt_vocab_size}, d_model: {d_model}")
 
         layer_dims = [num_in] + n_hid + [num_out]
-        print(f"phase layer dims: {layer_dims}")
+        if self.rank == 0:
+            print(f"phase layer dims: {layer_dims}")
         for i, (n_in, n_out) in enumerate(zip(layer_dims, layer_dims[1:])):
             if batch_norm:
                 l = [

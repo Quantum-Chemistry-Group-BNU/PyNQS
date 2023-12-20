@@ -22,7 +22,7 @@ from vmc.ansatz.utils import (
     NormAbsProbAmps,
     SoftmaxSignProbAmps,
 )
-from utils.public_function import multinomial_tensor, split_batch_idx, setup_seed
+from utils.public_function import multinomial_tensor, split_batch_idx, split_length_idx, setup_seed
 from utils.distributed import get_rank, get_world_size, synchronize
 
 KVCaches = NewType("KVCaches", List[Tuple[Tensor, Tensor]])
@@ -271,7 +271,7 @@ class DecoderWaveFunction(nn.Module):
             )[0]
         else:
             dim = x0.size(0)
-            idx_lst = split_batch_idx(dim, min_batch)
+            idx_lst = split_batch_idx(dim, min_batch=min_batch)
             amp = torch.empty(dim, int(k / 2 + 1), 4, **self.factory_kwargs)
             begin = 0
 
@@ -441,9 +441,12 @@ class DecoderWaveFunction(nn.Module):
 
         # the different rank sampling using the the same QuadTree or BinaryTree
         dim = sample_unique.size(0)
-        idx_rank_lst = [0] + split_batch_idx(dim, np.ceil(dim / self.world_size))
+        idx_rank_lst = [0] + split_length_idx(dim, length=self.world_size)
         begin = idx_rank_lst[self.rank]
         end = idx_rank_lst[self.rank + 1]
+        if self.rank == 0:
+            logger.info(f"dim: {dim}, world-size: {self.world_size}", master=True)
+            logger.info(f"idx_rank_lst: {idx_rank_lst}", master=True)
         sample_unique = sample_unique[begin:end]
         sample_counts = sample_counts[begin:end]
         amp_k = amp_k[begin:end]
@@ -471,8 +474,8 @@ class DecoderWaveFunction(nn.Module):
                 phases = phases.gather(1, index).view(-1)
 
         if self.norm_method == 3:
-                sign = (amps_value > 0) * 2 - 1
-                amps_value = amps_value.abs().sqrt() * sign
+            sign = (amps_value > 0) * 2 - 1
+            amps_value = amps_value.abs().sqrt() * sign
         if self.compute_phase:
             phases = torch.complex(torch.zeros_like(phases), phases).exp()
             if self.norm_method == 0:
@@ -549,8 +552,8 @@ class DecoderWaveFunction(nn.Module):
                 phases = phases.gather(1, index).view(-1)
 
         if self.norm_method == 3:
-                sign = (amps_value > 0) * 2 -1
-                amps_value = amps_value.abs().sqrt() * sign
+            sign = (amps_value > 0) * 2 - 1
+            amps_value = amps_value.abs().sqrt() * sign
         if self.compute_phase:
             phases = torch.complex(torch.zeros_like(phases), phases).exp()
             if self.norm_method == 0:
@@ -619,8 +622,8 @@ class DecoderWaveFunction(nn.Module):
                 phases = phase.gather(1, index).view(-1)
         # print(torch.stack(amp_list, dim=1).exp())
         if self.norm_method == 3:
-                sign = (amps_value > 0) * 2 -1
-                amps_value = amps_value.abs().sqrt() * sign
+            sign = (amps_value > 0) * 2 - 1
+            amps_value = amps_value.abs().sqrt() * sign
         if self.compute_phase:
             phases = torch.complex(torch.zeros_like(phases), phases).exp()
             if self.norm_method == 0:
