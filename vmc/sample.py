@@ -560,8 +560,8 @@ class Sampler:
         r"""
         Returns:
         -------
-            e_total(complex|float): total energy(a.u.)
-            eloc(Tensor): local energy
+            e_total(complex|float): total energy(Single-Rank)
+            eloc(Tensor): local energy(Single-Rank)
             placeholders(Tensor): state prob if exact optimization, else zeros tensor
         """
         # this is applied when pre-train

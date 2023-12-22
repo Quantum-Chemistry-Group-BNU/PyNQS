@@ -17,7 +17,13 @@ from loguru import logger
 
 from libs.C_extension import onv_to_tensor, get_hij_torch
 from vmc.sample import Sampler
-from utils import check_para, ElectronInfo, find_common_state, state_to_string
+from utils.public_function import (
+    check_para,
+    ElectronInfo,
+    find_common_state,
+    state_to_string,
+    split_length_idx,
+)
 from utils.distributed import (
     all_reduce_tensor,
     all_gather_tensor,
@@ -39,22 +45,32 @@ class CIWavefunction:
     coeff: Tensor
     space: Tensor
     device: str
+    norm: float
 
-    def __init__(self, coeff: Union[Tensor, ndarray], onstate: Tensor, device: str = None) -> None:
+    def __init__(
+        self,
+        coeff: Union[Tensor, ndarray],
+        onstate: Tensor,
+        norm_coeff: bool = False,
+        device: str = None,
+    ) -> None:
         self.device = device
-        self._check_type(coeff, onstate)
-
-    def _check_type(self, coeff, onstate):
         assert isinstance(coeff, (ndarray, Tensor))
-        assert isinstance(onstate, Tensor)
-        check_para(onstate)
+        check_para(onstate)  # onstate is torch.uint8
+
         if isinstance(coeff, ndarray):
+            # convert to torch.Tensor
             self.coeff = torch.from_numpy(coeff).clone().to(self.device)
         else:
+            # clone avoid shallow copy
             self.coeff = coeff.clone().to(self.device)
-        # self.coeff.div_(torch.norm(self.coeff))
-        self.coeff = self.coeff / self.coeff.norm()
+        if norm_coeff:
+            # normalization coeff
+            self.coeff = self.coeff / self.coeff.norm()
+        self.norm = self.coeff.norm().item()
         self.space = onstate.to(self.device)
+        # check dim
+        assert self.space.shape[0] == self.coeff.shape[0]
 
     def energy(self, e: ElectronInfo) -> float:
         h1e = e.h1e.to(self.device)
@@ -65,12 +81,19 @@ class CIWavefunction:
         return energy_CI(self.coeff, self.space, h1e, h2e, ecore, sorb, nele)
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}, CI shape: {self.coeff.shape[0]}"
+        s = f" CI shape: {self.coeff.shape[0]}, norm: {self.norm():.6f}"
+        return f"{type(self).__name__, {s}}"
 
 
 @torch.no_grad()
 def energy_CI(
-    coeff: Tensor, onstate: Tensor, h1e: Tensor, h2e: Tensor, ecore: float, sorb: int, nele: int
+    coeff: Tensor,
+    onstate: Tensor,
+    h1e: Tensor,
+    h2e: Tensor,
+    ecore: float,
+    sorb: int,
+    nele: int,
 ) -> float:
     """
     e = <psi|H|psi>/<psi|psi>
@@ -99,7 +122,7 @@ class CITrain:
     onstate: Tensor
     pre_max_iter: int
     nprt: int
-    LOSS_TYPE = ("sample", "onstate")
+    LOSS_TYPE = ("sample", "onstate", "lsm-phase", "lsm")
 
     def __init__(
         self,
@@ -114,19 +137,24 @@ class CITrain:
     ) -> None:
         r"""
         Pre train CI wavefunction.
-        Args:
+
+        Parameters
+        ----------
             model: the nqs model
             opt: Optimizer
             pre_CI: the pre_trained CI wavefunction
             pre_train_info: a dict include "pre_max_inter", "interval" and "loss_type"
             pre_max_inter: the max time of pre-train, default: 200
             interval: print time, if == -1; print each step 'loss ' and 'ovlp', default: -1
-            loss_type: the type of loss functions, there are two loss functions: ('sample', 'onstate'),
+            loss_type: the type of loss functions, there are four loss functions:
+                ('sample', 'onstate', "lsm-phase", "lsm"),
                 default: 'onstate'
                 'sample': this is similar to VMC progress, 'see function 'QGT_loss'.
                     notice: loss is meaningless, and focus on ovlp
                 'onstate': only fits CI-space coefficient and usually is imprecise,
                     but could get relatively well initial parameters.
+                'lsm': Least Squares Method fits coefficient and used in auto-regressive ansatz (RNN, Transformer)
+                'lsm-phase', this is similar to 'lsm' and with Global-Phase exp(i * phi)
             sorb: the number of spin orbital
             dtype: Default torch.double
             lr_scheduler: the schedule of the learning rate
@@ -149,7 +177,9 @@ class CITrain:
         # pre ci-space uint8
         self.onstate = pre_CI.space
         # pre ci-space double
+        # FIXME:(zbwu-23-12-22): check multi-Rank
         self.ci_state = onv_to_tensor(self.onstate, self.sorb)
+        self.ci_norm = pre_CI.norm
 
         # Log output frequency
         self.pre_max_iter = pre_train_info.get("pre_max_iter", 200)
@@ -165,14 +195,35 @@ class CITrain:
         # loss function type
         self.loss_type: str = pre_train_info.get("loss_type", "onstate").lower()
         if not self.loss_type in self.LOSS_TYPE:
-            raise ValueError(f"Loss function type{self.loss_type} not in {self.LOSS_TYPE}, ")
+            raise TypeError(f"Loss function type{self.loss_type} not in {self.LOSS_TYPE}")
+
+        # global-phase exp(i * phi)
+        self.use_global_phase = False
+        if self.loss_type in ("lsm-phase"):
+            self.use_global_phase = True
+
+        # only support AR-ansatz, RNN, transformer, AR-RBM
+        if self.loss_type in ("lsm", "lsm-phase"):
+            if not hasattr(self.model.module, "ar_sampling"):
+                raise TypeError(f"loss function {self.loss_type} only support AR-ansatz")
+
+            # split-different rank
+            dim = pre_CI.coeff.size(0)
+            idx_lst = [0] + split_length_idx(dim, length=self.world_size)
+            begin = idx_lst[self.rank]
+            end = idx_lst[self.rank + 1]
+            self.rank_ci_state = self.ci_state[begin:end]
+            self.rank_pre_ci_coeff = self.pre_ci_coeff[begin:end]
 
         # record optim
         self.n_para = len(list(self.model.parameters()))
-        self.grad_lst: List[Tensor] = [[] for _ in range(self.n_para)]
+        self.grad_e_lst = [[], []]  # grad_L2, grad_max
 
     def train(
-        self, prefix: str = None, electron_info: ElectronInfo = None, sampler: Sampler = None
+        self,
+        prefix: str = None,
+        electron_info: ElectronInfo = None,
+        sampler: Sampler = None,
     ) -> None:
         """
         the train process
@@ -192,6 +243,7 @@ class CITrain:
             electron_info = sampler.ele_info
         flag_energy: bool = True if electron_info is not None else False
         if flag_energy:
+            # FIXME:(zbwu-23-12-22) OOM if Fe2S2
             get_energy = partial(
                 energy_CI,
                 h1e=electron_info.h1e,
@@ -200,7 +252,18 @@ class CITrain:
                 sorb=electron_info.sorb,
                 nele=electron_info.nele,
             )
-            self.eCI_ref = get_energy(self.pre_ci_coeff, self.onstate)
+            dim = self.pre_ci_coeff.size(0)
+            if  dim > 10000:
+                # e = \sum_{ij}c_i<i|H|j>c_j*
+                warnings.warn(
+                    f"CI-coeff dim: {dim} to large, does not calculate e-ref avoiding OOM",
+                    ResourceWarning,
+                )
+                self.eCI_ref = 0.00
+            else:
+                self.eCI_ref = get_energy(self.pre_ci_coeff, self.onstate)
+
+        # logging
         if self.rank == 0:
             logger.info(f"Begin pre-train: {time.ctime()}", master=True)
             if self.loss_type == "sample":
@@ -208,19 +271,23 @@ class CITrain:
                 s += f"Loss is meaningless, and focus on ovlp{'*'*20}"
                 logger.info(s, master=True)
             elif self.loss_type == "onstate" and self.world_size > 1:
-                warnings.warn(
-                    "Loss-type(onstate) dose not support distributed pre-train", FutureWarning
-                )
+                raise FutureWarning("Loss-type(onstate) dose not support distributed pre-train")
 
+        # begin pre-train
         begin = time.time_ns()
         self.opt.zero_grad()
+        self.sampler = sampler
         for epoch in range(self.pre_max_iter + 1):
             t0 = time.time_ns()
             if self.loss_type == "onstate":
                 loss, ovlp, model_coeff = self.sqaure_loss()
                 onstate = self.onstate
             elif self.loss_type == "sample":
-                loss, ovlp, sample_unique, sample_counts, state_prob = self.QGT_loss(sampler, epoch)
+                loss, ovlp, sample_unique, sample_counts, state_prob = self.QGT_loss(epoch)
+            elif self.loss_type == "lsm":
+                loss, ovlp = self.test_loss()
+            elif self.loss_type == "lsm-phase":
+                loss, ovlp = self.test_phase_loss()
 
             if epoch <= self.pre_max_iter:
                 loss.backward()
@@ -228,17 +295,17 @@ class CITrain:
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
 
-            # save the ovlp grad
+            # record L2-grad and Max-grad
             if self.rank == 0:
-                grad_sum = 0.0
-                param_sum = 0.0
+                x: List[np.ndarray] = []
                 for i, param in enumerate(self.model.parameters()):
                     if param.grad is not None:
-                        grad_sum += np.abs(param.grad.reshape(-1).detach().to("cpu").numpy()).sum()
-                        param_sum += param.data.reshape(-1).detach().to("cpu").abs().numpy().sum()
-                        self.grad_lst[i].append(param.grad.reshape(-1).detach().to("cpu").numpy())
-                    else:
-                        self.grad_lst[i].append(np.zeros(param.numel()))
+                        x.append(param.grad.reshape(-1).detach().to("cpu").numpy())
+                x = np.concatenate(x)
+                l2_grad = np.linalg.norm(x)
+                max_grad = np.abs(x).max()
+                self.grad_e_lst[0].append(l2_grad)
+                self.grad_e_lst[1].append(max_grad)
             self.opt.zero_grad()
 
             # if self.rank == 0:
@@ -250,7 +317,7 @@ class CITrain:
             reduce_loss = all_reduce_tensor(loss, world_size=self.world_size, in_place=False)[0]
             reduce_ovlp = all_reduce_tensor(ovlp, world_size=self.world_size, in_place=False)[0]
             synchronize()
-            # logger.info(f"epoch: {epoch}, ovlp: {reduce_ovlp.norm().detach().item():.10f}")
+            logger.info(f"epoch: {epoch}, ovlp: {reduce_ovlp.norm().detach().item():.10f}")
             if self.rank == 0:
                 self.ovlp_list.append(reduce_ovlp.norm().detach().to("cpu").item())
                 self.loss_list.append(reduce_loss.detach().to("cpu").item())
@@ -260,8 +327,11 @@ class CITrain:
             if (epoch == 0) or (epoch == self.pre_max_iter):
                 if flag_energy:
                     if self.loss_type == "onstate":
-                        e_total = get_energy(model_coeff, onstate)
-                    else:
+                        # avoid OOM
+                        # e_total = get_energy(model_coeff, onstate)
+                        e_total = self.sampler.run(initial_state=self.onstate[0], epoch=0)[3]
+                    elif self.loss_type == "sample":
+                        # single-Rank
                         e_rank = self.sampler.calculate_energy(
                             sample_unique, state_prob, sample_counts
                         )[0]
@@ -269,6 +339,11 @@ class CITrain:
                         all_reduce_tensor(e_rank, world_size=self.world_size)
                         synchronize()
                         e_total = e_rank.item().real
+                    elif self.loss_type in ("lsm-phase", "lsm"):
+                        # calculate total-energy use VMC
+                        # FIXME:(zbwu-23-12-22) ovlp: 9.9396E-01, but energy is error????????
+                        # H6-1.60, ci = -2.8953282877973945, VMC = -2.5045347358
+                        e_total = self.sampler.run(initial_state=self.onstate[0], epoch=0)[3]
                     if epoch == 0:
                         eCI_begin = e_total
                     else:
@@ -295,7 +370,7 @@ class CITrain:
                         },
                         checkpoint_file,
                     )
-
+        breakpoint()
         # END-pre-train
         if self.rank == 0:
             delta = (time.time_ns() - begin) / 1.0e09
@@ -323,7 +398,6 @@ class CITrain:
 
     def QGT_loss(
         self,
-        sampler: Sampler,
         epoch: int,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         r"""
@@ -347,7 +421,6 @@ class CITrain:
         with torch.no_grad():
             # notice onstate[0] is HF state
             dim = self.onstate.shape[0]
-            self.sampler = sampler
             initial_state = self.onstate[random.randrange(dim)].clone().detach()
             if self.exact:
                 # fci-space isn't pre-ci space
@@ -393,6 +466,7 @@ class CITrain:
         if torch.any(torch.isnan(log_psi)):
             raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
 
+        # TODO:(zbwu-23-12-22) batch-loss backward
         # NOTICE: idx_sample maybe is empty
         loss1 = torch.sum(oloc * log_psi.conj() * state_prob)
         loss2 = ovlp_mean * torch.sum(log_psi.conj() * state_prob)
@@ -413,8 +487,10 @@ class CITrain:
         """
         local_ovlp = <n|psi_ci><psi_ci|psi>/<n|psi>
         """
-        nbatch = psi_sample.size(0)
+        nbatch = psi_sample.size(0)  # Avery-rank sample
         oloc = torch.zeros(nbatch, dtype=self.dtype, device=self.device)
+
+        # All-Rank
         model_psi = self.model(self.ci_state).to(self.dtype)  # <n|psi_ci>
         psi0 = torch.dot(self.pre_ci_coeff.conj(), model_psi)  # <psi_ci|psi>
         # print(f"<psi_ci|psi>: {psi0.norm().item():.20f}")
@@ -423,20 +499,48 @@ class CITrain:
         # print(f"oloc: {oloc_nonzero.norm():.20f}")
         # ovlp part is non-zero, other part is zeros
         oloc[idx_sample] = oloc_nonzero
-        ovlp = torch.dot(oloc, prob)
+        # divide <psi_ci|psi_ci>
+        ovlp = torch.dot(oloc, prob) / self.ci_norm
         del oloc_nonzero
         return ovlp, oloc
 
-    def plot_figure(self, prefix: str = None):
+    def test_loss(self) -> Tuple[Tensor, Tensor]:
+        """
+        Loss = \sum_i (psi_i - psi_i^{ci})**2
+        """
+        psi = self.model(self.rank_ci_state.requires_grad_())
+        loss = torch.sum((psi - self.rank_pre_ci_coeff).norm().pow(2)) * self.world_size
+        with torch.no_grad():
+            # * self.world_size: DDP All-Reduce
+            ovlp = torch.dot(psi, self.rank_pre_ci_coeff) * self.world_size
+        return loss, ovlp.detach()
+
+    def test_phase_loss(self) -> Tuple[Tensor, Tensor]:
+        """
+        Loss = \sum_i (psi_i * exp(i * phi) - psi_i^{ci})**2
+        """
+        psi = self.model(self.rank_ci_state.requires_grad_(), use_global_phase=True)
+        loss = torch.sum((psi - self.rank_pre_ci_coeff).norm().pow(2)) * self.world_size
+        with torch.no_grad():
+            ovlp = torch.dot(psi, self.rank_pre_ci_coeff) * self.world_size
+        if self.rank == 0:
+            # * self.world_size: DDP All-Reduce
+            logger.info(f"global-phase: {self.model.module.global_phase()}")
+        return loss, ovlp.detach()
+
+    def plot_figure(self, prefix: str = None) -> None:
         prefix = prefix if prefix is not None else "CI"
         fig = plt.figure()
         x = np.arange(self.pre_max_iter + 1)
-        ax1 = fig.add_subplot(2, 1, 1)
-        ax1.plot(x, np.array(self.loss_list), color="cadetblue", label="Loss")
-        ax1.plot(x, np.abs(self.ovlp_list), color="tomato", label="Ovlp")
-        ax1.legend(loc="best")
-        ax1.set_xlabel("Iteration Time")
-        ax1.set_ylabel("Loss/Ovlp")
+        ax = fig.add_subplot(2, 1, 1)
+        line1 = ax.plot(x, np.array(self.loss_list), color="cadetblue", label="Loss")
+        ax.set_ylabel("Loss")
+        ax1 = ax.twinx()
+        line2 = ax1.plot(x, np.abs(self.ovlp_list), color="tomato", label="Ovlp")
+        ax1.set_ylabel("ovlp")
+        lines = line1 + line2
+        labels = [name.get_label() for name in lines]
+        ax.legend(lines, labels, loc="best")
         # ax2 = fig.add_subplot(3, 1, 2)
         # ax2.plot(x, np.abs(self.ovlp_list), color='tomato', label="Ovlp")
         # ax2.legend(loc="best")
@@ -444,19 +548,11 @@ class CITrain:
         # ax2.set_ylabel("Ovlp")
 
         # plot the L2-norm and max-abs of the gradients
-        param_L2: List[np.ndarray] = []
-        param_max: List[np.ndarray] = []
-        for i in range(self.n_para):
-            x = np.linalg.norm(np.array(self.grad_lst[i]), axis=1)  # ||g||
-            param_L2.append(x)
-            x1 = np.abs(np.array(self.grad_lst[i])).max(axis=1)  # max
-            param_max.append(x1)
-        param_L2 = np.stack(param_L2, axis=1).sum(axis=1)
-        param_max = np.stack(param_max, axis=1).max(axis=1)
-
+        param_L2 = np.asarray(self.grad_e_lst[0])
+        param_max = np.asarray(self.grad_e_lst[1])
         ax2 = fig.add_subplot(2, 1, 2)
-        ax2.plot(np.arange(len(param_L2)), param_L2, label="||g||")
-        ax2.plot(np.arange(len(param_max)), param_max, label="max|g|")
+        ax2.plot(np.arange(len(param_L2)), param_L2, label=r"$||g||$")
+        ax2.plot(np.arange(len(param_max)), param_max, label=r"$||g||_{\infty}$")
         ax2.set_xlabel("Iteration Time")
         ax2.set_yscale("log")
         ax2.set_ylabel("Gradients")
@@ -472,9 +568,10 @@ class CITrain:
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}(\n"
-            + f"    Pre-train model: {self.model}\n"
+            # + f"    Pre-train model: {self.model}\n" # avoid repeat print
             + f"    Pre-train time: {self.pre_max_iter}\n"
             + f"    the number of CI coeff: {self.pre_ci_coeff.shape[0]}\n"
+            + f"    CI-coeff norm: {self.ci_norm:.6f}"
             + f"    Loss function type: {self.loss_type}\n"
             + ")"
         )
