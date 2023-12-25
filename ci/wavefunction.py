@@ -23,6 +23,7 @@ from utils.public_function import (
     find_common_state,
     state_to_string,
     split_length_idx,
+    split_batch_idx,
 )
 from utils.distributed import (
     all_reduce_tensor,
@@ -134,6 +135,8 @@ class CITrain:
         dtype=torch.double,
         lr_scheduler=None,
         exact: bool = False,
+        AD_MAX_DIM: int = -1,
+        FR_MAX_DIM: int = -1,
     ) -> None:
         r"""
         Pre train CI wavefunction.
@@ -207,17 +210,22 @@ class CITrain:
             if not hasattr(self.model.module, "ar_sampling"):
                 raise TypeError(f"loss function {self.loss_type} only support AR-ansatz")
 
-            # split-different rank
-            dim = pre_CI.coeff.size(0)
-            idx_lst = [0] + split_length_idx(dim, length=self.world_size)
-            begin = idx_lst[self.rank]
-            end = idx_lst[self.rank + 1]
-            self.rank_ci_state = self.ci_state[begin:end]
-            self.rank_pre_ci_coeff = self.pre_ci_coeff[begin:end]
+        # split-different rank
+        dim = pre_CI.coeff.size(0)
+        idx_lst = [0] + split_length_idx(dim, length=self.world_size)
+        begin = idx_lst[self.rank]
+        end = idx_lst[self.rank + 1]
+        self.rank_ci_state = self.ci_state[begin:end]
+        self.rank_pre_ci_coeff = self.pre_ci_coeff[begin:end]
 
         # record optim
         self.n_para = len(list(self.model.parameters()))
         self.grad_e_lst = [[], []]  # grad_L2, grad_max
+
+        # max auto-grad/backward dim
+        self.AD_MAX_DIM = AD_MAX_DIM
+        # max forward dim
+        self.FR_MAX_DIM = FR_MAX_DIM
 
     def train(
         self,
@@ -253,11 +261,10 @@ class CITrain:
                 nele=electron_info.nele,
             )
             dim = self.pre_ci_coeff.size(0)
-            if  dim > 10000:
+            if dim > 10000:
                 # e = \sum_{ij}c_i<i|H|j>c_j*
                 warnings.warn(
-                    f"CI-coeff dim: {dim} to large, does not calculate e-ref avoiding OOM",
-                    ResourceWarning,
+                    f"CI-coeff dim: {dim} to large, does not calculate e-ref avoiding OOM"
                 )
                 self.eCI_ref = 0.00
             else:
@@ -271,7 +278,7 @@ class CITrain:
                 s += f"Loss is meaningless, and focus on ovlp{'*'*20}"
                 logger.info(s, master=True)
             elif self.loss_type == "onstate" and self.world_size > 1:
-                raise FutureWarning("Loss-type(onstate) dose not support distributed pre-train")
+                raise SyntaxError("Loss-type(onstate) dose not support distributed pre-train")
 
         # begin pre-train
         begin = time.time_ns()
@@ -281,19 +288,22 @@ class CITrain:
             t0 = time.time_ns()
             if self.loss_type == "onstate":
                 loss, ovlp, model_coeff = self.sqaure_loss()
-                onstate = self.onstate
             elif self.loss_type == "sample":
                 loss, ovlp, sample_unique, sample_counts, state_prob = self.QGT_loss(epoch)
-            elif self.loss_type == "lsm":
-                loss, ovlp = self.test_loss()
+            elif self.loss_type in "lsm":
+                loss, ovlp = self.test_phase_loss(use_global_phase=False)
             elif self.loss_type == "lsm-phase":
-                loss, ovlp = self.test_phase_loss()
+                loss, ovlp = self.test_phase_loss(use_global_phase=True)
 
             if epoch <= self.pre_max_iter:
-                loss.backward()
                 self.opt.step()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
+
+            # if self.rank == 0:
+            #     for param in self.model.parameters():
+            #         print(param.grad.reshape(-1))
+            #         break
 
             # record L2-grad and Max-grad
             if self.rank == 0:
@@ -317,7 +327,6 @@ class CITrain:
             reduce_loss = all_reduce_tensor(loss, world_size=self.world_size, in_place=False)[0]
             reduce_ovlp = all_reduce_tensor(ovlp, world_size=self.world_size, in_place=False)[0]
             synchronize()
-            logger.info(f"epoch: {epoch}, ovlp: {reduce_ovlp.norm().detach().item():.10f}")
             if self.rank == 0:
                 self.ovlp_list.append(reduce_ovlp.norm().detach().to("cpu").item())
                 self.loss_list.append(reduce_loss.detach().to("cpu").item())
@@ -341,8 +350,6 @@ class CITrain:
                         e_total = e_rank.item().real
                     elif self.loss_type in ("lsm-phase", "lsm"):
                         # calculate total-energy use VMC
-                        # FIXME:(zbwu-23-12-22) ovlp: 9.9396E-01, but energy is error????????
-                        # H6-1.60, ci = -2.8953282877973945, VMC = -2.5045347358
                         e_total = self.sampler.run(initial_state=self.onstate[0], epoch=0)[3]
                     if epoch == 0:
                         eCI_begin = e_total
@@ -370,7 +377,12 @@ class CITrain:
                         },
                         checkpoint_file,
                     )
-        breakpoint()
+        # e_ci = get_energy(self.model(self.ci_state), self.onstate)
+        # p = self.sampler.run(initial_state=self.onstate[0], epoch=0)
+        # fci_space = self.sampler.ci_space
+        # e_ci1 = get_energy(self.model((onv_to_tensor(fci_space, self.sorb))), fci_space)
+        # print(e_ci, p[3], e_ci1)
+        # breakpoint()
         # END-pre-train
         if self.rank == 0:
             delta = (time.time_ns() - begin) / 1.0e09
@@ -436,12 +448,12 @@ class CITrain:
                     initial_state, epoch=epoch
                 )
 
-        # XXX: This is little redundance, psi_unique have been calculated when sampling
-        psi = self.model(onv_to_tensor(sample_unique, self.sorb).requires_grad_()).to(self.dtype)
-        psi_detach = psi.clone().detach()
+        states_sample = onv_to_tensor(sample_unique, self.sorb)  # uint8 -> +1/-1
         if self.exact:
             # Gather all psi from very rank
-            all_psi = gather_tensor(psi_detach, self.device, self.world_size)
+            psi = self.model(states_sample).to(self.dtype)
+            psi_sample = psi.clone().detach()
+            all_psi = gather_tensor(psi_sample, self.device, self.world_size)
             synchronize()
             if self.rank == 0:
                 all_psi = torch.cat(all_psi)
@@ -459,20 +471,21 @@ class CITrain:
         state_prob = state_prob.to(self.dtype)
 
         # calculate local ovlp
-        ovlp, oloc = self.get_local_ovlp(state_prob, psi_detach, idx_sample, idx_ci)
+        if not self.exact:
+            if self.sampler.use_LUT:
+                # use Wavefunction LUT
+                not_idx, psi_sample = self.sampler.WF_LUT.lookup(sample_unique)[1:]
+                # sample_unique from sampling, so sample-unique must been found in WF_LUT.
+                assert not_idx.size(0) == 0
+            else:
+                warnings.warn(f"use 'WF_LUT = True' to reduce calculation")
+                psi_sample = self.model(states_sample).to(self.dtype)
+
+        ovlp, oloc = self.get_local_ovlp(state_prob, psi_sample, idx_sample, idx_ci)
         ovlp_mean = all_reduce_tensor(ovlp, world_size=self.world_size, in_place=False)[0]
 
-        log_psi = psi.log()
-        if torch.any(torch.isnan(log_psi)):
-            raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
-
-        # TODO:(zbwu-23-12-22) batch-loss backward
-        # NOTICE: idx_sample maybe is empty
-        loss1 = torch.sum(oloc * log_psi.conj() * state_prob)
-        loss2 = ovlp_mean * torch.sum(log_psi.conj() * state_prob)
-        loss = 2 * (loss1 - loss2).real
-        # print(f"loss: {loss.item():.15f}")
-        # logger.info(f"ovlp: {ovlp}, loss: {loss}")
+        # self.AD_MAX_DIM = 20
+        loss = self.sample_ovlp_grad(states_sample, oloc, ovlp_mean, state_prob, self.AD_MAX_DIM)
 
         del idx_ci, idx_sample, oloc
         if loss.is_cuda:
@@ -480,23 +493,88 @@ class CITrain:
 
         return (loss, ovlp, sample_unique, sample_counts, state_prob)
 
+    def sample_ovlp_grad(
+        self,
+        states: Tensor,
+        oloc: Tensor,
+        ovlp_mean: Tensor,
+        state_prob: Tensor,
+        AD_MAX_DIM: int = -1,
+    ) -> Tensor:
+        """
+        this is similar to vmc/grad/energy_grad/_ad_grad
+        """
+        dim = oloc.size(0)
+        if AD_MAX_DIM == -1:
+            min_batch = dim
+        else:
+            min_batch = AD_MAX_DIM
+        idx_lst = split_batch_idx(dim=dim, min_batch=min_batch)
+        # logger.info((oloc.dim(), min_batch))
+        # logger.info(f"idx_lst: {idx_lst}")
+
+        loss_sum = torch.zeros(1, device=oloc.device, dtype=torch.double)
+
+        def batch_loss_backward(begin: int, end: int) -> None:
+            nonlocal loss_sum
+            log_psi_batch = self.model(states[begin:end].requires_grad_()).to(self.dtype).log()
+            state_prob_batch = state_prob[begin:end]
+            oloc_batch = oloc[begin:end]
+
+            if torch.any(torch.isnan(log_psi_batch)):
+                raise ValueError(
+                    f"There are negative numbers in the log-psi, please use complex128"
+                )
+
+            loss1 = torch.sum(oloc_batch * log_psi_batch * state_prob_batch)
+            loss2 = ovlp_mean * torch.sum(log_psi_batch.conj() * state_prob_batch)
+            loss = 2 * (loss1 - loss2).real
+            loss.backward()
+            loss_sum += loss.detach()
+
+            # clean memory cache
+            if loss.is_cuda:
+                torch.cuda.empty_cache()
+
+        # disable gradient synchronizations in the rank
+        begin = 0
+        with self.model.no_sync():
+            for i in range(len(idx_lst) - 1):
+                end = idx_lst[i]
+                batch_loss_backward(begin, end)
+                begin = end
+
+        end = idx_lst[-1]
+        # synchronization gradient in the rank
+        batch_loss_backward(begin, end)
+
+        return loss_sum
+
     @torch.no_grad()
     def get_local_ovlp(
         self, prob, psi_sample: Tensor, idx_sample: Tensor, idx_ci: Tensor
     ) -> Tuple[Tensor, Tensor]:
-        """
-        local_ovlp = <n|psi_ci><psi_ci|psi>/<n|psi>
-        """
-        nbatch = psi_sample.size(0)  # Avery-rank sample
-        oloc = torch.zeros(nbatch, dtype=self.dtype, device=self.device)
+        r"""
+        calculate local ovlp = <n|psi_ci><psi_ci|psi>/<n|psi>
 
-        # All-Rank
-        model_psi = self.model(self.ci_state).to(self.dtype)  # <n|psi_ci>
-        psi0 = torch.dot(self.pre_ci_coeff.conj(), model_psi)  # <psi_ci|psi>
-        # print(f"<psi_ci|psi>: {psi0.norm().item():.20f}")
+        Parameters
+        ----------
+            prob(Tensor): the probability of sample (Single-Rank)
+            psi_sample(Tensor): the WF of sample (Single-Rank)
+            idx_sample: the index of the common state in the sample(Single-Rank)
+            idx_ci: the index of the common state in the pre-CI state(Single-Rank)
+
+        Returns
+        -------
+            ovlp(Tensor): ovlp(Single-Rank)
+            oloc(Tensor): local ovlp(Single-Rank)
+        """
+        # Single-rank sample
+        oloc = torch.zeros(psi_sample.size(0), dtype=self.dtype, device=self.device)
+        # <psi_ci|psi>
+        psi0 = self._get_rank_psi0(self.FR_MAX_DIM)
         # <n|psi_ci><psi_ci|psi>/<n|psi>
         oloc_nonzero = -1 * (self.pre_ci_coeff[idx_ci] * psi0) / psi_sample[idx_sample]
-        # print(f"oloc: {oloc_nonzero.norm():.20f}")
         # ovlp part is non-zero, other part is zeros
         oloc[idx_sample] = oloc_nonzero
         # divide <psi_ci|psi_ci>
@@ -504,33 +582,117 @@ class CITrain:
         del oloc_nonzero
         return ovlp, oloc
 
-    def test_loss(self) -> Tuple[Tensor, Tensor]:
+    @torch.no_grad()
+    def _get_rank_psi0(self, FR_MAX_DIM: int = -1) -> Tensor:
+        """
+        calculate <psi_ci|psi> using distributed
+
+        Parameters
+        ----------
+            FR_MAX_DIM(int): default: -1
+
+        Returns
+        -------
+            psi0_all(Tensor), <psi_ci|psi>(all-rank)
+        """
+        dim = self.rank_ci_state.size(0)
+        if FR_MAX_DIM == -1:
+            min_batch = dim
+        else:
+            min_batch = self.FR_MAX_DIM
+        idx_lst = [0] + split_batch_idx(dim=dim, min_batch=min_batch)
+
+        # <n|psi_ci> single-rank
+        psi_rank = torch.empty(dim, dtype=self.dtype, device=self.device)
+        for i in range(len(idx_lst) - 1):
+            begin, end = idx_lst[i], idx_lst[i + 1]
+            ci_state_batch = self.rank_ci_state[begin:end]
+            psi_rank[begin:end] = self.model(ci_state_batch).to(self.dtype)
+
+        # <psi_ci|psi> single-rank
+        psi0 = torch.dot(self.rank_pre_ci_coeff.conj(), psi_rank) * self.world_size
+
+        # all-rank
+        all_reduce_tensor(psi0, world_size=self.world_size)
+        synchronize()
+
+        return psi0
+
+    def test_phase_loss(self, use_global_phase: bool = True) -> Tuple[Tensor, Tensor]:
         """
         Loss = \sum_i (psi_i - psi_i^{ci})**2
+        or \sum_i (psi_i * exp(i * phi) - psi_i^{ci})**2
+
+        Returns
+        -------
+            loss(Tensor):
+            ovlp(Tensor):
         """
-        psi = self.model(self.rank_ci_state.requires_grad_())
-        loss = torch.sum((psi - self.rank_pre_ci_coeff).norm().pow(2)) * self.world_size
-        with torch.no_grad():
-            # * self.world_size: DDP All-Reduce
-            ovlp = torch.dot(psi, self.rank_pre_ci_coeff) * self.world_size
+        # self.AD_MAX_DIM = 10
+        loss, ovlp = self.test_ovlp_grad(self.AD_MAX_DIM, use_global_phase=use_global_phase)
+        # if self.rank == 0 and use_global_phase:
+        #     logger.info(f"global-phase: {self.model.module.global_phase()}")
+
         return loss, ovlp.detach()
 
-    def test_phase_loss(self) -> Tuple[Tensor, Tensor]:
+    def test_ovlp_grad(
+        self,
+        AD_MAX_DIM: int = -1,
+        use_global_phase: bool = True,
+    ) -> Tuple[Tensor, Tensor]:
+        r"""
+        Loss = \sum_i (psi_i - psi_i^{ci})**2
+        or = \sum_i (psi_i * exp(i * phi) - psi_i^{ci})**2
         """
-        Loss = \sum_i (psi_i * exp(i * phi) - psi_i^{ci})**2
-        """
-        psi = self.model(self.rank_ci_state.requires_grad_(), use_global_phase=True)
-        loss = torch.sum((psi - self.rank_pre_ci_coeff).norm().pow(2)) * self.world_size
-        with torch.no_grad():
-            ovlp = torch.dot(psi, self.rank_pre_ci_coeff) * self.world_size
-        if self.rank == 0:
+        dim = self.rank_ci_state.size(0)
+        device = self.rank_ci_state.device
+        if AD_MAX_DIM == -1:
+            min_batch = dim
+        else:
+            min_batch = AD_MAX_DIM
+        idx_lst = split_batch_idx(dim=dim, min_batch=min_batch)
+
+        loss_sum = torch.zeros(1, device=device, dtype=torch.double)
+        ovlp_sum = torch.zeros(1, device=device, dtype=self.dtype)
+
+        def batch_loss_backward(begin: int, end: int) -> None:
+            nonlocal loss_sum, ovlp_sum
+            ci_state_batch = self.rank_ci_state[begin:end].requires_grad_()
+            ci_coeff_batch = self.rank_pre_ci_coeff[begin:end]
+            psi_batch = self.model(ci_state_batch, use_global_phase=use_global_phase)
             # * self.world_size: DDP All-Reduce
-            logger.info(f"global-phase: {self.model.module.global_phase()}")
-        return loss, ovlp.detach()
+            loss = torch.sum((psi_batch - ci_coeff_batch).norm().pow(2)) * self.world_size
+            loss.backward()
+
+            with torch.no_grad():
+                # * self.world_size: DDP All-Reduce
+                ovlp = torch.dot(psi_batch, ci_coeff_batch) * self.world_size
+                ovlp_sum += ovlp.detach()
+
+            loss_sum += loss.detach()
+            # clean memory cache
+            if loss.is_cuda:
+                torch.cuda.empty_cache()
+
+        # disable gradient synchronizations in the rank
+        begin = 0
+        with self.model.no_sync():
+            for i in range(len(idx_lst) - 1):
+                end = idx_lst[i]
+                batch_loss_backward(begin, end)
+                begin = end
+
+        end = idx_lst[-1]
+        # synchronization gradient in the rank
+        batch_loss_backward(begin, end)
+
+        return loss_sum, ovlp_sum
 
     def plot_figure(self, prefix: str = None) -> None:
         prefix = prefix if prefix is not None else "CI"
         fig = plt.figure()
+
+        # plot ovlp and loss
         x = np.arange(self.pre_max_iter + 1)
         ax = fig.add_subplot(2, 1, 1)
         line1 = ax.plot(x, np.array(self.loss_list), color="cadetblue", label="Loss")
@@ -541,11 +703,6 @@ class CITrain:
         lines = line1 + line2
         labels = [name.get_label() for name in lines]
         ax.legend(lines, labels, loc="best")
-        # ax2 = fig.add_subplot(3, 1, 2)
-        # ax2.plot(x, np.abs(self.ovlp_list), color='tomato', label="Ovlp")
-        # ax2.legend(loc="best")
-        # ax2.set_xlabel("Iteration Time")
-        # ax2.set_ylabel("Ovlp")
 
         # plot the L2-norm and max-abs of the gradients
         param_L2 = np.asarray(self.grad_e_lst[0])
@@ -571,7 +728,9 @@ class CITrain:
             # + f"    Pre-train model: {self.model}\n" # avoid repeat print
             + f"    Pre-train time: {self.pre_max_iter}\n"
             + f"    the number of CI coeff: {self.pre_ci_coeff.shape[0]}\n"
-            + f"    CI-coeff norm: {self.ci_norm:.6f}"
+            + f"    CI-coeff norm: {self.ci_norm:.6f}\n"
             + f"    Loss function type: {self.loss_type}\n"
+            + f"    AD_MAX_DIM: {self.AD_MAX_DIM}\n"
+            + f"    FR_MAX_DIM: {self.FR_MAX_DIM}\n"
             + ")"
         )
