@@ -135,8 +135,6 @@ class CITrain:
         dtype=torch.double,
         lr_scheduler=None,
         exact: bool = False,
-        AD_MAX_DIM: int = -1,
-        FR_MAX_DIM: int = -1,
     ) -> None:
         r"""
         Pre train CI wavefunction.
@@ -223,9 +221,9 @@ class CITrain:
         self.grad_e_lst = [[], []]  # grad_L2, grad_max
 
         # max auto-grad/backward dim
-        self.AD_MAX_DIM = AD_MAX_DIM
+        self.AD_MAX_DIM = pre_train_info.get("AD_MAX_DIM", -1)
         # max forward dim
-        self.FR_MAX_DIM = FR_MAX_DIM
+        self.FR_MAX_DIM = pre_train_info.get("FR_MAX_DIM", -1)
 
     def train(
         self,
@@ -318,12 +316,7 @@ class CITrain:
                 self.grad_e_lst[1].append(max_grad)
             self.opt.zero_grad()
 
-            # if self.rank == 0:
-            #     print(f"grad-abs-sum: {grad_sum:.20f}")
-            #     print(f"param-abs-sum: {param_sum:.20f}")
             # save ovlp and loss-functions
-            # logger.info(f"ovlp: {ovlp.norm().item():.5f}, loss: {loss.item():.5f}")
-
             reduce_loss = all_reduce_tensor(loss, world_size=self.world_size, in_place=False)[0]
             reduce_ovlp = all_reduce_tensor(ovlp, world_size=self.world_size, in_place=False)[0]
             synchronize()
@@ -348,6 +341,7 @@ class CITrain:
                         all_reduce_tensor(e_rank, world_size=self.world_size)
                         synchronize()
                         e_total = e_rank.item().real
+                        # logger.info(f"e-total: {e_total:.10f}")
                     elif self.loss_type in ("lsm-phase", "lsm"):
                         # calculate total-energy use VMC
                         e_total = self.sampler.run(initial_state=self.onstate[0], epoch=0)[3]
@@ -362,7 +356,7 @@ class CITrain:
                 if self.rank == 0:
                     delta = (time.time_ns() - t0) / 1.0e06
                     s = f"The {epoch:<5d} training, loss = {reduce_loss.norm().item():.4E}, "
-                    s += f"ovlp = {reduce_ovlp.norm().item():.4E}, delta = {delta:.3E} ms"
+                    s += f"ovlp = {reduce_ovlp.norm().item():.10f}, delta = {delta:.3E} ms"
                     logger.info(s, master=True)
 
                     checkpoint_file = f"{prefix}-pre-train-checkpoint.pth"
@@ -451,8 +445,8 @@ class CITrain:
         states_sample = onv_to_tensor(sample_unique, self.sorb)  # uint8 -> +1/-1
         if self.exact:
             # Gather all psi from very rank
-            psi = self.model(states_sample).to(self.dtype)
-            psi_sample = psi.clone().detach()
+            with torch.no_grad():
+                psi_sample = self.model(states_sample).to(self.dtype)
             all_psi = gather_tensor(psi_sample, self.device, self.world_size)
             synchronize()
             if self.rank == 0:
@@ -483,9 +477,10 @@ class CITrain:
 
         ovlp, oloc = self.get_local_ovlp(state_prob, psi_sample, idx_sample, idx_ci)
         ovlp_mean = all_reduce_tensor(ovlp, world_size=self.world_size, in_place=False)[0]
-
-        # self.AD_MAX_DIM = 20
         loss = self.sample_ovlp_grad(states_sample, oloc, ovlp_mean, state_prob, self.AD_MAX_DIM)
+
+        # logger.info(f"oloc: {oloc[:10]}, var: {oloc.var()}")
+        # logger.info(f"loss: {loss.item():.10f}, ovlp: {ovlp.item():.10f}")
 
         del idx_ci, idx_sample, oloc
         if loss.is_cuda:
@@ -517,7 +512,7 @@ class CITrain:
 
         def batch_loss_backward(begin: int, end: int) -> None:
             nonlocal loss_sum
-            log_psi_batch = self.model(states[begin:end].requires_grad_()).to(self.dtype).log()
+            log_psi_batch = self.model(states[begin:end].requires_grad_()).log()
             state_prob_batch = state_prob[begin:end]
             oloc_batch = oloc[begin:end]
 
@@ -526,7 +521,7 @@ class CITrain:
                     f"There are negative numbers in the log-psi, please use complex128"
                 )
 
-            loss1 = torch.sum(oloc_batch * log_psi_batch * state_prob_batch)
+            loss1 = torch.sum(oloc_batch * log_psi_batch.conj() * state_prob_batch)
             loss2 = ovlp_mean * torch.sum(log_psi_batch.conj() * state_prob_batch)
             loss = 2 * (loss1 - loss2).real
             loss.backward()
@@ -651,6 +646,7 @@ class CITrain:
         else:
             min_batch = AD_MAX_DIM
         idx_lst = split_batch_idx(dim=dim, min_batch=min_batch)
+        # logger.info(f"idx_lst: {idx_lst}")
 
         loss_sum = torch.zeros(1, device=device, dtype=torch.double)
         ovlp_sum = torch.zeros(1, device=device, dtype=self.dtype)
@@ -661,7 +657,7 @@ class CITrain:
             ci_coeff_batch = self.rank_pre_ci_coeff[begin:end]
             psi_batch = self.model(ci_state_batch, use_global_phase=use_global_phase)
             # * self.world_size: DDP All-Reduce
-            loss = torch.sum((psi_batch - ci_coeff_batch).norm().pow(2)) * self.world_size
+            loss = (psi_batch - ci_coeff_batch).norm().pow(2) * self.world_size
             loss.backward()
 
             with torch.no_grad():
@@ -685,7 +681,7 @@ class CITrain:
         end = idx_lst[-1]
         # synchronization gradient in the rank
         batch_loss_backward(begin, end)
-
+        # logger.info(f"loss: {loss_sum.item():.15f}, ovlp: {ovlp_sum.item():.15f}")
         return loss_sum, ovlp_sum
 
     def plot_figure(self, prefix: str = None) -> None:
