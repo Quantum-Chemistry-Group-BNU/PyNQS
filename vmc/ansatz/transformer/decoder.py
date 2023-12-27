@@ -21,6 +21,7 @@ from vmc.ansatz.utils import (
     NormProbAmps,
     NormAbsProbAmps,
     SoftmaxSignProbAmps,
+    GlobalPhase,
 )
 from utils.public_function import multinomial_tensor, split_batch_idx, split_length_idx, setup_seed
 from utils.distributed import get_rank, get_world_size, synchronize
@@ -187,6 +188,8 @@ class DecoderWaveFunction(nn.Module):
         self.world_size = get_world_size()
         self.min_batch: int = -1
         self.min_tree_height: int = 1
+
+        self.global_phase = GlobalPhase(device=self.device)
 
     def extra_repr(self) -> str:
         s = f"amplitude-activations: {self.amp_activation}\n"
@@ -662,8 +665,9 @@ class DecoderWaveFunction(nn.Module):
             phase_k = self.phase_activation(phase_k)
         return amp_k, phase_k
 
-    def forward(self, x: Tensor) -> Tensor:
-        return self.forward_wf(x)
+    def forward(self, x: Tensor, use_global_phase: bool = False) -> Tensor:
+        # exp(i * phase * use_global_phase)
+        return self.forward_wf(x) * self.global_phase(use_global_phase)
 
     def ar_sampling(
         self,

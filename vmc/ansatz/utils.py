@@ -7,6 +7,7 @@ from torch import Tensor, nn
 from libs.C_extension import constrain_make_charts
 from utils.distributed import get_rank
 
+
 @torch.no_grad()
 def symmetry_mask(
     k: int,
@@ -276,17 +277,19 @@ class SoftmaxLogProbAmps(_MaskedSoftmaxBase):
     def __repr__(self) -> str:
         return "Log-Softmax with mask"
 
+
 class SoftmaxSignProbAmps(_MaskedSoftmaxBase):
     masked_val = float("-inf")
 
     def forward(self, x, mask=None, dim=1) -> Tensor:
         ...
         x_ = self.mask_input(x, mask, self.masked_val)
-        sign = (x_ > 0 ) * 2 - 1
+        sign = (x_ > 0) * 2 - 1
         return (F.softmax(x_, dim=dim)) * sign
 
     def __repr__(self) -> str:
         return "Softmax(sign) with mask"
+
 
 class NormProbAmps(_MaskedSoftmaxBase):
     masked_val = 0.0
@@ -298,6 +301,7 @@ class NormProbAmps(_MaskedSoftmaxBase):
     def __repr__(self) -> str:
         return "L2-Normalize with mask"
 
+
 class NormAbsProbAmps(_MaskedSoftmaxBase):
     masked_val = 0.0
 
@@ -307,3 +311,21 @@ class NormAbsProbAmps(_MaskedSoftmaxBase):
 
     def __repr__(self) -> str:
         return "L2-Normalize(Abs) with mask"
+
+
+class GlobalPhase(nn.Module):
+    """
+    GlobalPhase exp(i * phi)
+    """
+
+    def __init__(self, device=None) -> None:
+        super(GlobalPhase, self).__init__()
+        # init phi [0, 2pi]
+        self.phi = nn.Parameter(torch.rand(1, device=device)[0] * 2 * torch.pi)
+
+    def __repr__(self) -> str:
+        return "GlobalPhase exp(i * phi)"
+
+    def forward(self, use: bool = True) -> Tensor:
+        # * bool, avoid use find_unused_parameters=True
+        return torch.exp(1j * self.phi * use)
