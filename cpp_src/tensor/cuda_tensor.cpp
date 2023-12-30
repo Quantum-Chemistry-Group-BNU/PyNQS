@@ -334,6 +334,12 @@ Tensor wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
   int64_t length = bra_key.size(0);
   auto device = bra_key.device();
 
+  if (onv.numel() == 0) {
+    Tensor result = torch::zeros(
+        {0}, torch::TensorOptions().dtype(torch::kInt64).device(device));
+    return result;
+  }
+
   const unsigned long *onv_ptr =
       reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
   const unsigned long *bra_key_ptr =

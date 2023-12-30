@@ -542,6 +542,12 @@ Tensor wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
   const int64_t nbatch = onv.size(0);
   int64_t length = bra_key.size(0);
 
+  if (onv.numel() == 0) {
+    Tensor result = torch::zeros(
+        {0}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+    return result;
+  }
+
   const unsigned long *onv_ptr =
       reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
   const unsigned long *bra_key_ptr =
