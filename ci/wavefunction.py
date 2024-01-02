@@ -82,7 +82,7 @@ class CIWavefunction:
         return energy_CI(self.coeff, self.space, h1e, h2e, ecore, sorb, nele)
 
     def __repr__(self) -> str:
-        s = f" CI shape: {self.coeff.shape[0]}, norm: {self.norm():.6f}"
+        s = f" CI shape: {self.coeff.shape[0]}, norm: {self.norm:.6f}"
         return f"{type(self).__name__, {s}}"
 
 

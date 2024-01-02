@@ -120,14 +120,12 @@ class Sampler:
         n1 = special.comb(self.noa + self.nva, self.noa, exact=True)
         n2 = special.comb(self.nob + self.nvb, self.nvb, exact=True)
         self.fci_size = n1 * n2
+        if self.debug_exact and self.ci_space.size(0) != self.fci_size:
+            raise ValueError(f"Dim of FCI space is {self.fci_size} != {self.ci_space.size(0)}")
         self.record_sample = record_sample
         if self.record_sample:
             self.str_full = state_to_string(self.ci_space, self.sorb)
             self.frame_sample = pd.DataFrame({"full_space": self.str_full})
-            if self.ci_space.size(0) != self.fci_size:
-                raise ValueError(
-                    f"The dim of full space is {self.ci_space.size(0)} != {self.fci_size}"
-                )
         self.time_sample = 0
 
         # memory control and nbatch
