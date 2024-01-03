@@ -38,6 +38,7 @@ from utils.distributed import (
     broadcast_tensor,
 )
 from utils.public_function import torch_unique_index, WavefunctionLUT
+from utils.determinant_lut import DetLUT
 
 print = partial(print, flush=True)
 
@@ -79,6 +80,7 @@ class Sampler:
         use_sample_space: bool = False,
         min_batch: int = 10000,
         min_tree_height: int = None,
+        det_lut: DetLUT = None,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -181,6 +183,13 @@ class Sampler:
             ), f"use-same-tree({self.use_same_tree}) muse be is True, if use min-tree-height"
         self.sample_min_tree_height = min_tree_height
 
+        # Det-LUT, remove part det in CI-NQS
+        self.remove_det = False
+        self.det_lut: DetLUT = None
+        if det_lut is not None:
+            self.remove_det = True
+            self.det_lut = det_lut
+
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
             logger.info(
@@ -228,7 +237,13 @@ class Sampler:
         t0 = time.time_ns()
         check_para(initial_state)
         if self.debug_exact:
-            ci_space_rank = scatter_tensor(self.ci_space, self.device, torch.uint8, self.world_size)
+            if self.remove_det:
+                # avoid wf is 0.00, if not found, set to -1
+                array_idx = self.det_lut.lookup(self.ci_space, is_onv=True)[0]
+                ci_space = self.ci_space[~array_idx.gt(-1)]
+            else:
+                ci_space = self.ci_space
+            ci_space_rank = scatter_tensor(ci_space, self.device, torch.uint8, self.world_size)
             synchronize()
             e_total, eloc, sample_prob = self.calculate_energy(ci_space_rank)
             # All-Reduce mean local energy

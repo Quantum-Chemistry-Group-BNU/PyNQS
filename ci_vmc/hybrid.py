@@ -1,0 +1,254 @@
+import time
+import os
+import torch
+import torch.distributed as dist
+import numpy as np
+
+from typing import Union, Tuple, List
+from loguru import logger
+from torch import Tensor
+from torch.nn.parallel import DistributedDataParallel as DDP
+from numpy import ndarray
+
+from vmc.optim import VMCOptimizer
+from utils.public_function import check_para, find_common_state
+from libs.C_extension import get_hij_torch, onv_to_tensor, tensor_to_onv, get_comb_tensor
+from ci import CIWavefunction
+
+
+class NqsCi(VMCOptimizer):
+    def __init__(
+        self,
+        CI: CIWavefunction,
+        **vmc_opt_kwargs: dict,
+    ) -> None:
+        super(NqsCi, self).__init__(**vmc_opt_kwargs)
+
+        self.ci_det = CI.space
+        self.ci_num = CI.space.size(0)
+
+        self.det_lut = self.sampler.det_lut
+        dim = self.ci_num + 1
+        self.Ham_matrix = torch.zeros((dim, dim), dtype=self.dtype)
+        self.make_ci_hij()
+
+        # init total-coeff
+        self.total_coeff = torch.rand(dim, dtype=self.dtype).to(self.device)
+        # self.total_coeff[: self.ci_num] = CI.coeff.to(self.device)
+        # normalization
+        self.total_coeff /= self.total_coeff.norm()
+        self.nqs_coeff = self.total_coeff[-1]
+        self.ci_coeff = self.total_coeff[: self.ci_num]
+        if self.rank == 0:
+            s = f"det-num: {self.ci_num}, "
+            s += f"Matrix shape: ({dim}, {dim})"
+            logger.info(s, master=True)
+
+    def make_ci_hij(self) -> None:
+        """
+        construe ci hij
+        """
+        h1e = self.sampler.h1e
+        h2e = self.sampler.h2e
+        hij = get_hij_torch(self.ci_det, self.ci_det, h1e, h2e, self.sorb, self.nele)
+        self.Ham_matrix[: self.ci_num, : self.ci_num] = hij.to("cpu")
+
+    @torch.no_grad()
+    def make_ci_nqs(self, state: Tensor, phi_nqs: Tensor) -> None:
+        """
+        \sum_j <phi_i|H|phi_j><phi_j|phi_nqs>
+        """
+        comb_x, x1 = get_comb_tensor(
+            self.ci_det, self.sorb, self.nele, self.noa, self.nob, flag_bit=True
+        )
+        nbatch, n_sd, bra_len = comb_x.shape
+        hij = get_hij_torch(
+            self.ci_det, comb_x, self.h1e, self.h2e, self.sorb, self.nele
+        )  # (ci_num, ci_num * n_SD)
+
+        # Binary Search x1 in CI-Det/Nqs
+        comb_x = comb_x.reshape(-1, bra_len)  # (n_sd * ci_num, bra_len)
+        array_idx = self.det_lut.lookup(comb_x, is_onv=True)[0]
+        mask = array_idx.gt(-1) # if not found, set to -1
+        baseline = torch.arange(comb_x.size(0), device=self.device, dtype=torch.int64)
+        onv_not_idx = baseline[~mask]
+        # (ci_num * n_SD)
+        psi_x1 = torch.zeros(nbatch * n_sd, device=self.device, dtype=self.dtype)
+        # in Nqs
+        psi_x1[onv_not_idx] = self.model(x1.reshape(-1, self.sorb)[~mask])
+        # in CI-Det
+        # psi_x1[onv_idx] = self.ci_coeff[array_idx.masked_select(mask)]
+        # ovlp = psi_x1[onv_not_idx]
+        value = torch.einsum("ij, ij ->i", hij.to(self.dtype), psi_x1.reshape(self.ci_num, -1))
+
+        # breakpoint()
+        # value = (
+        #     torch.einsum("i, ij, j -> i", self.ci_coeff.conj(), hij.to(self.dtype), psi_x1) * ovlp
+        # )
+        self.Ham_matrix[: self.ci_num, -1] = value
+        self.Ham_matrix[-1, : self.ci_num] = value.conj()
+
+    @torch.no_grad()
+    def make_nqs_nqs(self, phi_nqs: Tensor, eloc_mean: Tensor) -> None:
+        """
+        <phi_NQS|H|phi_NQS> = sum(prob * eloc) * <phi_nqs|phi_nqs>
+        """
+        # breakpoint()
+        x = eloc_mean * torch.dot(phi_nqs.conj(), phi_nqs)
+
+        self.Ham_matrix[-1, -1] = x
+
+    def solve_eigh(self) -> Tuple[float, Tensor]:
+        # TODO:(zbwu-23-12-27) davsion or scipy.sparse.linalg.eigsh
+        """
+        HC = εC;
+        H is Hermitian matrix
+        return
+        ------
+            ε0(ground energy),
+            C0({ci},c_N)
+        """
+        result = torch.linalg.eigh(self.Ham_matrix)
+        E0 = result[0][0]
+        coeff = result[1][:, 0]
+        self.total_coeff = coeff.to(self.device)
+        self.nqs_coeff = self.total_coeff[-1]
+        self.ci_coeff = self.total_coeff[: self.ci_num]
+        return E0.item(), coeff
+
+    @torch.no_grad()
+    def calculate_new_term(
+        self,
+        state: Tensor,
+        phi_nqs: Tensor,
+        cNqs: Tensor,
+        state_prob: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        """
+        calculate (<n|H|phi_i> * c_i) / (<n|phi_nqs> * c_N)
+        """
+        bra = tensor_to_onv(((state + 1) / 2).to(torch.uint8), self.sorb)
+        ket = self.ci_det
+        hij = get_hij_torch(bra, ket, self.h1e, self.h2e, self.sorb, self.nele)
+
+        # breakpoint()
+        ci = self.ci_coeff
+        x = torch.einsum("ij, j, i ->i", hij.to(self.dtype), ci, 1 / (phi_nqs * cNqs))
+        x_mean = torch.dot(x, state_prob.to(self.dtype))
+        return x, x_mean
+
+    def new_nqs_grad(
+        self,
+        NQS: DDP,
+        state: Tensor,
+        state_prob: Tensor,
+        eloc: Tensor,
+        eloc_mean: Tensor,
+        new_term: Tensor,
+        new_term_mean: Tensor,
+        cNqs: Tensor,
+        E0: float,
+    ) -> Tensor:
+        """
+        calculate NQS grad
+        """
+        log_psi = NQS(state.requires_grad_()).log()
+        if torch.any(torch.isnan(log_psi)):
+            raise ValueError(f"negative numbers in the log-psi")
+
+        # eloc_mean + new_term_mean == E0 ????
+        corr = eloc + new_term - E0
+
+        # TODO:(zbwu-24-01-24) how to scale c0
+        c0 = cNqs.norm().item() ** 2 
+        if c0 < 1.0e-4:
+            c0 = 1.0e-4
+        loss = 2 * (c0 * (torch.sum(state_prob * log_psi.conj() * corr))).real
+        loss.backward()
+        print(loss)
+
+        return loss.detach()
+
+    def run_progress(self) -> None:
+        begin_vmc = time.time_ns()
+        logger.info(f"Begin VMC iteration: {time.ctime()}", master=True)
+        self.grad_e_lst = [[], []]
+        self.e_lst = []
+        self.coeff_lst = []
+        for epoch in range(self.max_iter):
+            initial_state = self.onstate[0].clone().detach()
+            state, state_prob, eloc, e_total, stats, eloc_mean = self.sampler.run(
+                initial_state, epoch=epoch
+            )
+            # breakpoint()
+
+            sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
+            # construct Hmat
+            if self.exact:
+                with torch.no_grad():
+                    phi_nqs = self.model(sample_state)
+            else:
+                phi_nqs = self.sampler.WF_LUT.wf_value
+            self.make_ci_nqs(sample_state, phi_nqs)
+            self.make_nqs_nqs(phi_nqs, eloc_mean)
+
+            # solve HC = εC
+            E0 = self.solve_eigh()[0]
+            if self.rank == 0:
+                self.e_lst.append(E0 + self.ecore)
+                self.coeff_lst.append(self.total_coeff.to("cpu").numpy())
+                logger.info(f"total energy: {(E0 + self.ecore):.10f}", master=True)
+
+            if self.rank == 0:
+                c1 = self.ci_coeff.norm().item()
+                c2 = self.nqs_coeff.norm().item()
+                logger.info(f"Coeff: {c1:.6E} {c2:6E}", master=True)
+
+            new_term, new_term_mean = self.calculate_new_term(
+                sample_state, phi_nqs, self.nqs_coeff, state_prob
+            )
+
+            # backward
+            loss = self.new_nqs_grad(
+                self.model,
+                sample_state,
+                state_prob,
+                eloc,
+                eloc_mean,
+                new_term,
+                new_term_mean,
+                self.nqs_coeff,
+                E0,
+            )
+            logger.info(f"loss: {loss.item():.5E}")
+
+            x = []
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    x.append(param.grad.reshape(-1).detach().to("cpu").numpy())
+            x = np.concatenate(x)
+            l2_grad = np.linalg.norm(x)
+            max_grad = np.abs(x).max()
+            self.grad_e_lst[0].append(l2_grad)
+            self.grad_e_lst[1].append(max_grad)
+
+            # breakpoint()
+            # update param
+            if epoch < self.max_iter - 1:
+                self.opt.step()
+                self.opt.zero_grad()
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()
+
+            s = f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
+            s += f"{epoch} iteration end {time.ctime()}\n"
+            s += "=" * 100
+            logger.info(s, master=True)
+
+        # breakpoint()
+        # End iteration
+        if self.rank == 0:
+            path = os.path.split(self.prefix)[0]
+            coeff = np.asarray(self.coeff_lst)
+            np.save(f"{path}/{self.ci_num}-coeff.npy", coeff)
+            logger.info(f"End VMC iteration: {time.ctime()}", master=True)
