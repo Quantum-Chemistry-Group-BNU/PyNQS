@@ -34,6 +34,7 @@ from utils.distributed import (
 )
 from utils import ElectronInfo, Dtype, state_to_string
 from libs.C_extension import onv_to_tensor
+from kfac.preconditioner import KFACPreconditioner
 
 print = partial(print, flush=True)
 
@@ -75,6 +76,7 @@ class VMCOptimizer:
         interval: int = 100,
         prefix: str = "VMC",
         MAX_AD_DIM: int = -1,
+        kfac: KFACPreconditioner = None
     ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -155,6 +157,11 @@ class VMCOptimizer:
         # read checkpoint file:
         if check_point is not None:
             self.read_checkpoint(check_point)
+
+        self.kfac = kfac
+        self.use_kfac = True if self.kfac is not None else False
+        if self.rank == 0:
+            logger.info(f"Use K-FAC: {self.use_kfac}")
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -288,6 +295,8 @@ class VMCOptimizer:
             t2 = time.time_ns()
             # TODO: synchronize
             if epoch < self.max_iter - 1:
+                if self.kfac is not None:
+                    self.kfac.step()
                 self.opt.step()
                 self.opt.zero_grad()
                 if self.lr_scheduler is not None:
@@ -394,8 +403,8 @@ class VMCOptimizer:
             torch.save(
                 {
                     # DDP modules
-                    "model": self.model_raw.modules,
-                    "optimizer": self.opt,
+                    "model": self.model_raw.state_dict(),
+                    "optimizer": self.opt.state_dict(),
                     # lambda function could not been Serialized
                     # "lr_scheduler": self.lr_scheduler,
                     "HF_init": self.HF_init,

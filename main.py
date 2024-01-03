@@ -25,6 +25,9 @@ from vmc.optim import VMCOptimizer, GD
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise
 from libs.C_extension import onv_to_tensor
 from torchinfo import summary
+from kfac.preconditioner import KFACPreconditioner
+
+
 
 # from qubic import MPS_c, mps_CIcoeff, mps_sample, RunQubic
 # from qubic.qmatrix import convert_mps
@@ -210,6 +213,7 @@ if __name__ == "__main__":
     lr_sch_params = {"lr_lambda": lr_transformer}
 
     dtype = Dtype(dtype=torch.complex128, device=device)
+    preconditioner = KFACPreconditioner(model)
     # dtype = Dtype(dtype=torch.double, device=device)
     # print(f"rank: {dist.get_rank()}, size: {dist.get_world_size()}")
     opt_vmc = VMCOptimizer(
@@ -234,6 +238,7 @@ if __name__ == "__main__":
         method_grad="AD",
         method_jacobian="vector",
         prefix="./tmp/vmc-new-" + str(seed),
+        kfac = preconditioner,
     )
     # opt_vmc.pre_train()
     # breakpoint()
