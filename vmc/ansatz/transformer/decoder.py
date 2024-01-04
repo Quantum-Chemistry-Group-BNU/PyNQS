@@ -469,7 +469,7 @@ class DecoderWaveFunction(nn.Module):
         )
 
         if self.compute_phase:
-            phases = self.phase_layers[0](sample_unique)
+            phases = self.phase_layers[0]((sample_unique * 2 - 1).double()) # +1/-1)
             if self.n_out_phase == 1:
                 phases = phases.view(-1)
             else:
@@ -547,7 +547,7 @@ class DecoderWaveFunction(nn.Module):
             kv_idxs=kv_idxs,
         )
         if self.compute_phase:
-            phases = self.phase_layers[0](sample_unique)
+            phases = self.phase_layers[0]((sample_unique * 2 - 1).double()) # +1/-1)
             if self.n_out_phase == 1:
                 phases = phases.view(-1)
             else:
