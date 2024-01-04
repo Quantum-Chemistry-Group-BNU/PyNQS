@@ -51,7 +51,7 @@ class NqsCi(VMCOptimizer):
         h1e = self.sampler.h1e
         h2e = self.sampler.h2e
         hij = get_hij_torch(self.ci_det, self.ci_det, h1e, h2e, self.sorb, self.nele)
-        self.Ham_matrix[: self.ci_num, : self.ci_num] = hij.to("cpu")
+        self.Ham_matrix[: self.ci_num, : self.ci_num] = hij
 
     @torch.no_grad()
     def make_ci_nqs(self, state: Tensor, phi_nqs: Tensor) -> None:
@@ -69,22 +69,17 @@ class NqsCi(VMCOptimizer):
         # Binary Search x1 in CI-Det/Nqs
         comb_x = comb_x.reshape(-1, bra_len)  # (n_sd * ci_num, bra_len)
         array_idx = self.det_lut.lookup(comb_x, is_onv=True)[0]
-        mask = array_idx.gt(-1) # if not found, set to -1
+        mask = array_idx.gt(-1)  # if not found, set to -1
         baseline = torch.arange(comb_x.size(0), device=self.device, dtype=torch.int64)
         onv_not_idx = baseline[~mask]
         # (ci_num * n_SD)
         psi_x1 = torch.zeros(nbatch * n_sd, device=self.device, dtype=self.dtype)
+        # XXX:(zbwu-24-01-04) the above part is only calculated once and use unique
         # in Nqs
         psi_x1[onv_not_idx] = self.model(x1.reshape(-1, self.sorb)[~mask])
-        # in CI-Det
-        # psi_x1[onv_idx] = self.ci_coeff[array_idx.masked_select(mask)]
-        # ovlp = psi_x1[onv_not_idx]
+
         value = torch.einsum("ij, ij ->i", hij.to(self.dtype), psi_x1.reshape(self.ci_num, -1))
 
-        # breakpoint()
-        # value = (
-        #     torch.einsum("i, ij, j -> i", self.ci_coeff.conj(), hij.to(self.dtype), psi_x1) * ovlp
-        # )
         self.Ham_matrix[: self.ci_num, -1] = value
         self.Ham_matrix[-1, : self.ci_num] = value.conj()
 
@@ -160,7 +155,7 @@ class NqsCi(VMCOptimizer):
         corr = eloc + new_term - E0
 
         # TODO:(zbwu-24-01-24) how to scale c0
-        c0 = cNqs.norm().item() ** 2 
+        c0 = cNqs.norm().item() ** 2
         if c0 < 1.0e-4:
             c0 = 1.0e-4
         loss = 2 * (c0 * (torch.sum(state_prob * log_psi.conj() * corr))).real
@@ -176,19 +171,20 @@ class NqsCi(VMCOptimizer):
         self.e_lst = []
         self.coeff_lst = []
         for epoch in range(self.max_iter):
+            t0 = time.time_ns()
             initial_state = self.onstate[0].clone().detach()
             state, state_prob, eloc, e_total, stats, eloc_mean = self.sampler.run(
                 initial_state, epoch=epoch
             )
-            # breakpoint()
-
             sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
             # construct Hmat
             if self.exact:
                 with torch.no_grad():
                     phi_nqs = self.model(sample_state)
             else:
-                phi_nqs = self.sampler.WF_LUT.wf_value
+                WF_LUT = self.sampler.WF_LUT
+                not_idx, phi_nqs = WF_LUT.lookup(state)[1:]
+                assert not_idx.size(0) == 0
             self.make_ci_nqs(sample_state, phi_nqs)
             self.make_nqs_nqs(phi_nqs, eloc_mean)
 
@@ -197,7 +193,6 @@ class NqsCi(VMCOptimizer):
             if self.rank == 0:
                 self.e_lst.append(E0 + self.ecore)
                 self.coeff_lst.append(self.total_coeff.to("cpu").numpy())
-                logger.info(f"total energy: {(E0 + self.ecore):.10f}", master=True)
 
             if self.rank == 0:
                 c1 = self.ci_coeff.norm().item()
@@ -240,10 +235,28 @@ class NqsCi(VMCOptimizer):
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
 
-            s = f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
-            s += f"{epoch} iteration end {time.ctime()}\n"
-            s += "=" * 100
-            logger.info(s, master=True)
+            if self.rank == 0:
+                if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
+                    checkpoint_file = f"{self.prefix}-checkpoint.pth"
+                    logger.info(f"Save model/opt state: -> {checkpoint_file}", master=True)
+                    lr = self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
+                    torch.save(
+                        {
+                            "epoch": epoch,
+                            "model": self.model_raw.state_dict(),
+                            "optimizer": self.opt.state_dict(),
+                            "scheduler": lr,
+                        },
+                        checkpoint_file,
+                    )
+
+            delta = (time.time_ns() - t0) / 1.00e09
+            if self.rank == 0:
+                s = f"Total energy {(E0 + self.ecore):.9f} a.u., cost time {delta:.3E} s\n"
+                s += f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
+                s += f"{epoch} iteration end {time.ctime()}\n"
+                s += "=" * 100
+                logger.info(s, master=True)
 
         # breakpoint()
         # End iteration

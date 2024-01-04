@@ -8,7 +8,7 @@ from torch import nn, Tensor
 
 from loguru import logger
 
-# import sys;sys.path.append("./")
+import sys;sys.path.append("./")
 
 from vmc.ansatz.transformer.nanogpt.model import GPT, GPTConfig, get_decoder_amp
 
@@ -487,7 +487,7 @@ class DecoderWaveFunction(nn.Module):
         )
 
         if self.compute_phase:
-            phases = self.phase_layers[0](sample_unique)
+            phases = self.phase_layers[0]((sample_unique * 2 - 1).double()) # +1/-1
             if self.n_out_phase == 1:
                 phases = phases.view(-1)
             else:
@@ -565,7 +565,7 @@ class DecoderWaveFunction(nn.Module):
             kv_idxs=kv_idxs,
         )
         if self.compute_phase:
-            phases = self.phase_layers[0](sample_unique)
+            phases = self.phase_layers[0]((sample_unique * 2 - 1).to(torch.double)) # +1/-1
             if self.n_out_phase == 1:
                 phases = phases.view(-1)
             else:
@@ -590,6 +590,9 @@ class DecoderWaveFunction(nn.Module):
         return sample_unique, sample_counts, wf
 
     def forward_wf(self, x: Tensor) -> Tensor:
+        """
+        input x: (+1/-1)
+        """
         assert x.dim() in (1, 2)
         if x.dim() == 1:
             x = x.unsqueeze(0)
@@ -728,10 +731,13 @@ if __name__ == "__main__":
     use_kv_cache = True
     dtype = torch.double
     norm_method = 0
-    fci_space = torch.from_numpy(np.load("./3o4e.npy")).to(device) # +1/0
+    fci_space = torch.from_numpy(np.load("./3o4e.npy")).to(device) # +1/-1
     idx = torch.tensor([0, 1, 2, 3, 4, 5])
-    print(fci_space)
     det_lut = DetLUT(fci_space[idx], sorb, nele, alpha=nele // 2, beta=nele // 2)
+    print(det_lut.onv_lst)
+    print(det_lut.tensor_lst)
+    print(det_lut.orth_lst)
+    breakpoint()
     model = DecoderWaveFunction(
         sorb=sorb,
         nele=nele,
@@ -762,7 +768,7 @@ if __name__ == "__main__":
     print(f"norm-method: {model.NORM_METHOD[norm_method]}")
     print(wf)
     print("================Forward=============")
-    wf1 = model(sample)
+    wf1 = model((sample * 2 - 1).double())
     print(wf1)
     print(f"wf^2: {wf1.norm().item():.8f}")
     print(f"Sample-wf == forward-wf: {torch.allclose(wf, wf1)}")
