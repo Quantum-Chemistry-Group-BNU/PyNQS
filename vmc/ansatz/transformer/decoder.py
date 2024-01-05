@@ -80,9 +80,9 @@ class DecoderWaveFunction(nn.Module):
         self.nele = nele
         self.use_symmetry = use_symmetry
         if alpha_nele is None:
-            self.alpha_nele = nele // 2
+            alpha_nele = nele // 2
         if beta_nele is None:
-            self.beta_nele = nele // 2
+            beta_nele = nele // 2
         self.beta_nele = beta_nele
         self.alpha_nele = alpha_nele
         assert self.beta_nele + self.alpha_nele == self.nele
