@@ -184,9 +184,13 @@ def integral_pyscf(atom: str,
     if sorb <= 20:
         cisolver = fci.FCI(mf)
         e_ref, coeff = cisolver.kernel()
-        mycc = cc.CCSD(mf)
-        _ = mycc.kernel()
-        print(f"CCSD energy: {mycc.e_tot:.10f}")
+        try:
+            mycc = cc.CCSD(mf)
+            _ = mycc.kernel()
+            print(f"CCSD energy: {mycc.e_tot:.10f}")
+        except:
+            import warnings
+            warnings.warn(f"CCSD kernel failed")
         print(f"Full CI energy: {e_ref:.10f}")
     else:
         mycc = cc.CCSD(mf)

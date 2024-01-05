@@ -8,13 +8,12 @@ from torch import nn, Tensor
 
 from loguru import logger
 
-# import sys;sys.path.append("./")
+import sys;sys.path.append("./")
 
 from vmc.ansatz.transformer.nanogpt.model import GPT, GPTConfig, get_decoder_amp
 
 # from vmc.ansatz.transformer.mingpt.model import get_decoder_amp
 from vmc.ansatz.utils import (
-    symmetry_mask,
     OrbitalBlock,
     SoftmaxLogProbAmps,
     joint_next_samples,
@@ -23,8 +22,18 @@ from vmc.ansatz.utils import (
     SoftmaxSignProbAmps,
     GlobalPhase,
 )
-from utils.public_function import multinomial_tensor, split_batch_idx, split_length_idx, setup_seed
+from utils.public_function import (
+    multinomial_tensor,
+    split_batch_idx,
+    split_length_idx,
+    setup_seed,
+)
+from utils.determinant_lut import DetLUT
+from vmc.ansatz.symmetry import symmetry_mask, orthonormal_mask
+
 from utils.distributed import get_rank, get_world_size, synchronize
+
+
 
 KVCaches = NewType("KVCaches", List[Tuple[Tensor, Tensor]])
 
@@ -58,6 +67,7 @@ class DecoderWaveFunction(nn.Module):
         use_kv_cache: bool = True,
         dtype=torch.double,
         norm_method: int = 0,
+        det_lut: DetLUT = None,
     ) -> None:
         super(DecoderWaveFunction, self).__init__()
 
@@ -99,15 +109,13 @@ class DecoderWaveFunction(nn.Module):
             min_k=self.min_n_sorb,
             sites=self.ar_sites,
         )
-        # Two-sites
-        self.empty = torch.tensor([[0, 0]], device=self.device).long()
-        self.full = torch.tensor([[1, 1]], device=self.device).long()
-        self.a = torch.tensor([[1, 0]], device=self.device).long()
-        self.b = torch.tensor([[0, 1]], device=self.device).long()
 
-        # One-sites:
-        self.occupied = torch.tensor([1], device=self.device).long()
-        self.unoccupied = torch.tensor([0], device=self.device).long()
+        # remove det
+        self.remove_det = False
+        self.det_lut: DetLUT = None
+        if det_lut is not None:
+            self.remove_det = True
+            self.det_lut = det_lut
 
         self.wf_type = wf_type
         if wf_type == "complex":
@@ -218,6 +226,12 @@ class DecoderWaveFunction(nn.Module):
             return self._symmetry_mask(k=k, num_up=num_up, num_down=num_down)
         else:
             return torch.ones(num_up.size(0), 4, **self.factory_kwargs)
+
+    def orth_mask(self, states: Tensor, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
+        if self.remove_det:
+            return orthonormal_mask(states, self.det_lut)
+        else:
+            return torch.ones(num_up.size(0), 4, device=self.device, dtype=torch.bool)
 
     def _get_conditional_output(
         self,
@@ -363,7 +377,11 @@ class DecoderWaveFunction(nn.Module):
             num_up = sample_unique[:, ::2].sum(dim=1)
             num_down = sample_unique[:, 1::2].sum(dim=1)
             amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
+            amp_orth_mask = self.orth_mask(
+                states=sample_unique, k=k, num_up=num_up, num_down=num_down
+            )
             amp_k = amp[:, -1, :]  # (n_unique, 4)
+            amp_mask *= amp_orth_mask
             amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
 
             # 0 => (0, 0), 1 =>(1, 0), 2 =>(0, 1), 3 => (1, 1)
@@ -469,7 +487,7 @@ class DecoderWaveFunction(nn.Module):
         )
 
         if self.compute_phase:
-            phases = self.phase_layers[0]((sample_unique * 2 - 1).double()) # +1/-1)
+            phases = self.phase_layers[0]((sample_unique * 2 - 1).double()) # +1/-1
             if self.n_out_phase == 1:
                 phases = phases.view(-1)
             else:
@@ -547,7 +565,7 @@ class DecoderWaveFunction(nn.Module):
             kv_idxs=kv_idxs,
         )
         if self.compute_phase:
-            phases = self.phase_layers[0]((sample_unique * 2 - 1).double()) # +1/-1)
+            phases = self.phase_layers[0]((sample_unique * 2 - 1).to(torch.double)) # +1/-1
             if self.n_out_phase == 1:
                 phases = phases.view(-1)
             else:
@@ -572,6 +590,9 @@ class DecoderWaveFunction(nn.Module):
         return sample_unique, sample_counts, wf
 
     def forward_wf(self, x: Tensor) -> Tensor:
+        """
+        input x: (+1/-1)
+        """
         assert x.dim() in (1, 2)
         if x.dim() == 1:
             x = x.unsqueeze(0)
@@ -602,6 +623,8 @@ class DecoderWaveFunction(nn.Module):
         for k in range(0, self.sorb, 2):
             # (nbatch, 4)
             amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
+            amp_orth_mask = self.orth_mask(states=x[:, :k], k=k, num_up=num_up, num_down=num_down)
+            amp_mask *= amp_orth_mask
             amp_k = amp[:, k // 2, :]  # (nbatch, 4)
             amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
             # amp_k_log = torch.where(amp_k_log.isinf(), torch.full_like(amp_k_log, -30), amp_k_log)
@@ -639,6 +662,11 @@ class DecoderWaveFunction(nn.Module):
             else:
                 wf = amps_value
         del amps_value, amp, amp_k, amp_k_mask, index
+
+        if self.det_lut is not None:
+            # Nan -> 0.0
+            if self.norm_method in (0, 3):
+                wf = torch.where(wf.isnan(), torch.full_like(wf, 0), wf)
         return wf
 
     @torch.no_grad()
@@ -702,14 +730,21 @@ if __name__ == "__main__":
     d_model = 5
     use_kv_cache = True
     dtype = torch.double
-    norm_method = 3
+    norm_method = 0
+    fci_space = torch.from_numpy(np.load("./3o4e.npy")).to(device) # +1/-1
+    idx = torch.tensor([0, 1, 2, 3, 4, 5])
+    det_lut = DetLUT(fci_space[idx], sorb, nele, alpha=nele // 2, beta=nele // 2)
+    print(det_lut.onv_lst)
+    print(det_lut.tensor_lst)
+    print(det_lut.orth_lst)
+    breakpoint()
     model = DecoderWaveFunction(
         sorb=sorb,
         nele=nele,
         alpha_nele=nele // 2,
         beta_nele=nele // 2,
         use_symmetry=True,
-        wf_type="real",
+        wf_type="complex",
         n_layers=1,
         device=device,
         d_model=d_model,
@@ -719,15 +754,21 @@ if __name__ == "__main__":
         use_kv_cache=use_kv_cache,
         dtype=dtype,
         norm_method=norm_method,
+        det_lut=det_lut,
     )
-    sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100, min_tree_height=2)
+    print(det_lut.det)
+    wf = model(fci_space)
+    print(wf)
+    sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100)
+    print(sample)
+    print(det_lut.det)
     # sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100)
     print(f"use-kv-cache: {use_kv_cache}")
     print(f"param dtype: {dtype}")
     print(f"norm-method: {model.NORM_METHOD[norm_method]}")
     print(wf)
     print("================Forward=============")
-    wf1 = model(sample)
+    wf1 = model((sample * 2 - 1).double())
     print(wf1)
     print(f"wf^2: {wf1.norm().item():.8f}")
     print(f"Sample-wf == forward-wf: {torch.allclose(wf, wf1)}")

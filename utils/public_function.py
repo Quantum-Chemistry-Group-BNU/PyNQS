@@ -5,6 +5,7 @@ import os
 import torch
 import itertools
 import numpy as np
+
 from torch import Tensor
 from torch.distributions import Binomial
 from typing import List, Type, Tuple, Union, Literal
@@ -14,6 +15,7 @@ from loguru import logger
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv, wavefunction_lut
 from .distributed import get_rank
+
 
 def check_para(bra: Tensor):
     r"""
@@ -629,6 +631,7 @@ def torch_sort_onv(bra: Tensor, little_endian: bool = True) -> Tensor:
     del keys
     return idx
 
+
 def split_batch_idx(dim: int, min_batch: int) -> List[int]:
     r"""
     the index of the splitting batch with min-batch
@@ -656,6 +659,7 @@ def split_batch_idx(dim: int, min_batch: int) -> List[int]:
     idx_lst = idx_lst.cumsum(dim=0).tolist()
     return idx_lst
 
+
 def split_length_idx(dim: int, length: int) -> List[int]:
     r"""
     the index of the splitting batch with fixed length
@@ -677,12 +681,13 @@ def split_length_idx(dim: int, length: int) -> List[int]:
     >>> idx_lst
     [4, 8, 11]
     """
-    nbatch = int(np.floor(dim/length))
+    nbatch = int(np.floor(dim / length))
     idx_lst = torch.empty(length, dtype=torch.int64).fill_(nbatch)
     ret = dim - nbatch * length
     idx_lst[:ret].add_(1)
     idx_lst = idx_lst.cumsum(dim=0).tolist()
     return idx_lst
+
 
 class WavefunctionLUT:
     r"""
@@ -760,7 +765,6 @@ class WavefunctionLUT:
             + f"    wf-value shape: {self.wf_value.size(0)}\n"
             + f"    sorb: {self.sorb}"
         )
-
 
 # XXX: how to implement the MemoryTrack?
 # ref: https://github.com/huangpan2507/Tools_Pytorch-Memory-Utils
