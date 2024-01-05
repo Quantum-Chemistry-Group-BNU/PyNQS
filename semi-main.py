@@ -122,7 +122,7 @@ if __name__ == "__main__":
     pre_train_info = {"pre_max_iter": 20, "interval": 10, "loss_type": "sample"}
 
     # select ci > thresh
-    thresh = 0.01
+    thresh = 0.00
     use_hf = False
     det_lut, select_CI = select_det(
         CI=ucisd_wf,
@@ -148,8 +148,8 @@ if __name__ == "__main__":
         device=device,
         d_model=d_model,
         n_heads=4,
-        phase_hidden_size=[512, 521],
-        n_out_phase=4,
+        phase_hidden_size=[512, 512],
+        n_out_phase=1,
         use_kv_cache=True,
         norm_method=0,
         det_lut=det_lut,
@@ -162,8 +162,8 @@ if __name__ == "__main__":
         model = DDP(ansatz)
 
     sampler_param = {
-        "n_sample": int(1.0e10),
-        "debug_exact": True,  # exact optimization
+        "n_sample": int(1.0e12),
+        "debug_exact": False,  # exact optimization
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -177,7 +177,7 @@ if __name__ == "__main__":
         "eps": 1.0e-10,
         "only_AD": False,
         # "use_same_tree": True,  # different rank-sample
-        # "min_batch": 1000,
+        # "min_batch": 2000,
         # "min_tree_height": 4,  # different rank-sample
         "det_lut": det_lut,
     }
@@ -226,8 +226,8 @@ if __name__ == "__main__":
     # opt_vmc = VMCOptimizer(**vmc_opt_params)
     # opt_vmc.run()
     # opt_vmc.summary(e_ref, e_lst, prefix=f"./tmp/nqs-H4-1.60-{seed}")
-    semi = NqsCi(select_CI, **vmc_opt_params)
+    semi = NqsCi(select_CI, cNqs_pow_min=1.0e-4, **vmc_opt_params)
     semi.run_progress()
-    semi.summary(e_ref, e_lst, prefix=f"./tmp/semi-{seed}")
+    semi.summary(e_ref, e_lst, prefix=f"./tmp/semi-exact-{seed}")
     if rank == 0:
         logger.info(f"e-ref: {e_ref:.10f}, seed: {seed}")
