@@ -3,6 +3,9 @@ from .rnn import RNNWavefunction
 from .rbm_other import ARRBM, IsingRBM
 from .ar_rbm import RBMSites
 from .transformer.decoder import DecoderWaveFunction
+from .hybrid.hybrid import HybridWaveFunction
+from .hybrid.hqc import HybridQCWaveFunction
+from .mps_transformer import MPSdecoder
 
 try:
     from .mps import MPSWavefunction
@@ -18,4 +21,7 @@ __all__ = [
     "IsingRBM",
     "RBMSites",
     "DecoderWaveFunction",
+    "HybridWaveFunction",
+    "HybridQCWaveFunction",
+    "MPSdecoder",
 ]
