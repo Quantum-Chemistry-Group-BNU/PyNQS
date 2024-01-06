@@ -23,6 +23,7 @@ class NqsCi(VMCOptimizer):
         self,
         CI: CIWavefunction,
         cNqs_pow_min: float = 1.0e-4,
+        start_iter: int = 1000,
         **vmc_opt_kwargs: dict,
     ) -> None:
         super(NqsCi, self).__init__(**vmc_opt_kwargs)
@@ -47,10 +48,13 @@ class NqsCi(VMCOptimizer):
         # min cNqs^2
         assert cNqs_pow_min > 0.0 and cNqs_pow_min <= 1.0
         self.cNqs_pow_min = cNqs_pow_min
+        # change cNqs^2 in grad
+        self.start_iter = start_iter
         if self.rank == 0:
             s = f"det-num: {self.ci_num}, "
             s += f"Matrix shape: ({dim}, {dim}), "
-            s += f"min cNqs^2: {cNqs_pow_min:.4E}"
+            s += f"min cNqs^2: {cNqs_pow_min:.4E}, "
+            s += f"start_iter: {self.start_iter}"
             logger.info(s, master=True)
 
         # hij, x1, inverse_index, onv_not_idx
@@ -138,36 +142,6 @@ class NqsCi(VMCOptimizer):
         self.ci_nqs_value.zero_()
 
     @torch.no_grad()
-    def make_ci_nqs_raw(self) -> None:
-        """
-        \sum_j <phi_i|H|phi_j><phi_j|phi_nqs>
-        """
-        comb_x, x1 = get_comb_tensor(
-            self.ci_det, self.sorb, self.nele, self.noa, self.nob, flag_bit=True
-        )
-        nbatch, n_sd, bra_len = comb_x.shape
-        hij = get_hij_torch(
-            self.ci_det, comb_x, self.h1e, self.h2e, self.sorb, self.nele
-        )  # (ci_num, ci_num * n_SD)
-
-        # Binary Search x1 in CI-Det/Nqs
-        comb_x = comb_x.reshape(-1, bra_len)  # (n_sd * ci_num, bra_len)
-        array_idx = self.det_lut.lookup(comb_x, is_onv=True)[0]
-        mask = array_idx.gt(-1)  # if not found, set to -1
-        baseline = torch.arange(comb_x.size(0), device=self.device, dtype=torch.int64)
-        onv_not_idx = baseline[~mask]
-        # (ci_num * n_SD)
-        psi_x1 = torch.zeros(nbatch * n_sd, device=self.device, dtype=self.dtype)
-        # XXX:(zbwu-24-01-04) the above part is only calculated once and use unique
-        # in Nqs
-        psi_x1[onv_not_idx] = self.model(x1.reshape(-1, self.sorb)[~mask])
-
-        value = torch.einsum("ij, ij ->i", hij.to(self.dtype), psi_x1.reshape(self.ci_num, -1))
-
-        self.Ham_matrix[: self.ci_num, -1] = value
-        self.Ham_matrix[-1, : self.ci_num] = value.conj()
-
-    @torch.no_grad()
     def make_nqs_nqs(self, phi_nqs: Tensor, eloc_mean: Tensor) -> None:
         """
         <phi_NQS|H|phi_NQS> = sum(prob * eloc) * <phi_nqs|phi_nqs>
@@ -226,6 +200,7 @@ class NqsCi(VMCOptimizer):
         new_term_mean: Tensor,
         cNqs: Tensor,
         E0: float,
+        epoch: int,
     ) -> Tensor:
         """
         calculate NQS grad
@@ -239,7 +214,8 @@ class NqsCi(VMCOptimizer):
 
         # TODO:(zbwu-24-01-24) how to scale c0
         c0 = cNqs.norm().item() ** 2
-        c0 = max(c0, self.cNqs_pow_min)
+        if epoch < self.start_iter:
+            c0 = max(c0, self.cNqs_pow_min)
         loss = 2 * (c0 * (torch.sum(state_prob * log_psi.conj() * corr))).real
         loss.backward()
         return loss.detach()
@@ -298,6 +274,7 @@ class NqsCi(VMCOptimizer):
                 new_term_mean,
                 self.nqs_coeff,
                 E0,
+                epoch,
             )
             delta_grad = (time.time_ns() - t3) / 1.0e09
             if self.rank == 0:
