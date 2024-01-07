@@ -5,7 +5,6 @@ from functools import partial
 from typing import Union, Any, Tuple, Union, Callable, List, NewType
 
 from vmc.ansatz.transformer.nanogpt.model import get_decoder_amp
-# from vmc.ansatz.transformer.mingpt.model import get_decoder_amp
 from vmc.ansatz.symmetry import symmetry_mask
 from vmc.ansatz.utils import OrbitalBlock, SoftmaxLogProbAmps
 
@@ -14,7 +13,7 @@ KVCaches = NewType("KVCaches", List[Tuple[Tensor, Tensor]])
 
 class MPSdecoder(nn.Module):
     def __init__(self,
-                 iscale = 0.1,
+                 iscale = 0.001,
                  device = "cpu",
                  param_dtype: Any = torch.float64,
                  nqubits: int = None,
@@ -29,7 +28,7 @@ class MPSdecoder(nn.Module):
 
                  # NN的参数
                  ## Transformer参数设置
-                 compute_phase = False, # 是否计算相位
+                 compute_phase = True, # 是否计算相位
                  n_out_phase: int = 1,
                  amp_activation: Union[nn.Module, Callable] = SoftmaxLogProbAmps,
                  d_model: int = 32,
@@ -275,6 +274,32 @@ class MPSdecoder(nn.Module):
         # breakpoint()
         cond_wf = torch.stack(amp_list, dim=1)
         cond_wf = (cond_wf * 0.5).exp() # (n_batch, n_qubits//2)
+        normal = torch.norm(cond_wf, dim=1)
+        # breakpoint()
+        normal = torch.unsqueeze(normal,1)
+        # breakpoint()
+        normal = normal.repeat(1, cond_wf.shape[1])
+        # breakpoint()
+        cond_wf = cond_wf/normal # 先条件概率归一化
+        # breakpoint()
+        # 在计算最终的概率之前增加相位
+        if self.compute_phase:
+            phase = torch.zeros(1, **self.factory_kwargs)
+            phase_input = (
+                x.masked_fill(x == 0, -1).double().squeeze(1)
+            )  # (nbatch, 2)
+            phase_i = self.phase_layers[0](phase_input)
+            if self.n_out_phase == 1:
+                phase = phase_i.view(-1)
+            # breakpoint()
+
+            phase = torch.complex(torch.zeros_like(phase), phase).exp()
+            phase = torch.unsqueeze(phase,1)
+            phase = phase.repeat(1,cond_wf.shape[1])
+            # breakpoint()
+            cond_wf =  phase * cond_wf
+        else:
+            phase: Tensor = None
         # 通过增加层数来实现增加指标
         if self.pmode == "linear":
             if i == 0:
@@ -299,8 +324,11 @@ class MPSdecoder(nn.Module):
     def forward_element(self, input: Tensor):
         wf_nn = [0]*self.nqubits
         wf_mps = [0]*self.nqubits
-        wf = [0]*self.nqubits
         target = input
+        # 下面要按照每一个上指标计算
+        # \tilde{\psi}^{\alpha_{i-1} \alpha_{i}}\left(x_{i} \mid \boldsymbol{x}_{<i}\right)
+        # = M_{x_{i}}^{\alpha_{i-1} \alpha_{i}}
+        # + [f_{N N}\left(x_{i} \mid \boldsymbol{x}_{<i}\right)]^{ \alpha_{i-1}, \alpha_{i}}
         for i in range(0, self.nqubits):
             # 获得实际上“mps”的每一个m
             wf_nn[i] = self.get_Decoderwf(input, i)
@@ -343,22 +371,31 @@ class MPSdecoder(nn.Module):
                 else: # 占据情况
                     (wf_nn[i])[(j-1):j,:] += occ 
             # 先把条件概率乘起来
-            wf_nn[i] = torch.prod(wf_nn[i],dim=1)
+            # wf_nn[i] = torch.prod(wf_nn[i],dim=1)
             # print(wf_nn[i].shape)
+            
         tmp = wf_nn[0]
         for k in range(1,self.nqubits-1):
-            tmp = torch.einsum("ij,kjl->ikl",tmp,wf_nn[k])
-            tmp = torch.einsum("iij->ij",tmp)
-        tmp = torch.einsum("ij,kj->ik",tmp,wf_nn[self.nqubits-1])
-        wf = torch.einsum("ii->i",tmp)
-
-        # print("good!")
-
-        # breakpoint()
+            # print(tmp.shape)
+            # print(wf_nn[k].shape)
+            tmp = torch.einsum("ijk,abkd->iajbd",tmp,wf_nn[k]) # 对准缩并
+            # print(tmp.shape)
+            tmp = torch.einsum("iijbd->ijbd",tmp) # 取对角元的 n_batch
+            # print(tmp.shape)
+            tmp = torch.einsum("ijjd->ijd",tmp) # 取对角元的 n_cond
+            # print(tmp.shape)
+            # breakpoint()
+        # print(wf_nn[self.nqubits-1].shape)
+        tmp = torch.einsum("ijk,abk->iajb",tmp,wf_nn[self.nqubits-1])
+        tmp = torch.einsum("iijb->ijb",tmp)
+        tmp = torch.einsum("ijj->ij",tmp)
+        # print(torch.norm(tmp, dim=1).shape)
+        wf = torch.prod(tmp, dim=1) / torch.norm(tmp, dim=1)
         return wf
     def forward(self, input: Tensor):
         if self.wise == "element":
             wf = self.forward_element(input)
+            # breakpoint()
         return wf
     
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
