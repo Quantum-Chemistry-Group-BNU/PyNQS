@@ -23,7 +23,7 @@ class NqsCi(VMCOptimizer):
         self,
         CI: CIWavefunction,
         cNqs_pow_min: float = 1.0e-4,
-        start_iter: int = 1000,
+        start_iter: int = -1,
         **vmc_opt_kwargs: dict,
     ) -> None:
         super(NqsCi, self).__init__(**vmc_opt_kwargs)
@@ -49,7 +49,10 @@ class NqsCi(VMCOptimizer):
         assert cNqs_pow_min > 0.0 and cNqs_pow_min <= 1.0
         self.cNqs_pow_min = cNqs_pow_min
         # change cNqs^2 in grad
-        self.start_iter = start_iter
+        if start_iter < 0:
+            self.start_iter = self.max_iter
+        else:
+            self.start_iter = start_iter
         if self.rank == 0:
             s = f"det-num: {self.ci_num}, "
             s += f"Matrix shape: ({dim}, {dim}), "
