@@ -13,7 +13,7 @@ KVCaches = NewType("KVCaches", List[Tuple[Tensor, Tensor]])
 
 class MPSdecoder(nn.Module):
     def __init__(self,
-                 iscale = 0.001,
+                 iscale = 0.1,
                  device = "cpu",
                  param_dtype: Any = torch.float64,
                  nqubits: int = None,
@@ -24,6 +24,7 @@ class MPSdecoder(nn.Module):
                  wise: Any = "element", # 可选 "block" "element"
                  pmode: Any = "linear", # 可选 "linear" "conv" "spm" 
                  tmode: Any = "train", # 可选 "train" "guess"
+                 tmode_num = 200,
                  ar_sites: int = 2,
 
                  # NN的参数
@@ -59,6 +60,8 @@ class MPSdecoder(nn.Module):
         self.wise = wise
         self.pmode = pmode
         self.tmode = tmode
+        self.tmode_num = tmode_num
+        self.it = 0
 
         # NN部分 
         ## Transformer
@@ -90,7 +93,6 @@ class MPSdecoder(nn.Module):
                 2 * self.beta_nele,
             ]
         )
-
 
         self._symmetry_mask = partial(
             symmetry_mask,
@@ -150,14 +152,21 @@ class MPSdecoder(nn.Module):
         self.factory_kwargs = {"device": self.device, "dtype": torch.double}
         ## MPS part
         self.num_mps = self.get_MPSnum(self.nqubits,self.dcut) # 计算MPS总的参数维度
-        self.parm_mps = nn.Parameter(torch.randn(self.num_mps, **self.factory_kwargs) * self.iscale)
+        if self.tmode == "train":
+            self.parm_mps = nn.Parameter(torch.randn(self.num_mps, **self.factory_kwargs) * self.iscale)
+        if self.tmode == "guess":
+            self.register_buffer("parm_mps", torch.randn(self.num_mps, **self.factory_kwargs) * self.iscale)
         ## Transformer part 
-        self.num_decoder = self.get_DecoderSum(self.nqubits,self.dcut) # 计算Decoder总的参数维度
-        self.parm_decoder = nn.Parameter(torch.randn(self.num_decoder, **self.factory_kwargs) * self.iscale)
+        if self.wise == "element":
+            self.num_decoder = self.get_DecoderSum(self.nqubits,self.dcut) # 计算Decoder总的参数维度
+            self.parm_decoder = nn.Parameter(torch.randn(self.num_decoder, **self.factory_kwargs) * self.iscale)
+    
     def get_MPSnum(self, nqubits, dcut):
         return 1*2*dcut*2 + dcut*2*dcut*(nqubits-2)
+    
     def get_DecoderSum(self, nqubits, dcut):
         return 2*dcut + dcut*dcut*(nqubits-2)
+    
     def get_MPSwf(self, i):
         off = 2*self.dcut*2
         dim = self.dcut*2*self.dcut
@@ -272,16 +281,16 @@ class MPSdecoder(nn.Module):
             else:
                 phases = phase.gather(1, index).view(-1)
         # breakpoint()
+        
         cond_wf = torch.stack(amp_list, dim=1)
+        self.cond = cond_wf.shape[1]
+        # 条件概率严格归一化
         cond_wf = (cond_wf * 0.5).exp() # (n_batch, n_qubits//2)
         normal = torch.norm(cond_wf, dim=1)
-        # breakpoint()
         normal = torch.unsqueeze(normal,1)
-        # breakpoint()
         normal = normal.repeat(1, cond_wf.shape[1])
-        # breakpoint()
         cond_wf = cond_wf/normal # 先条件概率归一化
-        # breakpoint()
+        cond_wf = torch.cos(cond_wf)
         # 在计算最终的概率之前增加相位
         if self.compute_phase:
             phase = torch.zeros(1, **self.factory_kwargs)
@@ -292,36 +301,46 @@ class MPSdecoder(nn.Module):
             if self.n_out_phase == 1:
                 phase = phase_i.view(-1)
             # breakpoint()
-
-            phase = torch.complex(torch.zeros_like(phase), phase).exp()
+            # 这里除 n_cond 是因为 exp 之后最后要乘起来，要乘 n_cond 次
+            phase = (torch.complex(torch.zeros_like(phase), phase)/self.cond).exp()
             phase = torch.unsqueeze(phase,1)
             phase = phase.repeat(1,cond_wf.shape[1])
             # breakpoint()
             cond_wf =  phase * cond_wf
         else:
             phase: Tensor = None
+        
         # 通过增加层数来实现增加指标
-        if self.pmode == "linear":
+        if self.wise == "element":
+            if self.pmode not in ["linear", "conv", "mps"]:
+                raise ValueError("This Method is not avilable in this ansatz.")
+            if self.pmode == "linear":
+                if i == 0:
+                    cond_wf = torch.einsum("ij,k->ijk",cond_wf,self.parm_decoder[:self.dcut])
+                else:
+                    if i == (self.nqubits-1):
+                        cond_wf = torch.einsum("ij,k->ijk",cond_wf,self.parm_decoder[self.dcut:2*self.dcut])
+                    else:
+                        weight = self.parm_decoder[2*self.dcut+((i-1)*self.dcut*self.dcut):2*self.dcut+(i*self.dcut*self.dcut)]
+                        weight = weight.reshape(self.dcut,self.dcut)
+                        cond_wf = torch.einsum("ij,kl->ijkl",cond_wf,weight)
+        # 如果是elementwise的话就不需要通过增加层来增加指标
+        # 直接复制然后每一个元素加的都是一样的就可以
+        if self.wise == "block":
             if i == 0:
-                cond_wf = torch.einsum("ij,k->ijk",cond_wf,self.parm_decoder[:self.dcut])
+                cond_wf = torch.unsqueeze(cond_wf,-1)
+                cond_wf = cond_wf.repeat(1,1,self.dcut)
             else:
                 if i == (self.nqubits-1):
-                    cond_wf = torch.einsum("ij,k->ijk",cond_wf,self.parm_decoder[self.dcut:2*self.dcut])
+                    cond_wf = torch.unsqueeze(cond_wf,-1)
+                    cond_wf = cond_wf.repeat(1,1,self.dcut)
                 else:
-                    weight = self.parm_decoder[2*self.dcut+((i-1)*self.dcut*self.dcut):2*self.dcut+(i*self.dcut*self.dcut)]
-                    weight = weight.reshape(self.dcut,self.dcut)
-                    cond_wf = torch.einsum("ij,kl->ijkl",cond_wf,weight)
-
-        # if self.compute_phase:
-        #     wf = torch.complex(torch.zeros_like(phases), phases).exp() * (amps_log * 0.5).exp()
-        # else:
-        #     wf = (amps_log * 0.5).exp()
-        # if self.rank == 200:
-        # breakpoint()
-        # del amps_log, amp, amp_k, amp_k_log, index
-        return cond_wf
+                    cond_wf = torch.unsqueeze(cond_wf,-1)
+                    cond_wf = torch.unsqueeze(cond_wf,-1)
+                    cond_wf = cond_wf.repeat(1,1,self.dcut,self.dcut)
+        return cond_wf # (n_batch, n_cond, dcut, dcut)
     
-    def forward_element(self, input: Tensor):
+    def forward_psi(self, input: Tensor):
         wf_nn = [0]*self.nqubits
         wf_mps = [0]*self.nqubits
         target = input
@@ -333,9 +352,6 @@ class MPSdecoder(nn.Module):
             # 获得实际上“mps”的每一个m
             wf_nn[i] = self.get_Decoderwf(input, i)
             wf_mps[i] = self.get_MPSwf(i)
-            # print("before")
-            # print(wf_mps[i].shape)
-            # print("after")
             cond_shape = wf_nn[i].shape[1]
             # 更改大小，把矩阵对齐(n_batch, n_cond, dcut, dcut)
             # 这里 n_cond 实际上是 n_qubits//2
@@ -354,48 +370,29 @@ class MPSdecoder(nn.Module):
                     wf_mps[i] = torch.einsum("ijk->jik",wf_mps[i])
                     wf_mps[i] = torch.unsqueeze(wf_mps[i],1)
                     wf_mps[i] = wf_mps[i].repeat(1,cond_shape,1,1)
-            # print(cond_shape)
-            # print(wf_nn[i].shape)
-            # print(wf_mps[i].shape)
             
             target_i = target[:,i-1]
             n_occ = wf_mps[i][:1,:]
             occ = wf_mps[i][1:2,:]
             for j in range(0, target_i.shape[0]):
-                # print("occ")
-                # print(f"{j}")
-                # print(target_i[j])
-                # print(index)
                 if int(target_i[j]) == -1: # 未占据情况
                     (wf_nn[i])[(j-1):j,:] += n_occ
                 else: # 占据情况
                     (wf_nn[i])[(j-1):j,:] += occ 
-            # 先把条件概率乘起来
-            # wf_nn[i] = torch.prod(wf_nn[i],dim=1)
-            # print(wf_nn[i].shape)
-            
         tmp = wf_nn[0]
         for k in range(1,self.nqubits-1):
-            # print(tmp.shape)
-            # print(wf_nn[k].shape)
             tmp = torch.einsum("ijk,abkd->iajbd",tmp,wf_nn[k]) # 对准缩并
-            # print(tmp.shape)
             tmp = torch.einsum("iijbd->ijbd",tmp) # 取对角元的 n_batch
-            # print(tmp.shape)
             tmp = torch.einsum("ijjd->ijd",tmp) # 取对角元的 n_cond
-            # print(tmp.shape)
-            # breakpoint()
-        # print(wf_nn[self.nqubits-1].shape)
+        # 缩并最后一个矩阵
         tmp = torch.einsum("ijk,abk->iajb",tmp,wf_nn[self.nqubits-1])
         tmp = torch.einsum("iijb->ijb",tmp)
         tmp = torch.einsum("ijj->ij",tmp)
-        # print(torch.norm(tmp, dim=1).shape)
+        # 再次归一化（据说是数值稳定性要求）
         wf = torch.prod(tmp, dim=1) / torch.norm(tmp, dim=1)
         return wf
     def forward(self, input: Tensor):
-        if self.wise == "element":
-            wf = self.forward_element(input)
-            # breakpoint()
+        wf = self.forward_psi(input)
         return wf
     
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
