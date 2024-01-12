@@ -1,12 +1,19 @@
 import torch
 from torch import nn, Tensor
-from functools import partial
+import torch.nn.functional as F
 
 from typing import Union, Any, Tuple, Union, Callable, List, NewType
 
 from vmc.ansatz.transformer.nanogpt.model import get_decoder_amp
 from vmc.ansatz.symmetry import symmetry_mask
 from vmc.ansatz.utils import OrbitalBlock, SoftmaxLogProbAmps
+
+from libs.C_extension import onv_to_tensor
+from utils.public_function import (
+    get_fock_space,
+    get_special_space,
+    setup_seed,
+)
 
 
 KVCaches = NewType("KVCaches", List[Tuple[Tensor, Tensor]])
@@ -25,23 +32,24 @@ class MPSdecoder(nn.Module):
                  pmode: Any = "linear", # 可选 "linear" "conv" "spm" 
                  tmode: Any = "train", # 可选 "train" "guess"
                  tmode_num = 200,
-                 ar_sites: int = 2,
 
                  # NN的参数
                  ## Transformer参数设置
-                 compute_phase = True, # 是否计算相位
-                 n_out_phase: int = 1,
                  amp_activation: Union[nn.Module, Callable] = SoftmaxLogProbAmps,
                  d_model: int = 32,
                  n_layers: int = 6,
                  n_heads: int = 8,
                  dropout: float = 0.0,
-                 amp_bias: bool = True,
+                 amp_bias: bool = True, #
+
+                 ### 相位
+                 compute_phase = True, 
+                 n_out_phase: int = 1,
                  phase_activation: Union[nn.Module, Callable] = None,
                  phase_hidden_activation: Union[nn.Module, Callable] = nn.ReLU,
                  phase_hidden_size: List[int] = [64, 64],
                  phase_use_embedding: bool = False,
-                 phase_norm_momentum=0.1,
+                 phase_norm_momentum=0.1, #
 
                  #功能参数
                  use_symmetry: bool = False,
@@ -66,48 +74,57 @@ class MPSdecoder(nn.Module):
 
         # NN部分 
         ## Transformer
-        if nele is None:
-            nele = self.nqubits // 2
-        self.nele = nele
+        # if nele is None:
+        #     nele = self.nqubits // 2
+        # self.nele = nele
 
-        if alpha_nele is None:
-            alpha_nele = nele // 2
-        if beta_nele is None:
-            beta_nele = nele // 2
+        # if alpha_nele is None:
+        #     alpha_nele = nele // 2
+        # if beta_nele is None:
+        #     beta_nele = nele // 2
 
-        self.beta_nele = beta_nele
-        self.alpha_nele = alpha_nele
-        print(self.alpha_nele)
-        assert self.beta_nele + self.alpha_nele == self.nele
+        # self.beta_nele = beta_nele
+        # self.alpha_nele = alpha_nele
+        # assert self.beta_nele + self.alpha_nele == self.nele
 
-        if ar_sites not in (1, 2):
-            raise ValueError(f"ar_sites: Expected 1 or 2 but received {ar_sites}")
-        self.ar_sites = ar_sites
-        if self.ar_sites == 1:
-            raise NotImplementedError(f"the one-sites will be implemented in future")
-        
-        self.min_n_sorb = min(
-            [
-                self.nqubits - 2 * self.alpha_nele,
-                self.nqubits - 2 * self.beta_nele,
-                2 * self.alpha_nele,
-                2 * self.beta_nele,
-            ]
-        )
+        # 对称性相关
+        # ++++++++++++++++++++++++++++++++++++++++++++++
+        # self.min_n_sorb = min(
+        #     [
+        #         self.nqubits - 2 * self.alpha_nele,
+        #         self.nqubits - 2 * self.beta_nele,
+        #         2 * self.alpha_nele,
+        #         2 * self.beta_nele,
+        #     ]
+        # )
 
-        self._symmetry_mask = partial(
-            symmetry_mask,
-            sorb=self.nqubits,
-            alpha=self.alpha_nele,
-            beta=self.beta_nele,
-            min_k=self.min_n_sorb,
-            sites=self.ar_sites,
-        )
-        # amp and phase activation
+        # self._symmetry_mask = partial(
+        #     symmetry_mask,
+        #     sorb=self.nqubits,
+        #     alpha=self.alpha_nele,
+        #     beta=self.beta_nele,
+        #     min_k=self.min_n_sorb,
+        #     sites=2,
+        # )
+        # ++++++++++++++++++++++++++++++++++++++++++++++
+
+        # Transformer振幅层
+        # ----------------------------------------------
         self.amp_activation = amp_activation()
-        self.phase_activation = phase_activation
-        
 
+        self.amp_layers, self.model_config = get_decoder_amp(
+            n_qubits=self.nqubits,
+            d_model=d_model,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            dropout=dropout,
+            bias=amp_bias,
+        )
+        self.amp_layers = self.amp_layers.to(self.device)
+        # ----------------------------------------------
+        # Transformer相位层
+        # ----------------------------------------------
+        self.phase_activation = phase_activation
         self.compute_phase = compute_phase
         if n_out_phase == 1:
             self.n_out_phase = n_out_phase
@@ -148,7 +165,7 @@ class MPSdecoder(nn.Module):
             )
             self.phase_layers.append(phase_i.to(self.device))
             self.phase_layers = nn.ModuleList(self.phase_layers)
-        
+        # ----------------------------------------------
         # 初始化参数
         self.factory_kwargs = {"device": self.device, "dtype": torch.double}
         ## MPS part
@@ -163,12 +180,21 @@ class MPSdecoder(nn.Module):
             self.parm_decoder = nn.Parameter(torch.randn(self.num_decoder, **self.factory_kwargs) * self.iscale)
     
     def get_MPSnum(self, nqubits, dcut):
-        return 1*2*dcut*4 + dcut*4*dcut*(nqubits-2)
+        """
+        计算MPS的参数个数
+        """
+        return 1*2*dcut*2 + dcut*2*dcut*(nqubits-2)
     
     def get_DecoderSum(self, nqubits, dcut):
-        return 2*dcut + dcut*dcut*(nqubits-2)
+        """
+        计算Transformer增加线性层参数的个数
+        """
+        return dcut + dcut*dcut*(nqubits-2)//2
     
     def get_MPSwf(self, i):
+        """
+        获取相位部分MPS的函数 => (4, n_cond, dcut) & (4, n_cond, n_cond, dcut)
+        """
         off = 2*self.dcut*4
         dim = self.dcut*4*self.dcut
         if i == 0:
@@ -176,7 +202,7 @@ class MPSdecoder(nn.Module):
             wf = torch.unsqueeze(wf,-2)
             wf = wf.repeat(1,self.cond,1)
         else:
-            if i == self.nqubits-1:
+            if i == self.nqubits//2-1:
                 wf = self.parm_mps[4*self.dcut:4*self.dcut*2].reshape(4,self.dcut)
                 wf = torch.unsqueeze(wf,-2)
                 wf = wf.repeat(1,self.cond,1)
@@ -205,6 +231,9 @@ class MPSdecoder(nn.Module):
         kv_caches: KVCaches = None,
         kv_idxs: Tensor = None,
     ) -> Tuple[Tensor, Union[Tensor, None]]:
+        """
+        用于从GPT2里获取条件概率输出
+        """
         nbatch = x.size(0)
         amp_input = x  # +1/-1
         phase_input = x  # +1/-1
@@ -222,98 +251,44 @@ class MPSdecoder(nn.Module):
         amp_i = self.amp_layers(
             amp_input.long(), kv_caches=kv_caches, kv_idxs=kv_idxs
         )  # (nbatch, 4/2)
-
-        if ret_phase and self.compute_phase and i_th == self.nqubits // 2 - 1:
+        if ret_phase and i_th == self.nqubits // 2 - 1:
             phase_i = self.phase_layers[0](phase_input)  # (nbatch, 4/2)
         else:
             phase_i = None
 
         return amp_i, phase_i
+
     
     def apply_activations(
         self,
         amp_k: Tensor,
-        phase_k: Union[Tensor, None],
         amp_mask: Tensor,
     ) -> Tuple[Tensor, Union[Tensor, None]]:
+        """
+        作用激活函数
+        """
         if self.amp_activation is not None:
             amp_k = self.amp_activation(amp_k, amp_mask)
-        if self.phase_activation is not None:
-            phase_k = self.phase_activation(phase_k)
-        return amp_k, phase_k
+        return amp_k
+    
+    def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
+        """
+        Constraints Fock space -> FCI space
+        """
+        if self.use_symmetry:
+            return self._symmetry_mask(k=k, num_up=num_up, num_down=num_down)
+        else:
+            return torch.ones(num_up.size(0), 4, **self.factory_kwargs)
     
     def get_Decoderwf(self, x: Tensor, i) -> Tensor:
+        """
+        获取振幅和相位部分的Transformer波函数
+        """
         assert x.dim() in (1, 2)
         if x.dim() == 1:
             x = x.unsqueeze(0)
 
-        if x.numel() == 0:
-            empty = torch.zeros(0, **self.factory_kwargs)
-            if self.compute_phase:
-                return torch.complex(empty, empty)
-            else:
-                return empty
-
-        
-        
-        
-
-        ik = self.nqubits // 2 - 1
-        # amp: (nbatch, sorb//2, 4), phase: (nbatch, 4)
-        amp, phase = self._get_conditional_output(x, ik)
-        cond_wf = amp
-        # nbatch = x.size(0)
-        # index: Tensor = None
-        # x = ((x + 1) / 2).long()  # +1/-1 -> 1/0
-        # num_up = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
-        # num_down = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
-        # amps_log = torch.zeros(nbatch, **self.factory_kwargs)
-        # amp_list: List[Tensor] = []
-        # for k in range(0, self.nqubits, 2):
-        #     # (nbatch, 4)
-        #     amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
-        #     amp_k = amp[:, k // 2, :]  # (nbatch, 4)
-        #     amp_k_log = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
-        #     # amp_k_log = torch.where(amp_k_log.isinf(), torch.full_like(amp_k_log, -30), amp_k_log)
-            
-        #     # torch "-inf" * 0 = "nan", so use index, (nbatch, 1)
-        #     index = self.state_to_int(x[:, k : k + 2]).view(-1, 1)
-        #     amps_log += amp_k_log.gather(1, index).view(-1)
-        #     amp_list.append(amp_k_log.gather(1, index).reshape(-1))
-
-        #     num_up.add_(x[..., k])
-        #     num_down.add_(x[..., k + 1])
-
-        
-        # cond_wf = torch.stack(amp_list, dim=1)
-        # # 条件概率严格归一化
-        # cond_wf = (cond_wf * 0.5).exp() # (n_batch, n_qubits//2)
-        # normal = torch.norm(cond_wf, dim=1)
-        # normal = torch.unsqueeze(normal,1)
-        # normal = normal.repeat(1, cond_wf.shape[1])
-        # cond_wf = cond_wf/normal # 先条件概率归一化
-        # cond_wf = torch.cos(cond_wf)
-        # 在计算最终的概率之前增加相位
-        # breakpoint()
-        # if self.compute_phase:
-        #     # phase = torch.zeros(1, **self.factory_kwargs)
-        #     phase_input = (
-        #         x.masked_fill(x == 0, -1).double().squeeze(1)
-        #     )  # (nbatch, 2)
-        #     phase_i = self.phase_layers[0](phase_input)
-        #     if self.n_out_phase == 1:
-        #         phase = phase_i.view(-1)
-        #     # breakpoint()
-        #     # 这里除 n_cond 是因为 exp 之后最后要乘起来，要乘 n_cond 次
-            
-        #     phase = (torch.complex(torch.zeros_like(phase), phase)/self.cond).exp()
-        #     phase = torch.unsqueeze(phase,1)
-        #     phase = torch.unsqueeze(phase,1)
-        #     phase = phase.repeat(1,amp.shape[1],amp.shape[2])
-            # cond_wf = amp * phase #(n_batch, n_cond, 4)
-        # else:
-        #     cond_wf = amp
-        
+        cond_wf, phase = self._get_conditional_output(x, self.nqubits // 2 - 1) # (n_batch, n_cond, 4) (n_batch, )
         # 通过增加层数来实现增加指标
         if self.wise == "element":
             if self.pmode not in ["linear", "conv", "mps"]:
@@ -322,18 +297,14 @@ class MPSdecoder(nn.Module):
                 if i == 0:
                     cond_wf = torch.einsum("ijk,a->kjai",cond_wf,self.parm_decoder[:self.dcut])
                 else:
-                    if i == (self.nqubits-1):
+                    if i == (self.nqubits//2-1):
                         cond_wf = torch.einsum("ijk,a->kjai",cond_wf,self.parm_decoder[self.dcut:2*self.dcut])
                     else:
                         weight = self.parm_decoder[2*self.dcut+((i-1)*self.dcut*self.dcut):2*self.dcut+(i*self.dcut*self.dcut)]
                         weight = weight.reshape(self.dcut,self.dcut)
                         cond_wf = torch.einsum("ijk,ab->kjabi",cond_wf,weight)
-        # print(cond_wf.shape)
-        # breakpoint()
         # 如果是elementwise的话就不需要通过增加层来增加指标
         # 直接复制然后每一个元素加的都是一样的就可以
-        # print(cond_wf.shape)
-        # breakpoint()
         if self.wise == "block":
             cond_wf = torch.einsum("ijk->kji",cond_wf)
 
@@ -348,118 +319,139 @@ class MPSdecoder(nn.Module):
                     cond_wf = torch.unsqueeze(cond_wf,-2)
                     cond_wf = torch.unsqueeze(cond_wf,-2)
                     cond_wf = cond_wf.repeat(1,1,self.dcut,self.dcut,1)
+        phase = torch.complex(torch.zeros_like(phase), phase).exp()
+        if self.compute_phase:
+            if self.n_out_phase == 1:
+                phase = phase.view(-1)
+            else:
+                phase = phase.gather(1, self.index).view(-1)
+        cond_wf = (cond_wf* 0.5).exp() * phase
+        # breakpoint()
         return cond_wf # (4, n_cond, dcut, dcut, n_batch)
     
     def forward_psi(self, input: Tensor):
-        wf_nn = [0]*self.nqubits
-        wf_mps = [0]*self.nqubits
-        target = input
+        wf_nn = [0]*(self.nqubits//2)
+        wf_mps = [0]*(self.nqubits//2)
+        target = (input + 1) / 2
+        self.index = self.state_to_int(target[:, self.nqubits : self.nqubits + 2]).view(-1, 1) # 最后一层的index
         # 下面要按照每一个上指标计算
         # \tilde{\psi}^{\alpha_{i-1} \alpha_{i}}\left(x_{i} \mid \boldsymbol{x}_{<i}\right)
         # = M_{x_{i}}^{\alpha_{i-1} \alpha_{i}}
         # + [f_{N N}\left(x_{i} \mid \boldsymbol{x}_{<i}\right)]^{ \alpha_{i-1}, \alpha_{i}}
-        for i in range(0, self.nqubits):
+        # phase-part ========================================================================================
+        for i in range(0, self.nqubits//2):
             # 获得实际上“mps”的每一个m
             wf_nn[i] = self.get_Decoderwf(input, i)
             wf_mps[i] = self.get_MPSwf(i)
-            cond_shape = wf_nn[i].shape[1]
-            # 更改大小，把矩阵对齐(4, n_cond, dcut, dcut, n_batch)
+            
             # 这里 n_cond 实际上是 n_qubits//2
+            ## 把 n_batch 维度加到 MPS 上去，
             n_batch = wf_nn[i].shape[-1]
             if i == 0:
                 wf_mps[i] = torch.unsqueeze(wf_mps[i],-1)
                 wf_mps[i] = wf_mps[i].repeat(1,1,1,n_batch)
             else:
-                if i == self.nqubits-1:
+                if i == self.nqubits//2-1:
                     wf_mps[i] = torch.unsqueeze(wf_mps[i],-1)
                     wf_mps[i] = wf_mps[i].repeat(1,1,1,n_batch)
                 else:
                     wf_mps[i] = torch.unsqueeze(wf_mps[i],-1)
                     wf_mps[i] = wf_mps[i].repeat(1,1,1,1,n_batch)
-            wf_nn[i] = wf_nn[i] + wf_mps[i]
-        tmp = wf_nn[0]
-        
-        for k in range(1,self.nqubits-1):
-            tmp = torch.einsum("ijkl,abkcd->iajbcld",tmp,wf_nn[k]) #(4, n_cond, dcut, n_batch)
-            tmp = torch.einsum("iijjkll->ijkl",tmp)
+            wf_mps[i] = wf_nn[i] + wf_mps[i]
+        psi_phase = wf_mps[0]
+        # breakpoint()
+        # 挨个缩并矩阵
+        for k in range(1,self.nqubits//2-1):
+            psi_phase = torch.einsum("ijkl,ijkcl->ijcl",psi_phase,wf_mps[k]) #(4, n_cond, dcut, n_batch)
         # 缩并最后一个矩阵
-        tmp = torch.einsum("ijkl,abkd->iajbld",tmp,wf_nn[self.nqubits-1])
-        tmp = torch.einsum("iikkll->lki",tmp) #(n_batch, n_cond, 4)
-        # breakpoint()
-        # breakpoint()
-        # tmp = tmp.to(torch.complex128)
-        # tmp = torch.log(tmp)
-        x = input
-        nbatch = x.size(0)
-        index: Tensor = None
-        x = ((x + 1) / 2).long()  # +1/-1 -> 1/0
-        num_up = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
-        num_down = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
-        amps_value = torch.ones(nbatch, **self.factory_kwargs)
-        for k in range(0, self.nqubits, 2):
-            # (nbatch, 4)
-            amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
-            
-            
-            amp_k = tmp[:, k // 2, :]  # (nbatch, 4)
-            amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]            
-            
-            # torch "-inf" * 0 = "nan", so use index, (nbatch, 1)
-            index = self.state_to_int(x[:, k : k + 2]).view(-1, 1)
-            amps_value += amp_k_mask.gather(1, index).view(-1)
-            num_up.add_(x[..., k])
-            num_down.add_(x[..., k + 1])
-            # breakpoint()
+        psi_phase = torch.einsum("ijkl,ijkl->lji",psi_phase,wf_mps[self.nqubits//2-1]) #(n_batch, n_cond, 4)
         
+        nbatch = target.size(0)
+        # index: Tensor = None
+        # x = ((x + 1) / 2).long()  # +1/-1 -> 1/0
+        # num_up = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
+        # num_down = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
+        psi_phase_value = torch.ones(nbatch, dtype=psi_phase.dtype, device =self.device)
+        for k in range(0, self.nqubits//2, 2):
+        #     amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
+            psi_phase_k = psi_phase[:, k // 2, :]  # (nbatch, 4)
+        #     amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]            
+        #     # torch "-inf" * 0 = "nan", so use index, (nbatch, 1)
+            index = self.state_to_int(target[:, k : k + 2]).view(-1, 1)
+            psi_phase_value *= psi_phase_k.gather(1, index).view(-1)
+        #     num_up.add_(x[..., k])
+        #     num_down.add_(x[..., k + 1])
         # breakpoint()
-        
-        if self.compute_phase:
-            phase = torch.zeros(1, **self.factory_kwargs)
-            phase_input = (
-                x.masked_fill(x == 0, -1).double().squeeze(1)
-            )  # (nbatch, 2)
-            phase_i = self.phase_layers[0](phase_input)
-            if self.n_out_phase == 1:
-                phase = phase_i.view(-1)
-            # breakpoint()
-            # 这里除 n_cond 是因为 exp 之后最后要乘起来，要乘 n_cond 次
-            
-            phase = (torch.complex(torch.zeros_like(phase), phase)/self.cond).exp()
-            wf = phase * (amps_value * 0.5).exp()
-        else:
-            wf = (amps_value * 0.5).exp()
-        wf = torch.where(wf.isnan(), torch.full_like(wf, 0), wf)
+        arg = torch.angle(psi_phase_value)
+        phase_part = torch.exp(1j * arg)
 
+        # ===================================================================================================
         # breakpoint()
-        #     target_i = target[:,i-1]
-        #     n_occ = wf_mps[i][:1,:]
-        #     occ = wf_mps[i][1:2,:]
-        #     for j in range(0, target_i.shape[0]):
-        #         if int(target_i[j]) == -1: # 未占据情况
-        #             (wf_nn[i])[(j-1):j,:] += n_occ
-        #         else: # 占据情况
-        #             (wf_nn[i])[(j-1):j,:] += occ 
-        # tmp = wf_nn[0]
-        # for k in range(1,self.nqubits-1):
-        #     tmp = torch.einsum("ijk,abkd->iajbd",tmp,wf_nn[k]) # 对准缩并
-        #     tmp = torch.einsum("iijbd->ijbd",tmp) # 取对角元的 n_batch
-        #     tmp = torch.einsum("ijjd->ijd",tmp) # 取对角元的 n_cond
-        # # 缩并最后一个矩阵
-        # tmp = torch.einsum("ijk,abk->iajb",tmp,wf_nn[self.nqubits-1])
-        # tmp = torch.einsum("iijb->ijb",tmp)
-        # tmp = torch.einsum("ijj->ij",tmp)
-        # # 再次归一化（据说是数值稳定性要求）
-        # wf = torch.prod(tmp, dim=1) / torch.norm(tmp, dim=1)
+        # amp-part ==========================================================================================
+        psi_amp_value = torch.ones(nbatch, dtype=psi_phase.dtype, device =self.device)
+        psi_amp = wf_nn[0] # (4, n_cond, dcut, n_batch)
+        # breakpoint()
+        for l in range(0,self.nqubits//2):
+            psi_amp_l = psi_amp
+            if l == self.nqubits//2:
+                for k in range(1,self.nqubits//2-1):
+                    psi_amp_l = torch.einsum("iakl,iakcl->iacl",psi_amp_l,wf_nn[k]) #(4, n_cond, dcut, n_batch)
+                psi_amp_l = torch.einsum("iakl,iakl->lai",psi_amp_l,wf_nn[self.nqubits//2-1]) #(n_batch, n_cond, 4)
+            else: 
+                for k in range(1,l):
+                     psi_amp_l = torch.einsum("iakl,iakcl->iacl",psi_amp_l,wf_nn[k]) #(4, n_cond, dcut, n_batch)
+            psi_amp_l = torch.einsum("iajk,iajk->kai",psi_amp_l,psi_amp_l.conj()) # (n_batch, n_cond, 4)
+            # print("-------")
+            # print(psi_amp_l)
+            # norm----------------------------------------------------
+            psi_amp_l = psi_amp_l[:,l,...]/torch.sum(psi_amp_l, dim=1)
+            # psi_amp_l = torch.sqrt(psi_amp_l)
+            # renorm--------------------------------------------------
+            # psi_amp_l = F.normalize(psi_amp_l, dim=1, eps=1e-14)
+            # --------------------------------------------------------
+            index = self.state_to_int(target[:, 2 *  l : 2*l + 2]).view(-1, 1)
+            psi_amp_value *=psi_amp_l.gather(1, index).view(-1)
+            # breakpoint()
+        amp_part = torch.sqrt(psi_amp_value)
+        # breakpoint()
+        wf = amp_part * phase_part
         return wf
     def forward(self, input: Tensor):
         wf = self.forward_psi(input)
         return wf
-    
-    def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
-        """
-        Constraints Fock space -> FCI space
-        """
-        if self.use_symmetry:
-            return self._symmetry_mask(k=k, num_up=num_up, num_down=num_down)
-        else:
-            return torch.ones(num_up.size(0), 4, **self.factory_kwargs)
+
+
+
+
+if __name__ == "__main__":
+    torch.set_default_dtype(torch.double)
+    setup_seed(333)
+    device = "cpu"
+    sorb = 8
+    nele = 4
+    # alpha = 1
+    fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
+    length = fock_space.shape[0]
+    fci_space = onv_to_tensor(
+        get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb
+    )
+    dim = fci_space.size(0)
+    # AD_TEST = False
+    # SAMPLE_TEST = True
+    MPSDecoder = MPSdecoder(
+        nqubits=sorb,
+        device=device,
+        dcut=6,
+        wise="element", # 可选 "block" "element"
+        pmode="linear", # 可选 "linear" "conv" "spm" 
+        tmode="train", # 可选 "train" "guess"
+    )
+    # modelname = "MPS_Decoder"
+    print("===========MPSDecoder============")
+    ansatz = MPSDecoder
+    print(f"Psi^2 in Fock space")
+    psi = MPSDecoder(fock_space)
+    print((psi * psi.conj()).sum().item())
+    print(f"Psi^2 in FCI space")
+    psi = MPSDecoder(fci_space)
+    print((psi * psi.conj()).sum().item())
