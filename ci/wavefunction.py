@@ -427,7 +427,7 @@ class CITrain:
         with torch.no_grad():
             # notice onstate[0] is HF state
             dim = self.onstate.shape[0]
-            initial_state = self.onstate[random.randrange(dim)].clone().detach()
+            initial_state = self.onstate[0].clone().detach()
             if self.exact:
                 # fci-space isn't pre-ci space
                 fci_space = self.sampler.ele_info.ci_space

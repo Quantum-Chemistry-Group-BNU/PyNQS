@@ -2,7 +2,9 @@ import time
 import random
 import platform
 import os
+import subprocess
 import sys
+import warnings
 import __main__
 import torch
 import torch.distributed as dist
@@ -76,7 +78,7 @@ class VMCOptimizer:
         interval: int = 100,
         prefix: str = "VMC",
         MAX_AD_DIM: int = -1,
-        kfac: KFACPreconditioner = None
+        kfac: KFACPreconditioner = None,
     ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -85,6 +87,7 @@ class VMCOptimizer:
         self.rank = get_rank()
         self.world_size = get_world_size()
         self.external_model = external_model
+        self.dump_input()
 
         # whether read nqs/h1e-h2e from external file
         if self.external_model is not None:
@@ -129,7 +132,6 @@ class VMCOptimizer:
         self.time_sample: List[float] = []
         self.time_iter: List[float] = []
 
-        self.dump_input()
         if self.rank == 0:
             params_num = sum(map(torch.numel, self.model.parameters()))
             s = f"NQS model:\n{self.model}\n"
@@ -200,16 +202,31 @@ class VMCOptimizer:
 
     def dump_input(self):
         if self.rank == 0:
-            s = "System:\n"
-            if hasattr(__main__, "__file__"):
-                filename = os.path.abspath(__main__.__file__)
-                s += f"Input file: {filename}\n"
+            s = f"{'=' * 50} Begin PyNQS {'=' * 50}\n"
+            s += "System:\n"
             s += f"System {str(platform.uname())}\n"
             s += f"Python {sys.version}\n"
             s += f"numpy {np.__version__} torch {torch.__version__}\n"
             s += f"Date: {time.ctime()}\n"
             s += f"Device: {self.device}\n"
+            s += f"PyNQS Version: {self.get_version()}"
             logger.info(s, master=True)
+            if hasattr(__main__, "__file__"):
+                filename = os.path.abspath(__main__.__file__)
+                s = f"Input file: {filename}\n"
+                logger.info(s, master=True)
+                os.system(f"cat {filename}")
+            logger.info("=" * 100, master=True)
+
+    def get_version(self) -> str:
+        command = "git rev-parse HEAD"
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        if len(result.stderr) != 0:
+            warnings.warn(f"PyNQS git-version not been found", UserWarning)
+            version = "0000000000000000"
+        else:
+            version = result.stdout
+        return version
 
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self):
@@ -230,8 +247,9 @@ class VMCOptimizer:
             # lp.print_stats()
             # exit()
 
-            state, state_prob, eloc, e_total, stats, eloc_mean = self.sampler.run(initial_state, epoch=epoch)
-            # TODO:(zbwu-23-12-15)
+            state, state_prob, eloc, e_total, stats, eloc_mean = self.sampler.run(
+                initial_state, epoch=epoch
+            )
             if self.rank == 0:
                 s = f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j"
                 logger.info(s, master=True)
@@ -278,8 +296,6 @@ class VMCOptimizer:
                 )
             delta_grad = (time.time_ns() - t1) / 1.00e09
 
-            # logger.info(f"lr: {self.opt.state_dict()['param_groups'][0]['lr']}")
-
             # save the energy grad
             if self.rank == 0:
                 x: List[np.ndarray] = []
@@ -322,7 +338,6 @@ class VMCOptimizer:
                         checkpoint_file,
                     )
             delta = (time.time_ns() - t0) / 1.00e09
-            # TODO: All-Reduce mean-time or max-time zbwu(23-09-07)
             # All-Reduce max-time
             c = torch.tensor([delta_grad, delta_update, delta], device=self.device)
             all_reduce_tensor(c, op=dist.ReduceOp.MAX)
@@ -399,7 +414,6 @@ class VMCOptimizer:
             self.sampler.frame_sample.to_csv(sample_file)
 
         if nqs:
-            # TODO: using self.model_raw.state_dict()
             torch.save(
                 {
                     # DDP modules

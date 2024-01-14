@@ -669,7 +669,7 @@ class Sampler:
             eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
             all_reduce_tensor(eloc_mean, world_size=self.world_size)
             synchronize()
-            var = ((eloc - eloc_mean) ** 2 * prob).sum() * self.world_size
+            var = ((eloc - eloc_mean) * (eloc - eloc_mean).conj() * prob).sum() * self.world_size
             all_reduce_tensor(var, world_size=self.world_size)
             sd = torch.sqrt(var)
             if self.debug_exact:

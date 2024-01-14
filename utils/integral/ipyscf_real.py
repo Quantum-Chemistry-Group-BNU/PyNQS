@@ -155,7 +155,7 @@ def integral_pyscf(atom: str,
         assert ValueError(f"model-type is {model_type}, but excepted in {MODEL_TYPE}")
 
     if model_type == "Chem":
-        mol = gto.Mole(atom=atom, verbose=3, basis=basis, symmetry=False)
+        mol = gto.Mole(atom=atom, verbose=5, basis=basis, symmetry=False)
         mol.build()
         sorb = mol.nao * 2
         nele = mol.nelectron

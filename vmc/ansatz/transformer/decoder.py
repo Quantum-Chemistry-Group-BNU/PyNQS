@@ -34,7 +34,6 @@ from vmc.ansatz.symmetry import symmetry_mask, orthonormal_mask
 from utils.distributed import get_rank, get_world_size, synchronize
 
 
-
 KVCaches = NewType("KVCaches", List[Tuple[Tensor, Tensor]])
 
 
@@ -127,7 +126,7 @@ class DecoderWaveFunction(nn.Module):
                 f"Transformer-Decoder-nqs types({wf_type}) must be in ('complex', 'real')"
             )
 
-        # amplitude sub-network -> (nbatch, 4/2)
+        # amplitude sub-network -> (nbatch, sorb//2, 4)
         self.amp_layers, self.model_config = get_decoder_amp(
             n_qubits=self.sorb,
             d_model=d_model,
@@ -139,7 +138,6 @@ class DecoderWaveFunction(nn.Module):
         self.amp_layers = self.amp_layers.to(self.device)
         self.use_kv_cache = use_kv_cache
 
-        # XXX: NOT-Fully Test
         if phase_use_embedding:
             raise NotImplementedError(f"Phases layer embedding will be implemented in future")
         n_in = self.sorb
@@ -154,7 +152,7 @@ class DecoderWaveFunction(nn.Module):
         self.phase_batch_norm = phase_batch_norm
         self.phase_norm_momentum = phase_norm_momentum
 
-        # phase sub-network, MLP -> (nbatch, 4/2)
+        # phase sub-network, MLP -> (nbatch, 1/4)
         self.phase_layers: List[OrbitalBlock] = []
         if self.compute_phase:
             phase_i = OrbitalBlock(
@@ -241,6 +239,11 @@ class DecoderWaveFunction(nn.Module):
         kv_caches: KVCaches = None,
         kv_idxs: Tensor = None,
     ) -> Tuple[Tensor, Union[Tensor, None]]:
+        """
+        Calculate amp and phase(only at the last layer of the QuadTree).
+
+        i_th: the height of the QuadTree, int
+        """
         nbatch = x.size(0)
         amp_input = x  # +1/-1
         phase_input = x  # +1/-1
@@ -259,6 +262,7 @@ class DecoderWaveFunction(nn.Module):
             amp_input.long(), kv_caches=kv_caches, kv_idxs=kv_idxs
         )  # (nbatch, 4/2)
 
+        # calculate the phase at the last layer of the QuadTree
         if ret_phase and self.compute_phase and i_th == self.sorb // 2 - 1:
             phase_i = self.phase_layers[0](phase_input)  # (nbatch, 4/2)
         else:
@@ -284,7 +288,7 @@ class DecoderWaveFunction(nn.Module):
         """
         if x0.size(0) < min_batch or min_batch < 0:
             amp = self._get_conditional_output(
-                x0, i_th=k, ret_phase=False, kv_caches=kv_caches, kv_idxs=kv_idxs
+                x0, i_th=k // 2, ret_phase=False, kv_caches=kv_caches, kv_idxs=kv_idxs
             )[0]
         else:
             dim = x0.size(0)
@@ -296,12 +300,6 @@ class DecoderWaveFunction(nn.Module):
             # creative next-cache, extremely inelegant
             # kv-cache shape
             if self.use_kv_cache:
-                # seq_length, d_model = kv_caches[0][0].shape[1:]
-                # kv_rand = lambda: torch.empty(
-                #     dim, seq_length + 1, d_model, dtype=torch.double, device=self.device
-                # )
-                # kv_caches_next: KVCaches = [(kv_rand(), kv_rand()) for _ in range(len(kv_caches))]
-
                 seq_length, d_model = kv_caches[0][0].shape[1:]
                 kv_length = len(kv_caches)
                 shape = (kv_length, 2, dim, seq_length + 1, d_model)
@@ -319,7 +317,7 @@ class DecoderWaveFunction(nn.Module):
                     _kv_caches = None
                 amp[begin:end] = self._get_conditional_output(
                     x0[begin:end],
-                    i_th=k,
+                    i_th=k // 2,
                     ret_phase=False,
                     kv_caches=_kv_caches,
                     # kv_idxs=_kv_idx,
@@ -487,7 +485,7 @@ class DecoderWaveFunction(nn.Module):
         )
 
         if self.compute_phase:
-            phases = self.phase_layers[0]((sample_unique * 2 - 1).double()) # +1/-1
+            phases = self.phase_layers[0]((sample_unique * 2 - 1).double())  # +1/-1
             if self.n_out_phase == 1:
                 phases = phases.view(-1)
             else:
@@ -565,7 +563,7 @@ class DecoderWaveFunction(nn.Module):
             kv_idxs=kv_idxs,
         )
         if self.compute_phase:
-            phases = self.phase_layers[0]((sample_unique * 2 - 1).to(torch.double)) # +1/-1
+            phases = self.phase_layers[0]((sample_unique * 2 - 1).to(torch.double))  # +1/-1
             if self.n_out_phase == 1:
                 phases = phases.view(-1)
             else:
@@ -613,9 +611,8 @@ class DecoderWaveFunction(nn.Module):
         else:
             amps_value = torch.ones(nbatch, **self.factory_kwargs)
 
-        ik = self.sorb // 2 - 1
         # amp: (nbatch, sorb//2, 4), phase: (nbatch, 4)
-        amp, phase = self._get_conditional_output(x, ik)
+        amp, phase = self._get_conditional_output(x, i_th=self.sorb // 2 - 1)
 
         index: Tensor = None
         x = ((x + 1) / 2).long()  # +1/-1 -> 1/0
@@ -731,13 +728,13 @@ if __name__ == "__main__":
     use_kv_cache = True
     dtype = torch.double
     norm_method = 0
-    fci_space = torch.from_numpy(np.load("./3o4e.npy")).to(device) # +1/-1
+    # fci_space = torch.from_numpy(np.load("./3o4e.npy")).to(device)  # +1/-1
     idx = torch.tensor([0, 1, 2, 3, 4, 5])
-    det_lut = DetLUT(fci_space[idx], sorb, nele, alpha=nele // 2, beta=nele // 2)
-    print(det_lut.onv_lst)
-    print(det_lut.tensor_lst)
-    print(det_lut.orth_lst)
-    breakpoint()
+    # det_lut = DetLUT(fci_space[idx], sorb, nele, alpha=nele // 2, beta=nele // 2)
+    # print(det_lut.onv_lst)
+    # print(det_lut.tensor_lst)
+    # print(det_lut.orth_lst)
+    # breakpoint()
     model = DecoderWaveFunction(
         sorb=sorb,
         nele=nele,
@@ -754,14 +751,14 @@ if __name__ == "__main__":
         use_kv_cache=use_kv_cache,
         dtype=dtype,
         norm_method=norm_method,
-        det_lut=det_lut,
+        # det_lut=det_lut,
     )
-    print(det_lut.det)
-    wf = model(fci_space)
-    print(wf)
+    # print(det_lut.det)
+    # wf = model(fci_space)
+    # print(wf)
     sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100)
     print(sample)
-    print(det_lut.det)
+    # print(det_lut.det)
     # sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100)
     print(f"use-kv-cache: {use_kv_cache}")
     print(f"param dtype: {dtype}")
