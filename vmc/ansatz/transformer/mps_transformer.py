@@ -1,9 +1,12 @@
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
+from functools import partial
+
 
 from typing import Union, Any, Tuple, Union, Callable, List, NewType
 
+import sys;sys.path.append("./")
 from vmc.ansatz.transformer.nanogpt.model import get_decoder_amp
 from vmc.ansatz.symmetry import symmetry_mask
 from vmc.ansatz.utils import OrbitalBlock, SoftmaxLogProbAmps
@@ -73,38 +76,39 @@ class MPSdecoder(nn.Module):
 
         # NN部分
         ## Transformer
-        # if nele is None:
-        #     nele = self.nqubits // 2
-        # self.nele = nele
+        if nele is None:
+            nele = self.nqubits // 2
+        self.nele = nele
 
-        # if alpha_nele is None:
-        #     alpha_nele = nele // 2
-        # if beta_nele is None:
-        #     beta_nele = nele // 2
+        if alpha_nele is None:
+            alpha_nele = nele // 2
+        if beta_nele is None:
+            beta_nele = nele // 2
 
-        # self.beta_nele = beta_nele
-        # self.alpha_nele = alpha_nele
-        # assert self.beta_nele + self.alpha_nele == self.nele
+        self.beta_nele = beta_nele
+        self.alpha_nele = alpha_nele
+        assert self.beta_nele + self.alpha_nele == self.nele
 
         # 对称性相关
         # ++++++++++++++++++++++++++++++++++++++++++++++
-        # self.min_n_sorb = min(
-        #     [
-        #         self.nqubits - 2 * self.alpha_nele,
-        #         self.nqubits - 2 * self.beta_nele,
-        #         2 * self.alpha_nele,
-        #         2 * self.beta_nele,
-        #     ]
-        # )
+        self.min_n_sorb = min(
+            [
+                self.nqubits - 2 * self.alpha_nele,
+                self.nqubits - 2 * self.beta_nele,
+                2 * self.alpha_nele,
+                2 * self.beta_nele,
+            ]
+        )
 
-        # self._symmetry_mask = partial(
-        #     symmetry_mask,
-        #     sorb=self.nqubits,
-        #     alpha=self.alpha_nele,
-        #     beta=self.beta_nele,
-        #     min_k=self.min_n_sorb,
-        #     sites=2,
-        # )
+        # 构造对称性函数
+        self._symmetry_mask = partial(
+            symmetry_mask,
+            sorb=self.nqubits,
+            alpha=self.alpha_nele,
+            beta=self.beta_nele,
+            min_k=self.min_n_sorb,
+            sites=2,
+        )
         # ++++++++++++++++++++++++++++++++++++++++++++++
 
         # Transformer振幅层
@@ -285,6 +289,22 @@ class MPSdecoder(nn.Module):
             return self._symmetry_mask(k=k, num_up=num_up, num_down=num_down)
         else:
             return torch.ones(num_up.size(0), 4, **self.factory_kwargs)
+    
+    def mask_input(self, x, mask, val) -> Tensor:
+        """
+        用来mask输入作对称性
+        """
+        if mask is not None:
+            m = mask.clone()
+            if m.dtype == torch.bool:
+                x_ = x.masked_fill(~m.to(x.device), val)
+            else:
+                x_ = x.masked_fill((1 - m.to(x.device)).bool(), val)
+        else:
+            x_ = x
+        if x_.dim() < 2:
+            x_.unsqueeze_(0)
+        return x_
 
     def get_Decoderwf(self, x: Tensor, i) -> Tensor:
         """
@@ -387,26 +407,20 @@ class MPSdecoder(nn.Module):
         )  # (n_batch, n_cond, 4)
 
         nbatch = target.size(0)
-        # index: Tensor = None
-        # x = ((x + 1) / 2).long()  # +1/-1 -> 1/0
-        # num_up = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
-        # num_down = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
         psi_phase_value = torch.ones(nbatch, dtype=psi_phase.dtype, device=self.device)
         for k in range(0, self.nqubits // 2, 2):
-            #     amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
             psi_phase_k = psi_phase[:, k // 2, :]  # (nbatch, 4)
-            #     amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
-            #     # torch "-inf" * 0 = "nan", so use index, (nbatch, 1)
             index = self.state_to_int(target[:, k : k + 2]).view(-1, 1)
             psi_phase_value *= psi_phase_k.gather(1, index).view(-1)
-        #     num_up.add_(x[..., k])
-        #     num_down.add_(x[..., k + 1])
-        # breakpoint()
+
         arg = torch.angle(psi_phase_value)
         phase_part = torch.exp(1j * arg)
 
         # ===================================================================================================
         # breakpoint()
+        nbatch = input.size(0)
+        num_up = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
+        num_down = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
         # amp-part ==========================================================================================
         psi_amp_value = torch.ones(nbatch, dtype=psi_phase.dtype, device=self.device)
         psi_amp = wf_nn[0]  # (4, n_cond, dcut, n_batch)
@@ -428,20 +442,29 @@ class MPSdecoder(nn.Module):
                     )  # (4, n_cond, dcut, n_batch)
             psi_amp_l = torch.einsum(
                 "iajk,iajk->kai", psi_amp_l, psi_amp_l.conj()
-            )  # (n_batch, n_cond, 4)
+            ).real  # (n_batch, n_cond, 4)
             # print("-------")
             # print(psi_amp_l)
             # norm----------------------------------------------------
-            psi_amp_l = psi_amp_l[:, l, ...] / torch.sum(psi_amp_l, dim=1)
+            psi_amp_l = psi_amp_l[:, l, ...] / torch.sum(psi_amp_l, dim=1).clamp_min(1e-14)
             # psi_amp_l = torch.sqrt(psi_amp_l)
+            # breakpoint()
+            # symm----------------------------------------------------
+            psi_mask = self.symmetry_mask(k=2*l, num_up=num_up, num_down=num_down)
+            # breakpoint()
+            # psi_mask = torch.unsqueeze(psi_mask, -2)
+            # psi_mask = psi_mask.repeat(1, psi_amp_l.shape[-2], 1)
+            psi_amp_l = self.mask_input(psi_amp_l, psi_mask, 0.0)
+            num_up.add_(target[..., 2*l].to(torch.int64))
+            num_down.add_(target[..., 2*l + 1].to(torch.int64))
             # renorm--------------------------------------------------
-            # psi_amp_l = F.normalize(psi_amp_l, dim=1, eps=1e-14)
+            psi_amp_l = F.normalize(psi_amp_l, dim=1, eps=1e-14)
             # --------------------------------------------------------
             index = self.state_to_int(target[:, 2 * l : 2 * l + 2]).view(-1, 1)
             psi_amp_value *= psi_amp_l.gather(1, index).view(-1)
             # breakpoint()
-        amp_part = torch.sqrt(psi_amp_value)
-        # breakpoint()
+        # amp_part = torch.sqrt(psi_amp_value)
+        amp_part = psi_amp_value
         wf = amp_part * phase_part
         return wf
 
@@ -454,8 +477,8 @@ if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
     device = "cpu"
-    sorb = 8
-    nele = 4
+    sorb = 12
+    nele = 6
     # alpha = 1
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     length = fock_space.shape[0]
@@ -467,11 +490,13 @@ if __name__ == "__main__":
     # SAMPLE_TEST = True
     MPSDecoder = MPSdecoder(
         nqubits=sorb,
+        nele = nele,
         device=device,
         dcut=6,
-        wise="element",  # 可选 "block" "element"
-        pmode="linear",  # 可选 "linear" "conv" "spm"
-        tmode="train",  # 可选 "train" "guess"
+        wise="element",  # 可选 "block"√ "element"√
+        pmode="linear",  # 可选 "linear"√ "conv" "spm"
+        tmode="train",  # 可选 "train"√ "guess"√
+        use_symmetry=True,
     )
     # modelname = "MPS_Decoder"
     print("===========MPSDecoder============")
