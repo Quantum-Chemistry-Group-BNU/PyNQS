@@ -38,7 +38,7 @@ class NqsCi(VMCOptimizer):
         self.make_ci_hij()
 
         # init total-coeff
-        self.total_coeff = torch.rand(dim, dtype=self.dtype).to(self.device)
+        self.total_coeff = torch.ones(dim, dtype=self.dtype).to(self.device)
         # self.total_coeff[: self.ci_num] = CI.coeff.to(self.device)
         # normalization
         self.total_coeff /= self.total_coeff.norm()
