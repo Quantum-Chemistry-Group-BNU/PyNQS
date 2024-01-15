@@ -31,7 +31,8 @@ class NqsCi(VMCOptimizer):
         self.ci_det = CI.space
         self.ci_num = CI.space.size(0)
         self.factory_kwargs = {"device": self.device, "dtype": self.dtype}
-
+        if self.rank > 1:
+            raise NotImplementedError("CI-NQS distributed will be implemented in future")
         self.det_lut = self.sampler.det_lut
         dim = self.ci_num + 1
         self.Ham_matrix = torch.zeros((dim, dim), **self.factory_kwargs)
