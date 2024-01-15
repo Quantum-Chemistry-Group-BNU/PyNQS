@@ -6,19 +6,47 @@ import torch
 import torch.distributed as dist
 import numpy as np
 
+from dataclasses import dataclass
 from typing import Union, Tuple, List
 from loguru import logger
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from numpy import ndarray
 
-from vmc.optim import VMCOptimizer
+from vmc.optim import BaseVMCOptimizer
 from utils.public_function import check_para, find_common_state
+from utils.determinant_lut import DetLUT
 from libs.C_extension import get_hij_torch, onv_to_tensor, tensor_to_onv, get_comb_tensor
 from ci import CIWavefunction
 
 
-class NqsCi(VMCOptimizer):
+@dataclass
+class NqsCi(BaseVMCOptimizer):
+    """
+    CI-NQS WaveFunction
+    """
+
+    ci_det: Tensor = None
+    """CI determinant, uint8"""
+
+    ci_num: int = None
+    """Number of CI determinant, m"""
+
+    det_lut: DetLUT = None
+    """LookUp-Table CI-det"""
+
+    Ham_matrix: Tensor = None
+    """the Hamiltonian matrix, (m +1, m + 1)"""
+
+    total_coeff: Tensor = None
+    """total coeff, (m + 1)"""
+
+    nqs_coeff: Tensor = None
+    """the NQS coeff, (1)"""
+
+    ci_coeff: Tensor = None
+    """CI-det coeff, (m)"""
+    
     def __init__(
         self,
         CI: CIWavefunction,
@@ -26,6 +54,10 @@ class NqsCi(VMCOptimizer):
         start_iter: int = -1,
         **vmc_opt_kwargs: dict,
     ) -> None:
+        # Remove pre-train info
+        vmc_opt_kwargs.pop("pre_CI", None)
+        vmc_opt_kwargs.pop("pre_train_info", None)
+        vmc_opt_kwargs.pop("noise_lambda", None)
         super(NqsCi, self).__init__(**vmc_opt_kwargs)
 
         self.ci_det = CI.space
@@ -224,7 +256,10 @@ class NqsCi(VMCOptimizer):
         loss.backward()
         return loss.detach()
 
-    def run_progress(self) -> None:
+    def pre_train(self, prefix: str = None) -> None:
+        raise NotImplementedError(f"CI-NQS does not support pre-train")
+
+    def run(self) -> None:
         begin_vmc = time.time_ns()
         logger.info(f"Begin VMC iteration: {time.ctime()}", master=True)
         self.grad_e_lst = [[], []]
