@@ -5,7 +5,7 @@ from .ar_rbm import RBMSites
 from .transformer.decoder import DecoderWaveFunction
 from .hybrid.hybrid import HybridWaveFunction
 from .hybrid.hqc import HybridQCWaveFunction
-from .mps_transformer import MPSdecoder
+from .transformer.mps_transformer import MPSdecoder
 
 try:
     from .mps import MPSWavefunction
