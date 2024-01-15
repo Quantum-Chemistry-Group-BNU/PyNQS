@@ -12,7 +12,6 @@ import sys;sys.path.append("./")
 
 from vmc.ansatz.transformer.nanogpt.model import GPT, GPTConfig, get_decoder_amp
 
-# from vmc.ansatz.transformer.mingpt.model import get_decoder_amp
 from vmc.ansatz.utils import (
     OrbitalBlock,
     SoftmaxLogProbAmps,
