@@ -46,7 +46,7 @@ class NqsCi(BaseVMCOptimizer):
 
     ci_coeff: Tensor = None
     """CI-det coeff, (m)"""
-    
+
     def __init__(
         self,
         CI: CIWavefunction,
@@ -77,6 +77,7 @@ class NqsCi(BaseVMCOptimizer):
         self.total_coeff /= self.total_coeff.norm()
         self.nqs_coeff = self.total_coeff[-1]
         self.ci_coeff = self.total_coeff[: self.ci_num]
+        self.coeff_lst = []
 
         # min cNqs^2
         assert cNqs_pow_min > 0.0 and cNqs_pow_min <= 1.0
@@ -211,8 +212,7 @@ class NqsCi(BaseVMCOptimizer):
         state: Tensor,
         phi_nqs: Tensor,
         cNqs: Tensor,
-        state_prob: Tensor,
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> Tensor:
         """
         calculate (<n|H|phi_i> * c_i) / (<n|phi_nqs> * c_N)
         """
@@ -222,8 +222,7 @@ class NqsCi(BaseVMCOptimizer):
 
         ci = self.ci_coeff
         x = torch.einsum("ij, j, i ->i", hij.to(self.dtype), ci, 1 / (phi_nqs * cNqs))
-        x_mean = torch.dot(x, state_prob.to(self.dtype))
-        return x, x_mean
+        return x
 
     def new_nqs_grad(
         self,
@@ -231,9 +230,7 @@ class NqsCi(BaseVMCOptimizer):
         state: Tensor,
         state_prob: Tensor,
         eloc: Tensor,
-        eloc_mean: Tensor,
         new_term: Tensor,
-        new_term_mean: Tensor,
         cNqs: Tensor,
         E0: float,
         epoch: int,
@@ -261,10 +258,8 @@ class NqsCi(BaseVMCOptimizer):
 
     def run(self) -> None:
         begin_vmc = time.time_ns()
-        logger.info(f"Begin VMC iteration: {time.ctime()}", master=True)
-        self.grad_e_lst = [[], []]
-        self.e_lst = []
-        self.coeff_lst = []
+        if self.rank == 0:
+            logger.info(f"Begin CI-NQS iteration: {time.ctime()}", master=True)
         for epoch in range(self.max_iter):
             t0 = time.time_ns()
             initial_state = self.onstate[0].clone().detach()
@@ -288,18 +283,16 @@ class NqsCi(BaseVMCOptimizer):
             E0 = self.solve_eigh()[0]  # solve HC = εC
             delta_Hmat = (time.time_ns() - t1) / 1.0e09
 
+            # logging coeff
             if self.rank == 0:
-                self.e_lst.append(E0 + self.ecore)
                 self.coeff_lst.append(self.total_coeff.to("cpu").numpy())
                 c1 = self.ci_coeff.norm().item()
                 c2 = self.nqs_coeff.norm().item()
                 logger.info(f"E0: {E0}, Coeff: {c1:.6E} {c2:6E}", master=True)
 
             t2 = time.time_ns()
-            new_term, new_term_mean = self.calculate_new_term(
-                sample_state, phi_nqs, self.nqs_coeff, state_prob
-            )
-            delta_new_term = (time.time_ns() - t2) / 1.0e09
+            new_term = self.calculate_new_term(sample_state, phi_nqs, self.nqs_coeff)
+            delta_new_term = (time.time_ns() - t2) / 1.00e09
 
             # backward
             t3 = time.time_ns()
@@ -308,67 +301,40 @@ class NqsCi(BaseVMCOptimizer):
                 sample_state,
                 state_prob,
                 eloc,
-                eloc_mean,
                 new_term,
-                new_term_mean,
                 self.nqs_coeff,
                 E0,
                 epoch,
             )
-            delta_grad = (time.time_ns() - t3) / 1.0e09
             if self.rank == 0:
                 logger.info(f"loss: {loss.item():.5E}", master=True)
+            delta_grad = (time.time_ns() - t3) / 1.00e09
 
-            x = []
-            for param in self.model.parameters():
-                if param.grad is not None:
-                    x.append(param.grad.reshape(-1).detach().to("cpu").numpy())
-            x = np.concatenate(x)
-            l2_grad = np.linalg.norm(x)
-            max_grad = np.abs(x).max()
-            self.grad_e_lst[0].append(l2_grad)
-            self.grad_e_lst[1].append(max_grad)
+            # save the energy grad
+            self.save_grad_energy(E0 + self.ecore)
 
             # update param
             t4 = time.time_ns()
-            if epoch < self.max_iter - 1:
-                self.opt.step()
-                self.opt.zero_grad()
-                if self.lr_scheduler is not None:
-                    self.lr_scheduler.step()
+            self.update_param(epoch=epoch)
             delta_param = (time.time_ns() - t4) / 1.00e09
 
-            if self.rank == 0:
-                if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
-                    checkpoint_file = f"{self.prefix}-checkpoint.pth"
-                    logger.info(f"Save model/opt state: -> {checkpoint_file}", master=True)
-                    lr = self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
-                    torch.save(
-                        {
-                            "epoch": epoch,
-                            "model": self.model_raw.state_dict(),
-                            "optimizer": self.opt.state_dict(),
-                            "scheduler": lr,
-                        },
-                        checkpoint_file,
-                    )
+            # save the checkpoint, different-version maybe error
+            self.save_checkpoint(epoch=epoch)
 
-            delta = (time.time_ns() - t0) / 1.0e09
+            delta = (time.time_ns() - t0) / 1.00e09
+
             if self.rank == 0:
-                s = f"Calculating grad: {delta_grad:.3E} s, update params: {delta_param:.3E} s\n"
-                s += f"Construct Hmat: {delta_Hmat:.3E} s, Calculating new-term: {delta_new_term:.3E} s\n"
-                s += f"Total energy {(E0 + self.ecore):.9f} a.u., cost time {delta:.3E} s\n"
-                s += f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
-                s += f"{epoch} iteration end {time.ctime()}\n"
-                s += "=" * 100
+                s = f"Construct Hmat: {delta_Hmat:.3E} s, new-term: {delta_new_term:.3E} s"
                 logger.info(s, master=True)
+            cost = torch.tensor([delta_grad, delta_param, delta], device=self.device)
+            self.logger_iteration_info(epoch=epoch, cost=cost)
 
-        # End iteration
+        # End CI-NQS iteration
         vmc_time = (time.time_ns() - begin_vmc) / 1.0e09
         if self.rank == 0:
             path = os.path.split(self.prefix)[0]
             coeff = np.asarray(self.coeff_lst)
             np.save(f"{path}/{self.ci_num}-coeff.npy", coeff)
-            s = f"End VMC iteration: {time.ctime()}\n"
+            s = f"End CI-NQS iteration: {time.ctime()}\n"
             s += f"total cost time: {vmc_time:.3E} s, {vmc_time/60:.3E} min {vmc_time/3600:.3E} h"
             logger.info(s, master=True)
