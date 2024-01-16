@@ -75,10 +75,6 @@ class MPSdecoder(nn.Module):
         self.tmode_num = tmode_num
         self.it = 0
 
-        if not compute_phase:
-            self.mpsdtype = torch.complex128
-        else:
-            self.mpsdtype = param_dtype
         # NN部分
         ## Transformer
         if nele is None:
@@ -145,8 +141,10 @@ class MPSdecoder(nn.Module):
         self.phase_bias = True
         self.phase_batch_norm = False
         self.phase_norm_momentum = phase_norm_momentum
-
-        n_in = 2
+        # if self.compute_phase:
+        #     n_in = 2
+        
+        n_in = self.nqubits
         self.phase_layers: List[OrbitalBlock] = []
         if self.compute_phase:
             phase_i = OrbitalBlock(
@@ -174,7 +172,7 @@ class MPSdecoder(nn.Module):
             )
         if self.tmode == "guess":
             self.register_buffer(
-                "parm_mps", torch.randn(self.num_mps, dtype = self.mpsdtype, device=self.device) * self.iscale
+                "parm_mps", torch.randn(self.num_mps, dtype = self.param_dtype, device=self.device) * self.iscale
             )
         ## Transformer part
         if self.wise == "element":
@@ -197,25 +195,19 @@ class MPSdecoder(nn.Module):
 
     def get_MPSwf(self, i):
         """
-        获取相位部分MPS的函数 => (4, n_cond, dcut) & (4, n_cond, n_cond, dcut)
+        获取相位部分MPS的函数 => (4,dcut) & (4,dcut,dcut)
         """
         off = 2 * self.dcut * 4
         dim = self.dcut * 4 * self.dcut
         if i == 0:
             wf = self.parm_mps[: 4 * self.dcut].reshape(4, self.dcut)
-            wf = torch.unsqueeze(wf, -2)
-            wf = wf.repeat(1, self.cond, 1)
         else:
             if i == self.nqubits // 2 - 1:
                 wf = self.parm_mps[4 * self.dcut : 4 * self.dcut * 2].reshape(4, self.dcut)
-                wf = torch.unsqueeze(wf, -2)
-                wf = wf.repeat(1, self.cond, 1)
             else:
                 wf = self.parm_mps[off + ((i - 1) * dim) : off + (i * dim)].reshape(
                     4, self.dcut, self.dcut
                 )
-                wf = torch.unsqueeze(wf, -3)
-                wf = wf.repeat(1, self.cond, 1, 1)
         return wf
 
     def state_to_int(self, x: Tensor, value=-1, sites: int = 2) -> Tensor:
@@ -233,17 +225,14 @@ class MPSdecoder(nn.Module):
         self,
         x: Tensor,
         i_th: int,
-        q: int = None,
+        q: int,
         ret_phase: bool = False,
         kv_caches: KVCaches = None,
         kv_idxs: Tensor = None,
     ) -> Tuple[Tensor, Union[Tensor, None]]:
         """
         用于从GPT2里获取条件概率输出
-        振幅和相位都是一次性输入计算得到，相位是按照两个两个计算，最后再相加。
         """
-        if q == None:
-            q = self.nqubits
         nbatch = x.size(0)
         amp_input = x  # +1/-1
         phase_input = x  # +1/-1
@@ -255,18 +244,17 @@ class MPSdecoder(nn.Module):
             amp_input = self.state_to_int(amp_input[:, : 2 * i_th], value=-1)
             pad_st = torch.full((nbatch, 1), 4.0, **self.factory_kwargs)
             amp_input = torch.cat((pad_st, amp_input), -1)
-
+            phase_j = torch.ones(x.shape[0])
         # TODO: kv_caches and infer batch
         amp_i = self.amp_layers(
             amp_input.long(), kv_caches=kv_caches, kv_idxs=kv_idxs
         )  # (nbatch, 4/2)
-        phase_j = torch.ones(x.shape[0])
         if ret_phase and i_th == self.nqubits // 2 - 1:
-            # breakpoint()
-            for j in range(0,q,2):
-                # breakpoint()
-                phase_j = self.phase_layers[0](phase_input[...,j:j+2])
-                phase_j += phase_j
+            # phase_i = self.phase_layers[0](phase_input)
+            # for j in range(0,q,2):
+            #     phase_j = self.phase_layers[0](phase_input[...,j:j+2])
+            #     phase_j += phase_j
+            phase_j = self.phase_layers[0](phase_input)
             return amp_i, phase_j
         else:
             return amp_i
@@ -379,7 +367,7 @@ class MPSdecoder(nn.Module):
             # breakpoint()
         return sample_unique, sample_counts, amps_value, 2*l
 
-    def get_Decoderwf(self, x: Tensor, i, q:int= None,) -> Tensor:
+    def get_Decoderwf(self, x: Tensor, i, q:int = None) -> Tensor:
         """
         获取振幅和相位部分的Transformer波函数
         """
@@ -391,11 +379,11 @@ class MPSdecoder(nn.Module):
         if i == 0:
             if self.compute_phase:
                 self.cond_wf, self.phase = self._get_conditional_output(
-                    x,i_th = self.nqubits // 2 - 1, ret_phase=True,q=q,
+                    x,i_th = self.nqubits // 2 - 1, ret_phase=True, q=q,
                 )  # (n_batch, n_cond, 4) (n_batch, )
             else:
                 self.cond_wf= self._get_conditional_output(
-                    x, self.nqubits // 2 - 1,q=q
+                    x, self.nqubits // 2 - 1, q=q,
                 )  # (n_batch, n_cond, 4)
         cond_wf = self.cond_wf
         if self.compute_phase:
@@ -450,7 +438,7 @@ class MPSdecoder(nn.Module):
         # breakpoint()
         return cond_wf  # (4, n_cond, dcut, dcut, n_batch)
 
-    def forward_psi(self, input: Tensor, q:int = None, get_amp = False):
+    def forward_psi(self, input: Tensor, q:int = None, get_amp = False,):
         """
         获取mps-transformer的波函数,具体见文档如何计算。
         q : 计算到第几个轨道的波函数
@@ -473,75 +461,77 @@ class MPSdecoder(nn.Module):
         # \tilde{\psi}^{\alpha_{i-1} \alpha_{i}}\left(x_{i} \mid \boldsymbol{x}_{<i}\right)
         # = M_{x_{i}}^{\alpha_{i-1} \alpha_{i}}
         # + [f_{N N}\left(x_{i} \mid \boldsymbol{x}_{<i}\right)]^{ \alpha_{i-1}, \alpha_{i}}
-        # phase-part ========================================================================================
+        # general-part ======================================================================================
         for i in range(0, self.nqubits // 2):
             # 获得实际上“mps”的每一个m
-            wf_nn[i] = self.get_Decoderwf(input, i, q=2*q)
-            if not get_amp:
-                wf_mps[i] = self.get_MPSwf(i)
-                # 这里 n_cond 实际上是 n_qubits//2
-                ## 把 n_batch 维度加到 MPS 上去，
-                n_batch = wf_nn[i].shape[-1]
-                if i == 0:
+            wf_nn[i] = self.get_Decoderwf(input, i, q=q)
+            wf_mps[i] = self.get_MPSwf(i) # (4, dcut) & (4, dcut, dcut)
+            # 这里 n_cond 实际上是 n_qubits//2
+            ## 把 n_batch 维度加到 MPS 上去，
+            n_batch = wf_nn[i].shape[-1]
+            if i == 0: # (4, n_cond, dcut)
+                # breakpoint()
+                wf_mps[i] = torch.unsqueeze(wf_mps[i], 1) # (4,dcut)
+                wf_mps[i] = wf_mps[i].repeat(1, wf_nn[i].shape[1], 1) # (4, n_cond, dcut)
+                wf_mps[i] = torch.unsqueeze(wf_mps[i], -1)
+                wf_mps[i] = wf_mps[i].repeat(1, 1, 1, n_batch) # (4, n_cond, dcut, n_batuch)
+            else:
+                if i == self.nqubits // 2 - 1:
+                    wf_mps[i] = torch.unsqueeze(wf_mps[i], 1) # (4, dcut)
+                    wf_mps[i] = wf_mps[i].repeat(1, wf_nn[i].shape[1], 1) # (4, n_cond, dcut)
                     wf_mps[i] = torch.unsqueeze(wf_mps[i], -1)
-                    wf_mps[i] = wf_mps[i].repeat(1, 1, 1, n_batch)
+                    wf_mps[i] = wf_mps[i].repeat(1, 1, 1, n_batch) # (4, n_cond, dcut, n_batuch)
                 else:
-                    if i == self.nqubits // 2 - 1:
-                        wf_mps[i] = torch.unsqueeze(wf_mps[i], -1)
-                        wf_mps[i] = wf_mps[i].repeat(1, 1, 1, n_batch)
-                    else:
-                        wf_mps[i] = torch.unsqueeze(wf_mps[i], -1)
-                        wf_mps[i] = wf_mps[i].repeat(1, 1, 1, 1, n_batch)
-                wf_mps[i] = wf_nn[i] + wf_mps[i]
-        if not get_amp:
-            psi_phase = wf_mps[0]
+                    wf_mps[i] = torch.unsqueeze(wf_mps[i], 1) # (4, dcut, dcut)
+                    wf_mps[i] = wf_mps[i].repeat(1, wf_nn[i].shape[1], 1, 1) # (4, n_cond, dcut, dcut)
+                    wf_mps[i] = torch.unsqueeze(wf_mps[i], -1)
+                    wf_mps[i] = wf_mps[i].repeat(1, 1, 1, 1, n_batch) # (4, n_cond, dcut, dcut, n_batuch)
             # breakpoint()
-            # 挨个缩并矩阵
-            for k in range(1, self.nqubits // 2 - 1):
-                psi_phase = torch.einsum(
-                    "ijkl,ijkcl->ijcl", psi_phase, wf_mps[k]
-                )  # (4, n_cond, dcut, n_batch)
-            # 缩并最后一个矩阵
-            psi_phase = torch.einsum(
-                "ijkl,ijkl->lji", psi_phase, wf_mps[self.nqubits // 2 - 1]
-            )  # (n_batch, n_cond, 4)
-
-            nbatch = target.size(0)
-            psi_phase_value = torch.ones(nbatch, dtype=psi_phase.dtype, device=self.device)
-            for k in range(0, self.nqubits // 2, 2):
-                psi_phase_k = psi_phase[:, k // 2, :]  # (nbatch, 4)
-                index = self.state_to_int(target[:, k : k + 2]).view(-1, 1)
-                psi_phase_value *= psi_phase_k.gather(1, index).view(-1)
-
-            arg = torch.angle(psi_phase_value)
-            phase_part = torch.exp(1j * arg)
-        # ===================================================================================================
+            wf_mps[i] = wf_nn[i] + wf_mps[i]
         # breakpoint()
         num_up = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
         num_down = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
         # amp-part ==========================================================================================
         psi_amp_value = torch.ones(nbatch, dtype=self.cpl_type, device=self.device)
-        psi_amp = wf_nn[0]  # (4, n_cond, dcut, n_batch)
+        psi_amp = wf_mps[0]  # (4, n_cond, dcut, n_batch)
         # breakpoint()
         for l in range(0, q):
             psi_amp_l = psi_amp
-            if l == self.nqubits // 2:
+            if l == self.nqubits // 2-1:
+                # breakpoint()
                 for k in range(1, self.nqubits // 2 - 1):
                     psi_amp_l = torch.einsum(
-                        "iakl,iakcl->iacl", psi_amp_l, wf_nn[k]
+                        "iakl,iakcl->iacl", psi_amp_l, wf_mps[k]
                     )  # (4, n_cond, dcut, n_batch)
                 psi_amp_l = torch.einsum(
-                    "iakl,iakl->lai", psi_amp_l, wf_nn[self.nqubits // 2 - 1]
+                    "iakl,iakl->lai", psi_amp_l, wf_mps[self.nqubits // 2 - 1]
+                )  # (n_batch, n_cond, 4)
+                psi_amp_l = torch.einsum(
+                    "ijk,ijk->ijk",psi_amp_l,psi_amp_l.conj()
                 )  # (n_batch, n_cond, 4)
             else:
                 for k in range(1, l):
                     # breakpoint()
                     psi_amp_l = torch.einsum(
-                        "iakl,iakcl->iacl", psi_amp_l, wf_nn[k]
+                        "iakl,iakcl->iacl", psi_amp_l, wf_mps[k]
                     )  # (4, n_cond, dcut, n_batch)
-            psi_amp_l = torch.einsum(
-                "iajk,iajk->kai", psi_amp_l, psi_amp_l.conj()
-            ).real  # (n_batch, n_cond, 4)
+                psi_amp_l = torch.einsum(
+                    "iajk,iajk->kai", psi_amp_l, psi_amp_l.conj()
+                ).real  # (n_batch, n_cond, 4)
+            # breakpoint()
+            psi_amp_l = torch.cumprod(psi_amp_l, dim=1)
+            
+            # for p in range(0, psi_amp_l.shape[1]):
+            #     cond_p = torch.ones(psi_amp_l.shape, dtype=torch.long)[:,0,...]
+            #     for p_th in range(0,p):
+            #         cond_p = psi_amp_l[:,p_th,...] # (n_batch, 4)
+            #         cond_p *= cond_p
+            #     psi_amp_l[:,p,...] = cond_p * psi_amp_l[:,p,...]
+                # cond_p = psi_amp_l[:,p,...] # (n_batch, 4)
+                # cond_p = torch.unsqueeze(cond_p, 1) # (n_batch, 1, 4)
+                # cond_p = cond_p.repeat(1,psi_amp_l.shape[1],1)
+                # psi_amp_l = psi_amp_l * cond_p
+            
             if get_amp:
                 psi_amp_nocond = psi_amp_l
             # print("-------")
@@ -567,16 +557,43 @@ class MPSdecoder(nn.Module):
             index = self.state_to_int(target[:, 2 * l : 2 * l + 2]).view(-1, 1)
             psi_amp_value *= psi_amp_l.gather(1, index).view(-1)
             # breakpoint()
-        # amp_part = torch.sqrt(psi_amp_value)
         if get_amp:
             return torch.unsqueeze(psi_amp_nocond,0)
         else:
+        # phase-part ========================================================================================
+            psi_phase = wf_mps[0]
+            # breakpoint()
+            # 挨个缩并矩阵
+            for k in range(1, self.nqubits // 2 - 1):
+                psi_phase = torch.einsum(
+                    "ijkl,ijkcl->ijcl", psi_phase, wf_mps[k]
+                )  # (4, n_cond, dcut, n_batch)
+            # 缩并最后一个矩阵
+            psi_phase = torch.einsum(
+                "ijkl,ijkl->lji", psi_phase, wf_mps[self.nqubits // 2 - 1]
+            )  # (n_batch, n_cond, 4)
+
+            nbatch = target.size(0)
+            psi_phase_value = torch.ones(nbatch, dtype=psi_phase.dtype, device=self.device)
+            for k in range(0, self.nqubits // 2, 2):
+                psi_phase_k = psi_phase[:, k // 2, :]  # (nbatch, 4)
+                index = self.state_to_int(target[:, k : k + 2]).view(-1, 1)
+                psi_phase_value *= psi_phase_k.gather(1, index).view(-1)
+
+            arg = torch.angle(psi_phase_value)
+            phase_part = torch.exp(1j * arg)
+            # phases =  self.phase_layers[0](input).view(-1)
+            # phase_part = torch.complex(torch.zeros_like(phases), phases).exp()
+        # ===================================================================================================
             amp_part = psi_amp_value
             wf = amp_part * phase_part
+            # breakpoint()
             return wf
 
     def forward(self, input: Tensor):
+        # ÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅ
         wf = self.forward_psi(input)
+        # ÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅÅ
         # breakpoint()
         return wf
 
@@ -661,14 +678,14 @@ if __name__ == "__main__":
     )
     # modelname = "MPS_Decoder"
     print("===========MPSDecoder===========")
-    print(f"Psi^2 in AR-Sampling")
-    print("--------------------------------")
-    sample, counts, wf = MPSDecoder.ar_sampling(n_sample=int(1e8), min_batch=100)
-    wf1 = MPSDecoder((sample * 2 - 1).double())
-    print(wf1)
-    print(f"Psi^2: {(wf1*wf1.conj()).sum()}")
-    print(f"Sample-wf == forward-wf: {torch.allclose(wf, wf1)}")
-    print("--------------------------------")
+    # print(f"Psi^2 in AR-Sampling")
+    # print("--------------------------------")
+    # sample, counts, wf = MPSDecoder.ar_sampling(n_sample=int(1e8), min_batch=100)
+    # wf1 = MPSDecoder((sample * 2 - 1).double())
+    # print(wf1)
+    # print(f"Psi^2: {(wf1*wf1.conj()).sum()}")
+    # print(f"Sample-wf == forward-wf: {torch.allclose(wf, wf1)}")
+    # print("--------------------------------")
     print(f"Psi^2 in Fock space")
     print("--------------------------------")
     psi = MPSDecoder(fock_space)
