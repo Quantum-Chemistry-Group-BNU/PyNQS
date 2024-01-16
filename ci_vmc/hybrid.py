@@ -14,8 +14,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from numpy import ndarray
 
 from vmc.optim import BaseVMCOptimizer
-from utils.public_function import check_para, find_common_state
+from utils.public_function import check_para, find_common_state, split_length_idx
 from utils.determinant_lut import DetLUT
+from utils.distributed import all_reduce_tensor, synchronize, all_gather_tensor
 from libs.C_extension import get_hij_torch, onv_to_tensor, tensor_to_onv, get_comb_tensor
 from ci import CIWavefunction
 
@@ -63,8 +64,8 @@ class NqsCi(BaseVMCOptimizer):
         self.ci_det = CI.space
         self.ci_num = CI.space.size(0)
         self.factory_kwargs = {"device": self.device, "dtype": self.dtype}
-        if self.rank > 1:
-            raise NotImplementedError("CI-NQS distributed will be implemented in future")
+        # if self.rank > 1:
+        #     raise NotImplementedError("CI-NQS distributed will be implemented in future")
         self.det_lut = self.sampler.det_lut
         dim = self.ci_num + 1
         self.Ham_matrix = torch.zeros((dim, dim), **self.factory_kwargs)
@@ -78,6 +79,16 @@ class NqsCi(BaseVMCOptimizer):
         self.nqs_coeff = self.total_coeff[-1]
         self.ci_coeff = self.total_coeff[: self.ci_num]
         self.coeff_lst = []
+
+        # split different rank
+        assert self.ci_num > self.world_size
+        idx_lst = [0] + split_length_idx(dim=self.ci_num, length=self.world_size)
+        begin = idx_lst[self.rank]
+        end = idx_lst[self.rank + 1]
+        self.rank_ci_det = self.ci_det[begin:end]
+        self.rank_ci_num = self.rank_ci_det.size(0)
+        self.rank_ci_coeff = self.ci_coeff[begin:end]
+        self.rank_idx_lst = idx_lst
 
         # min cNqs^2
         assert cNqs_pow_min > 0.0 and cNqs_pow_min <= 1.0
@@ -97,11 +108,15 @@ class NqsCi(BaseVMCOptimizer):
         # hij, x1, inverse_index, onv_not_idx
         self.n_sd = self.sampler.n_SinglesDoubles
         self.ci_nqs_info = self.init_ci_nqs()
-        # hij: (ci_num, ci_num * n_sd)
+        # hij: (rank_ci_num, rank_ci_num * n_sd)
         numel = self.ci_nqs_info[0].numel()
         # psi: (ci_num * n_sd), <ci|H|nqs>: (ci_num)
         numel1 = self.ci_nqs_info[1].size(0)  # (unique, sorb)
-        self.ci_nqs_value = torch.zeros(numel1 + numel + self.ci_num, **self.factory_kwargs)
+        self.ci_nqs_value = torch.zeros(numel1 + numel + self.rank_ci_num, **self.factory_kwargs)
+        synchronize()
+        logger.info(f"ci-nqs-value: {self.ci_nqs_value.shape}")
+        logger.info(f"rank-ci-num: {self.rank_ci_num}")
+        logger.info(f"numel: {numel}, numel1: {numel1}")
 
     def make_ci_hij(self) -> None:
         """
@@ -119,18 +134,19 @@ class NqsCi(BaseVMCOptimizer):
         """
         use_unique = True
         comb_x, _ = get_comb_tensor(
-            self.ci_det, self.sorb, self.nele, self.noa, self.nob, flag_bit=False
+            self.rank_ci_det, self.sorb, self.nele, self.noa, self.nob, flag_bit=False
         )
         nbatch, n_sd, bra_len = comb_x.shape
-        assert nbatch == self.ci_num
+        assert nbatch == self.rank_ci_num
         assert self.n_sd + 1 == n_sd
 
         hij = get_hij_torch(
-            self.ci_det, comb_x, self.h1e, self.h2e, self.sorb, self.nele
-        )  # (ci_num, n_sd)
+            self.rank_ci_det, comb_x, self.h1e, self.h2e, self.sorb, self.nele
+        )  # (rank_ci_num, n_sd)
 
         # Binary Search x1 in CI-Det/Nqs
-        comb_x = comb_x.reshape(-1, bra_len)  # (n_sd * ci_num, bra_len)
+        # comb_x = comb_x.reshape(-1, bra_len)  # (n_sd * ci_num, bra_len)
+        comb_x = comb_x.reshape(-1, bra_len)  # (n_sd * rank_ci_num, bra_len)
         array_idx = self.det_lut.lookup(comb_x, is_onv=True)[0]
         mask = array_idx.gt(-1)  # if not found, set to -1
         baseline = torch.arange(comb_x.size(0), device=self.device, dtype=torch.int64)
@@ -142,7 +158,10 @@ class NqsCi(BaseVMCOptimizer):
         x1 = onv_to_tensor(unique_comb, self.sorb)  # x1: [n_unique, sorb], +1/-1
         onv_x1 = unique_comb
 
-        info = (hij.to(self.dtype), x1, onv_x1, inverse_index, det_not_idx)
+        info = (hij, x1, onv_x1, inverse_index, det_not_idx)
+        synchronize()
+        logger.info(f"")
+        logger.info(f"hij : {hij.shape}")
         return info
 
     @torch.no_grad()
@@ -154,6 +173,7 @@ class NqsCi(BaseVMCOptimizer):
         hij, x1, onv_x1, inverse_index, det_not_idx = self.ci_nqs_info
         offset0 = x1.size(0)
 
+        # psi_x1: (unique-rank)
         psi_x1 = self.ci_nqs_value[:offset0]
         if self.exact:
             with torch.no_grad():
@@ -166,15 +186,29 @@ class NqsCi(BaseVMCOptimizer):
             psi_x1[lut_idx] = lut_value
             psi_x1[lut_not_idx] = self.model(x1[lut_not_idx])
 
-        offset1 = self.ci_num * (self.n_sd + 1) + offset0
-        psi = self.ci_nqs_value[offset0:offset1]  # (ci_num, n_sd)
-        value = self.ci_nqs_value[offset1:]  # (ci_num)
+        offset1 = self.rank_ci_num * (self.n_sd + 1) + offset0
+        psi = self.ci_nqs_value[offset0:offset1]  # (rank-ci-num, n_sd)
+        rank_value = self.ci_nqs_value[offset1:]  # (rank-ci-num)
         psi[det_not_idx] = psi_x1[inverse_index]  # unique inverse
 
-        value = torch.einsum("ij, ij ->i", hij.to(self.dtype), psi.reshape(self.ci_num, -1))
-        self.Ham_matrix[: self.ci_num, -1] = value
-        self.Ham_matrix[-1, : self.ci_num] = value.conj()
+        logger.info(f"psi: {psi.shape}, {psi.reshape(-1, self.n_sd + 1).shape} {self.rank_ci_num}")
+        logger.info(f"rank-value : {rank_value.shape}")
+        # value = torch.einsum("ij, ij ->i", hij, psi.reshape(self.rank_ci_num, -1))
+        rank_value = (psi.reshape(self.rank_ci_num, -1) * hij).sum(-1)
 
+        logger.info(f"rank-value : {rank_value}")
+        # All-Gather value
+        # TODO:(zbwu-01-16) allocate all_value memory in initial
+        all_value = all_gather_tensor(rank_value, self.device, self.world_size)
+        all_value = torch.cat(all_value)
+        logger.info(f"all-value: {all_value.shape}")
+        
+        self.Ham_matrix[: self.ci_num, -1] = all_value
+        self.Ham_matrix[-1, : self.ci_num] = all_value.conj()
+
+        # E0 = self.solve_eigh()
+        # # logger.info(f"E0: {E0:.15f}")
+        # # exit()
         # clean: self.ci_nqs_value
         self.ci_nqs_value.zero_()
 
@@ -183,28 +217,40 @@ class NqsCi(BaseVMCOptimizer):
         """
         <phi_NQS|H|phi_NQS> = sum(prob * eloc) * <phi_nqs|phi_nqs>
         """
-        # breakpoint()
-        x = eloc_mean * torch.dot(phi_nqs.conj(), phi_nqs)
+        if self.exact:
+            # Single-Rank
+            value = torch.dot(phi_nqs.conj(), phi_nqs) * self.world_size
+            all_reduce_tensor(value, world_size=self.world_size)
+            logger.info(f"phi_nqs: {phi_nqs.shape},{value}")
+            synchronize()
+        else:
+            # All-Rank, coming from Sample-LUT
+            value = torch.dot(phi_nqs.conj(), phi_nqs).real
+        x = eloc_mean * value
 
         self.Ham_matrix[-1, -1] = x
 
-    def solve_eigh(self) -> Tuple[float, Tensor]:
+    def solve_eigh(self) -> float:
         # TODO:(zbwu-23-12-27) davsion or scipy.sparse.linalg.eigsh
         """
         HC = εC;
         H is Hermitian matrix
         return
         ------
-            ε0(ground energy),
-            C0({ci},c_N)
+            ε0(ground energy)
         """
         result = torch.linalg.eigh(self.Ham_matrix)
         E0 = result[0][0]
         coeff = result[1][:, 0]
+
+        # update ci-coeff and nqs-coeff
         self.total_coeff = coeff.to(self.device)
         self.nqs_coeff = self.total_coeff[-1]
         self.ci_coeff = self.total_coeff[: self.ci_num]
-        return E0.item(), coeff
+        begin = self.rank_idx_lst[self.rank]
+        end = self.rank_idx_lst[self.rank + 1]
+        self.rank_ci_coeff = self.ci_coeff[begin:end]
+        return E0.item()
 
     @torch.no_grad()
     def calculate_new_term(
@@ -280,7 +326,8 @@ class NqsCi(BaseVMCOptimizer):
 
             self.make_ci_nqs()  # <phi_i|H|phi_nqs>
             self.make_nqs_nqs(phi_nqs, eloc_mean)  # <phi_nqs|H|phi_nqs>
-            E0 = self.solve_eigh()[0]  # solve HC = εC
+            E0 = self.solve_eigh()  # solve HC = εC, C0({ci},c_N)
+
             delta_Hmat = (time.time_ns() - t1) / 1.0e09
 
             # logging coeff
@@ -290,6 +337,7 @@ class NqsCi(BaseVMCOptimizer):
                 c2 = self.nqs_coeff.norm().item()
                 logger.info(f"E0: {E0}, Coeff: {c1:.6E} {c2:6E}", master=True)
 
+            exit()
             t2 = time.time_ns()
             new_term = self.calculate_new_term(sample_state, phi_nqs, self.nqs_coeff)
             delta_new_term = (time.time_ns() - t2) / 1.00e09
