@@ -676,7 +676,7 @@ def split_length_idx(dim: int, length: int) -> List[int]:
     Examples
     --------
 
-    >>> dim = 10, min_batch = 3
+    >>> dim = 10, length = 3
     >>> idx_lst = split_length_idx(11, 3)
     >>> idx_lst
     [4, 8, 11]
