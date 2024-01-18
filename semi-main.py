@@ -89,7 +89,7 @@ if __name__ == "__main__":
     #         },
     #         "./molecule/H10-1.60.pth",
     #     )
-    e = torch.load("./molecule/H8-1.60.pth", map_location="cpu")
+    e = torch.load("./molecule/H6-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -217,7 +217,7 @@ if __name__ == "__main__":
         "pre_CI": ucisd_wf,
         "pre_train_info": pre_train_info,
         "noise_lambda": 0.0,
-        # "check_point": "./tmp/vmc-exact-222-checkpoint.pth",
+        # "check_point": "./tmp/vmc-new-333-checkpoint.pth",
         "method_grad": "AD",
         "method_jacobian": "vector",
         "prefix": "./tmp/vmc-new-" + str(seed),
@@ -226,8 +226,11 @@ if __name__ == "__main__":
     # opt_vmc = VMCOptimizer(**vmc_opt_params)
     # opt_vmc.run()
     # opt_vmc.summary(e_ref, e_lst, prefix=f"./tmp/nqs-H4-1.60-{seed}")
-    semi = NqsCi(select_CI, cNqs_pow_min=1.0e-4, **vmc_opt_params)
-    semi.run_progress()
+    semi = NqsCi(select_CI, 
+                 cNqs_pow_min=1.0e-4,
+                 use_sample_space=False,
+                 **vmc_opt_params)
+    semi.run()
     semi.summary(e_ref, e_lst, prefix=f"./tmp/semi-exact-{seed}")
     if rank == 0:
         logger.info(f"e-ref: {e_ref:.10f}, seed: {seed}")

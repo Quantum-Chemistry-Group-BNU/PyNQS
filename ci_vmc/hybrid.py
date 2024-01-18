@@ -57,6 +57,7 @@ class NqsCi(BaseVMCOptimizer):
         CI: CIWavefunction,
         cNqs_pow_min: float = 1.0e-4,
         start_iter: int = -1,
+        use_sample_space: bool = False,
         **vmc_opt_kwargs: dict,
     ) -> None:
         # Remove pre-train info
@@ -101,10 +102,11 @@ class NqsCi(BaseVMCOptimizer):
         else:
             self.start_iter = start_iter
         if self.rank == 0:
-            s = f"det-num: {self.ci_num}, "
+            s = f"CI-NQS, det-num: {self.ci_num}, "
             s += f"Matrix shape: ({dim}, {dim}), "
-            s += f"min cNqs^2: {cNqs_pow_min:.4E}, "
-            s += f"start_iter: {self.start_iter}"
+            s += f"min cNqs^2: {cNqs_pow_min:.4E}\n"
+            s += f"start_iter: {self.start_iter}, "
+            s += f"use-sample-space: {self.use_sample_space}"
             logger.info(s, master=True)
 
         # hij, x1, inverse_index, onv_not_idx
@@ -115,6 +117,8 @@ class NqsCi(BaseVMCOptimizer):
         # psi: (ci_num * n_sd), <ci|H|nqs>: (ci_num)
         numel1 = self.ci_nqs_info[1].size(0)  # (unique, sorb)
         self.ci_nqs_value = torch.zeros(numel1 + numel + self.rank_ci_num, **self.factory_kwargs)
+        # <phi_ci|H|phi_nqs> in sample-space
+        self.use_sample_space = use_sample_space
         # synchronize()
         # logger.info(f"ci-nqs-value: {self.ci_nqs_value.shape}")
         # logger.info(f"rank-ci-num: {self.rank_ci_num}")
@@ -181,8 +185,9 @@ class NqsCi(BaseVMCOptimizer):
                 raise ValueError(f"Use LUT to speed up <ci|H|phi_nqs>")
             lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(onv_x1)
             psi_x1[lut_idx] = lut_value
-            # XXX:(zbwu-01-17) use-sample-space, like eloc-energy
-            psi_x1[lut_not_idx] = self.model(x1[lut_not_idx])
+            # use-sample-space, like eloc-energy
+            if self.use_sample_space:
+                psi_x1[lut_not_idx] = self.model(x1[lut_not_idx])
 
         offset1 = self.rank_ci_num * (self.n_sd + 1) + offset0
         psi = self.ci_nqs_value[offset0:offset1]  # (rank-ci-num, n_sd)
