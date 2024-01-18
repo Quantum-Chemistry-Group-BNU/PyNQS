@@ -101,13 +101,6 @@ class NqsCi(BaseVMCOptimizer):
             self.start_iter = self.max_iter
         else:
             self.start_iter = start_iter
-        if self.rank == 0:
-            s = f"CI-NQS, det-num: {self.ci_num}, "
-            s += f"Matrix shape: ({dim}, {dim}), "
-            s += f"min cNqs^2: {cNqs_pow_min:.4E}\n"
-            s += f"start_iter: {self.start_iter}, "
-            s += f"use-sample-space: {self.use_sample_space}"
-            logger.info(s, master=True)
 
         # hij, x1, inverse_index, onv_not_idx
         self.n_sd = self.sampler.n_SinglesDoubles
@@ -123,6 +116,14 @@ class NqsCi(BaseVMCOptimizer):
         # logger.info(f"ci-nqs-value: {self.ci_nqs_value.shape}")
         # logger.info(f"rank-ci-num: {self.rank_ci_num}")
         # logger.info(f"numel: {numel}, numel1: {numel1}")
+
+        if self.rank == 0:
+            s = f"CI-NQS, det-num: {self.ci_num}, "
+            s += f"Matrix shape: ({dim}, {dim}), "
+            s += f"min cNqs^2: {cNqs_pow_min:.4E}\n"
+            s += f"start_iter: {self.start_iter}, "
+            s += f"use-sample-space: {self.use_sample_space}"
+            logger.info(s, master=True)
 
     def make_ci_hij(self) -> None:
         """
@@ -212,7 +213,7 @@ class NqsCi(BaseVMCOptimizer):
         <phi_NQS|H|phi_NQS> = sum(prob * eloc) * <phi_nqs|phi_nqs>
         """
         if self.exact:
-            # Single-Rank
+            # Single-Rank, value = 1.0 if use AR-ansatz
             value = torch.dot(phi_nqs.conj(), phi_nqs).real * self.world_size
         else:
             # Single-Rank
@@ -350,6 +351,8 @@ class NqsCi(BaseVMCOptimizer):
                     phi_nqs = self.model(sample_state)
             else:
                 WF_LUT = self.sampler.WF_LUT
+                if WF_LUT is None:
+                    raise ValueError(f"Use LUT to speed up <phi_nqs|H|phi_nqs>")
                 not_idx, phi_nqs = WF_LUT.lookup(state)[1:]
                 assert not_idx.size(0) == 0
 
