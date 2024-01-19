@@ -117,8 +117,8 @@ if __name__ == "__main__":
     # pre-train wavefunction, fci_wf and ucisd_wf
     ucisd_amp = e["ucisd_amp"]
     ucisd_wf = unpack_ucisd(ucisd_amp, sorb, nele, device=device)
-    fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
-    ucisd_fci_wf = ucisd_to_fci(ucisd_amp, ci_space, sorb, nele, device=device)
+    # fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
+    # ucisd_fci_wf = ucisd_to_fci(ucisd_amp, ci_space, sorb, nele, device=device)
     pre_train_info = {"pre_max_iter": 20, "interval": 10, "loss_type": "sample"}
 
     # select ci > thresh
@@ -144,7 +144,7 @@ if __name__ == "__main__":
         beta_nele=nele // 2,
         use_symmetry=True,
         wf_type="complex",
-        n_layers=4,
+        n_layers=8,
         device=device,
         d_model=d_model,
         n_heads=4,
@@ -163,7 +163,7 @@ if __name__ == "__main__":
 
     sampler_param = {
         "n_sample": int(1.0e12),
-        "debug_exact": False,  # exact optimization
+        "debug_exact": True,  # exact optimization
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -213,7 +213,6 @@ if __name__ == "__main__":
         "max_iter": 2000,
         "interval": 10,
         "MAX_AD_DIM": 1000,
-        "sr": False,
         "pre_CI": ucisd_wf,
         "pre_train_info": pre_train_info,
         "noise_lambda": 0.0,
