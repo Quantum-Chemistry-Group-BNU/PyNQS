@@ -94,7 +94,7 @@ def unpack_ucisd(
                     cisd_state[idx, idA] = 1
                     cisd_state[idx, idB] = 1
 
-    assert (idx + 1 == len(cisd_amp))
+    assert idx + 1 == len(cisd_amp)
 
     # UCISD -> FCI vector
     sa_sign = ci.cisd.tn_addrs_signs(noa + nva, noa, 1)[1]
@@ -107,7 +107,19 @@ def unpack_ucisd(
     cisd_sign = np.concatenate(([1], sa_sign, sb_sign, dab_sign, daa_sign, dbb_sign))
 
     # sign IaIb -> onv
-    phase = np.array([ONV(onv=s).phase() for s in cisd_state])
+    # phase1 = np.array([ONV(onv=s).phase() for s in cisd_state])
+    # ONV.phase batch-version
+    def batch_phase(onv_batch) -> np.ndarray:
+        result = np.zeros(onv_batch.shape[0])
+        for i in range(2, onv_batch.shape[1], 2):
+            onv_bool = onv_batch[:, i]  # bool array, 0/1
+            result += np.sum(onv_batch[:, 1:i:2], axis=-1) % 2 * onv_bool
+
+        return -2 * (result % 2) + 1
+
+    phase = batch_phase(onv_batch=cisd_state)
+    # assert np.allclose(phase, phase1)
+
     cisd_amp_correct = cisd_amp * cisd_sign * phase
 
     cisd_state = convert_onv(cisd_state, sorb)
@@ -115,21 +127,26 @@ def unpack_ucisd(
     return CIWavefunction(coeff, cisd_state, device=device)
 
 
-def ucisd_to_fci(cisd_amp: ndarray[np.float64],
-                 full_space: Tensor,
-                 sorb: int,
-                 nele: int,
-                 device=None) -> CIWavefunction:
+def ucisd_to_fci(
+    cisd_amp: ndarray[np.float64],
+    full_space: Tensor,
+    sorb: int,
+    nele: int,
+    device=None,
+) -> CIWavefunction:
     """
     Convert UCISD coeff coming from pyscf output to CIWavefunction Class
     """
     fci_amp = ci.ucisd.to_fcivec(cisd_amp, sorb // 2, nele)
     return fci_revise(fci_amp, full_space, sorb, device)
 
-def fci_revise(fci_amp: ndarray[np.float64],
-               full_space: Tensor,
-               sorb: int,
-               device=None) -> CIWavefunction:
+
+def fci_revise(
+    fci_amp: ndarray[np.float64],
+    full_space: Tensor,
+    sorb: int,
+    device=None,
+) -> CIWavefunction:
     """
     Convert FCI coeff coming from pyscf output to CIWavefunction Class.
     """
@@ -137,7 +154,7 @@ def fci_revise(fci_amp: ndarray[np.float64],
     for i in range(dim):
         for j in range(dim):
             s = onv_to_tensor(full_space[i * dim + j], sorb).flatten().to("cpu").numpy()
-            s = (1 + s)/2 # 1: occupied, 0: unoccupied
+            s = (1 + s) / 2  # 1: occupied, 0: unoccupied
             # sign IaIb -> onv
             fci_amp[i, j] *= ONV(onv=s).phase()
 
@@ -155,10 +172,10 @@ if __name__ == "__main__":
     sorb = mol.nao * 2
     nele = mol.nelectron
     mf = scf.RHF(mol)
-    mf.init_guess = 'atom'
+    mf.init_guess = "atom"
     mf.level_shift = 0.0
     mf.max_cycle = 100
-    mf.conv_tol = 1.e-14
+    mf.conv_tol = 1.0e-14
     mf.scf()
     myuci = ci.UCISD(mf)
     cisd_amp = myuci.kernel()[1]

@@ -89,7 +89,7 @@ if __name__ == "__main__":
     #         },
     #         "./molecule/H10-1.60.pth",
     #     )
-    e = torch.load("./molecule/H8-1.60.pth", map_location="cpu")
+    e = torch.load("./molecule/H6-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -117,8 +117,8 @@ if __name__ == "__main__":
     # pre-train wavefunction, fci_wf and ucisd_wf
     ucisd_amp = e["ucisd_amp"]
     ucisd_wf = unpack_ucisd(ucisd_amp, sorb, nele, device=device)
-    fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
-    ucisd_fci_wf = ucisd_to_fci(ucisd_amp, ci_space, sorb, nele, device=device)
+    # fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
+    # ucisd_fci_wf = ucisd_to_fci(ucisd_amp, ci_space, sorb, nele, device=device)
     pre_train_info = {"pre_max_iter": 20, "interval": 10, "loss_type": "sample"}
 
     # select ci > thresh
@@ -144,7 +144,7 @@ if __name__ == "__main__":
         beta_nele=nele // 2,
         use_symmetry=True,
         wf_type="complex",
-        n_layers=4,
+        n_layers=8,
         device=device,
         d_model=d_model,
         n_heads=4,
@@ -163,7 +163,7 @@ if __name__ == "__main__":
 
     sampler_param = {
         "n_sample": int(1.0e12),
-        "debug_exact": False,  # exact optimization
+        "debug_exact": True,  # exact optimization
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -213,11 +213,10 @@ if __name__ == "__main__":
         "max_iter": 2000,
         "interval": 10,
         "MAX_AD_DIM": 1000,
-        "sr": False,
         "pre_CI": ucisd_wf,
         "pre_train_info": pre_train_info,
         "noise_lambda": 0.0,
-        # "check_point": "./tmp/vmc-exact-222-checkpoint.pth",
+        # "check_point": "./tmp/vmc-new-333-checkpoint.pth",
         "method_grad": "AD",
         "method_jacobian": "vector",
         "prefix": "./tmp/vmc-new-" + str(seed),
@@ -226,8 +225,11 @@ if __name__ == "__main__":
     # opt_vmc = VMCOptimizer(**vmc_opt_params)
     # opt_vmc.run()
     # opt_vmc.summary(e_ref, e_lst, prefix=f"./tmp/nqs-H4-1.60-{seed}")
-    semi = NqsCi(select_CI, cNqs_pow_min=1.0e-4, **vmc_opt_params)
-    semi.run_progress()
+    semi = NqsCi(select_CI, 
+                 cNqs_pow_min=1.0e-4,
+                 use_sample_space=False,
+                 **vmc_opt_params)
+    semi.run()
     semi.summary(e_ref, e_lst, prefix=f"./tmp/semi-exact-{seed}")
     if rank == 0:
         logger.info(f"e-ref: {e_ref:.10f}, seed: {seed}")
