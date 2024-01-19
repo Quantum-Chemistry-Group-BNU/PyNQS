@@ -188,6 +188,8 @@ def integral_pyscf(atom: str,
             mycc = cc.CCSD(mf)
             _ = mycc.kernel()
             print(f"CCSD energy: {mycc.e_tot:.10f}")
+            # et = mycc.ccsd_t()
+            # print(f'CCSD(T) total energy: {mycc.e_tot + et:.10f}')
         except:
             import warnings
             warnings.warn(f"CCSD kernel failed")
@@ -197,6 +199,9 @@ def integral_pyscf(atom: str,
         _ = mycc.kernel()
         coeff = numpy.zeros(1)
         e_ref = mycc.e_tot
+        print(f"CCSD energy: {mycc.e_tot:.10f}")
+        # et = mycc.ccsd_t()
+        # print(f'CCSD(T) total energy: {mycc.e_tot + et:.10f}')
         # return (sorb, nele, mycc.e_tot)
 
     e_lst: List[float]
