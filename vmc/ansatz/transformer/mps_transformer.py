@@ -344,15 +344,15 @@ class MPSdecoder(nn.Module):
             else:
                 breakpoint()
                 psi_amp_k = self.forward_psi(x0, q=k, get_amp=True)[0]
-            breakpoint()
+            # breakpoint()
             num_up = sample_unique[:, ::2].sum(dim=1)
             num_down = sample_unique[:, 1::2].sum(dim=1)
             psi_mask = self.symmetry_mask(k=2 * k, num_up=num_up, num_down=num_down)
             # breakpoint()
             psi_amp_k = self.mask_input(psi_amp_k, psi_mask, 0.0)
-            psi_amp_k = psi_amp_k / (torch.max(psi_amp_k,dim=1)[0]).view(-1,1)
+            psi_amp_k = psi_amp_k / (torch.max(psi_amp_k, dim=1)[0]).view(-1, 1)
             psi_amp_k = F.normalize(psi_amp_k, dim=1, eps=1e-14)
-            breakpoint()
+            # breakpoint()
             # breakpoint()
             # else:
             #     dim = x0.size(0)
@@ -498,16 +498,24 @@ class MPSdecoder(nn.Module):
             # 获得实际上“mps”的每一个m
             wf_mps[i] = self.get_MPSwf(i)  # (4, dcut) & (4, dcut, dcut)
             wf_nn[i] = self.get_Decoderwf(input, i, q=q)
-            if self.pmode == None: # (n_batch, n_cond, dcut, dcut)
-                wf_nn[i] = torch.einsum("ijkl->jkli",wf_nn[i])
-                wf_nn[i] = torch.unsqueeze(wf_nn[i],0)
-                wf_nn[i] = wf_nn[i].repeat(wf_mps[i].shape[0],1,1,1,1)
+            if self.pmode == None:  # (n_batch, n_cond, dcut, dcut)
+                wf_nn[i] = torch.einsum("ijkl->jkli", wf_nn[i])
+                wf_nn[i] = torch.unsqueeze(wf_nn[i], 0)
+                wf_nn[i] = wf_nn[i].repeat(wf_mps[i].shape[0], 1, 1, 1, 1)
                 # breakpoint()
                 if i == 0:
-                    wf_nn[i] = torch.einsum("ijklm,k->ijlm",wf_nn[i],self.parm_decoder[0:self.dcut].to(wf_nn[i].dtype))
+                    wf_nn[i] = torch.einsum(
+                        "ijklm,k->ijlm",
+                        wf_nn[i],
+                        self.parm_decoder[0 : self.dcut].to(wf_nn[i].dtype),
+                    )
                 else:
-                    if i == self.nqubits//2 - 1:
-                        wf_nn[i] = torch.einsum("ijklm,k->ijlm",wf_nn[i],self.parm_decoder[self.dcut:].to(wf_nn[i].dtype))
+                    if i == self.nqubits // 2 - 1:
+                        wf_nn[i] = torch.einsum(
+                            "ijklm,k->ijlm",
+                            wf_nn[i],
+                            self.parm_decoder[self.dcut :].to(wf_nn[i].dtype),
+                        )
             # 这里 n_cond 实际上是 n_qubits//2
             ## 把 n_batch 维度加到 MPS 上去，
             n_batch = wf_nn[i].shape[-1]
@@ -654,38 +662,43 @@ class MPSdecoder(nn.Module):
             # 获得实际上“mps”的每一个m
             wf_mps[i] = self.get_MPSwf(i)
             wf_nn[i] = self.get_Decoderwf(input, i, q=q)
-            if self.pmode == None: # (n_batch, n_cond, dcut, dcut)
-                wf_nn[i] = torch.einsum("ijkl->jkli",wf_nn[i])# (n_cond, dcut, dcut, n_batch)
+            # breakpoint()
+            if self.pmode == None:  # (n_batch, n_cond, dcut, dcut)
+                wf_nn[i] = torch.einsum("ijkl->jkli", wf_nn[i])  # (n_cond, dcut, dcut, n_batch)
                 if i == 0:
-                    wf_nn[i] = torch.einsum("ijkl,k->ijl",wf_nn[i],self.parm_decoder[0:self.dcut].to(wf_nn[i].dtype))
-                else: # (n_cond, dcut, n_batch)
-                    if i == self.nqubits//2 - 1:
-                        wf_nn[i] = torch.einsum("ijkl,k->ijl",wf_nn[i],self.parm_decoder[self.dcut:].to(wf_nn[i].dtype))
+                    wf_nn[i] = torch.einsum(
+                        "ijkl,k->ijl", wf_nn[i], self.parm_decoder[0 : self.dcut].to(wf_nn[i].dtype)
+                    )
+                else:  # (n_cond, dcut, n_batch)
+                    if i == self.nqubits // 2 - 1:
+                        wf_nn[i] = torch.einsum(
+                            "ijkl,k->ijl",
+                            wf_nn[i],
+                            self.parm_decoder[self.dcut :].to(wf_nn[i].dtype),
+                        )
             # 这里 n_cond 实际上是 n_qubits//2
             ## 把 n_batch 维度加到 MPS 上去，
             # 至今： wf_nn (n_cond,dcut,*,n_batch) wf_mps (4,dcut,*)
-            n_batch = wf_nn[i].shape[-1]
-            # index = self.state_to_int(target[:, 2 * i : 2 * i + 2]).view(-1)
-            # breakpoint()
-            if i == 0 or i == self.nqubits//2-1:  # (4, n_cond, dcut)
+            if i == 0 or i == self.nqubits // 2 - 1:  # (4, n_cond, dcut)
                 # breakpoint()
                 wf_mps[i] = torch.unsqueeze(wf_mps[i], 1)  # (4,dcut)
                 wf_mps[i] = wf_mps[i].repeat(1, wf_nn[i].shape[0], 1)  # (4, n_cond, dcut)
                 wf_mps[i] = torch.unsqueeze(wf_mps[i], -1)
-                wf_mps[i] = wf_mps[i].repeat(1, 1, 1, n_batch)  # (4, n_cond, dcut, n_batuch)
+                wf_mps[i] = wf_mps[i].repeat(1, 1, 1, wf_nn[i].shape[-1])  # (4, n_cond, dcut, n_batuch)
                 # index = (index.unsqueeze(0).unsqueeze(0).unsqueeze(0)).repeat(1,wf_nn[i].shape[-3],wf_nn[i].shape[-2],1)
+                wf_nn[i] = (wf_nn[i].unsqueeze(0)).repeat(4, 1, 1, 1)
             else:
                 wf_mps[i] = torch.unsqueeze(wf_mps[i], 1)  # (4, dcut, dcut)
-                wf_mps[i] = wf_mps[i].repeat(
-                    1, wf_nn[i].shape[0], 1, 1
-                )  # (4, n_cond, dcut, dcut)
+                wf_mps[i] = wf_mps[i].repeat(1, wf_nn[i].shape[0], 1, 1)  # (4, n_cond, dcut, dcut)
                 wf_mps[i] = torch.unsqueeze(wf_mps[i], -1)
                 wf_mps[i] = wf_mps[i].repeat(
-                    1, 1, 1, 1, n_batch
+                    1, 1, 1, 1, wf_nn[i].shape[-1]
                 )  # (4, n_cond, dcut, dcut, n_batuch)
                 # index = (index.unsqueeze(0).unsqueeze(0).unsqueeze(0)).repeat(1,wf_nn[i].shape[-4],wf_nn[i].shape[-3],wf_nn[i].shape[-2],1)
+                wf_nn[i] = (wf_nn[i].unsqueeze(0)).repeat(4, 1, 1, 1, 1)
             # wf_mps[i] = wf_mps[i].gather(0,index).squeeze(0)
-            wf_mps[i] = wf_nn[i] + wf_mps[i] # (n_cond, dcut, n_batch)
+            # breakpoint()
+            wf_mps[i] = wf_nn[i] + wf_mps[i]  # (n_cond, dcut, n_batch)
         # symm.
         num_up = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
         num_down = torch.zeros(nbatch, device=self.device, dtype=torch.int64)
@@ -707,18 +720,22 @@ class MPSdecoder(nn.Module):
                     "aij,aij->jia", psi_amp_l, psi_amp_l.conj()
                 ).real  # (n_batch, n_cond, 4)
             else:
-                if l == 0:
-                    psi_amp_l = torch.einsum("aijk,aijk->kia", psi_amp_l, psi_amp_l.conj()).real  # (n_batch, n_cond, 4)
+                if l == 0:  # (4, n_cond, dcut, n_batch)
                     psi_amp_l = torch.cumprod(psi_amp_l, dim=1)
+                    psi_amp_l = torch.einsum(
+                        "aijk,aijk->kia", psi_amp_l, psi_amp_l.conj()
+                    ).real  # (n_batch, n_cond, 4)
                 else:
-                    for k in range(1, l+1):
-                        psi_amp_l = torch.einsum("aijl,aijkl->aikl", psi_amp_l, wf_mps[k])  # (4, n_cond, dcut, n_batch)
+                    for k in range(1, l + 1):
+                        psi_amp_l = torch.einsum(
+                            "aijl,aijkl->aikl", psi_amp_l, wf_mps[k]
+                        )  # (4, n_cond, dcut, n_batch)
                     psi_amp_l = torch.cumprod(psi_amp_l, dim=1)
                     psi_amp_l = torch.einsum(
                         "aijk,aijk->kia", psi_amp_l, psi_amp_l.conj()
                     ).real  # (n_batch, n_cond, 4)
             # norm----------------------------------------------------
-            psi_amp_l = torch.sqrt(psi_amp_l[:,l,:])
+            psi_amp_l = torch.sqrt(psi_amp_l[:, l, ...])
             if get_amp:
                 psi_amp_nocond = psi_amp_l
             # symm----------------------------------------------------
@@ -727,9 +744,9 @@ class MPSdecoder(nn.Module):
             num_up.add_(target[..., 2 * l].to(torch.int64))
             num_down.add_(target[..., 2 * l + 1].to(torch.int64))
             # --------------------------------------------------------
-            # 这里如果不除以最大值的话那么由于累乘的原因会导致最后特别小，触发eps机制
-            psi_amp_l = psi_amp_l / (torch.max(psi_amp_l,dim=1)[0]).view(-1,1)
-            psi_amp_l = F.normalize(psi_amp_l, dim=1, eps=1e-12)
+            # 这里如果不除以行最大值的话那么由于累乘的原因会导致最后特别小，触发eps机制
+            psi_amp_l = psi_amp_l / (torch.max(psi_amp_l, dim=1)[0]).view(-1, 1)
+            psi_amp_l = F.normalize(psi_amp_l, dim=1, eps=1e-20)
             # --------------------------------------------------------
             index = self.state_to_int(target[:, 2 * l : 2 * l + 2]).view(-1, 1)
             psi_amp_value *= psi_amp_l.gather(1, index).view(-1)
@@ -738,7 +755,7 @@ class MPSdecoder(nn.Module):
             return torch.unsqueeze(psi_amp_nocond, 0)
         else:
             # phase-part ========================================================================================
-            psi_phase = wf_mps[0] # (n_cond, dcut, n_batch)
+            psi_phase = wf_mps[0]  # (n_cond, dcut, n_batch)
             # breakpoint()
             # 挨个缩并矩阵
             for k in range(1, self.nqubits // 2 - 1):
@@ -750,15 +767,12 @@ class MPSdecoder(nn.Module):
                 "aijk,aijk->kia", psi_phase, wf_mps[self.nqubits // 2 - 1]
             )  # (n_batch, n_cond, 4)
             psi_phase = torch.cumprod(psi_phase, dim=1)
-            nbatch = target.size(0)
             # psi_phase_value = psi_phase.prod(1)
-            psi_phase_value = torch.ones(nbatch, dtype=psi_phase.dtype, device=self.device)
+            psi_phase_value = torch.ones(target.shape[0], dtype=psi_phase.dtype, device=self.device)
             for k in range(0, self.nqubits, 2):
                 psi_phase_k = psi_phase[:, k // 2, :]  # (nbatch, 4)
                 index = self.state_to_int(target[:, k : k + 2]).view(-1, 1)
                 psi_phase_value *= psi_phase_k.gather(1, index).view(-1)
-            # phases =  self.phase_layers[0](input).view(-1)
-            # phase_part = torch.complex(torch.zeros_like(phases), phases).exp()
             # ===================================================================================================
             arg = torch.angle(psi_phase_value)
             phase_part = torch.exp(1j * arg)
