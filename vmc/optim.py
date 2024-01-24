@@ -1,5 +1,7 @@
 from __future__ import annotations
 import __main__
+from __future__ import annotations
+import __main__
 import time
 import random
 import platform
@@ -8,7 +10,6 @@ import subprocess
 import subprocess
 import sys
 import warnings
-import __main__
 import torch
 import torch.distributed as dist
 import numpy as np
@@ -257,96 +258,35 @@ class BaseVMCOptimizer(ABC):
                 os.system(f"cat {filename}")
             logger.info("=" * 100, master=True)
 
-    def get_version(self) -> str:
+    @staticmethod
+    def get_version() -> str:
+        """
+        print Git version
+        """
         command = "git rev-parse HEAD"
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
         if len(result.stderr) != 0:
             warnings.warn(f"PyNQS git-version not been found", UserWarning)
-            version = "0000000000000"
+            version = "0000000000000000"
         else:
             version = result.stdout
         return version
 
-    # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
-    def run(self):
-        begin_vmc = time.time_ns()
+    def save_grad_energy(self, e_total: float) -> None:
+        r"""
+        Save L2-grad, max-grad and energy to list in each iteration, for plotting.
+        """
         if self.rank == 0:
-            logger.info(f"Begin VMC iteration: {time.ctime()}", master=True)
-        for epoch in range(self.max_iter):
-            t0 = time.time_ns()
-            if epoch < self.HF_init:
-                initial_state = self.onstate[random.randrange(self.dim)].clone().detach()
-            else:
-                initial_state = self.onstate[0].clone().detach()
-
-            # print(f"initial_state : {initial_state}")
-            # lp = LineProfiler()
-            # lp_wrapper = lp(self.sampler.run)
-            # lp_wrapper(initial_state)
-            # lp.print_stats()
-            # exit()
-
-            state, state_prob, eloc, e_total, stats, eloc_mean = self.sampler.run(
-                initial_state, epoch=epoch
-            )
-            # TODO:(zbwu-23-12-15)
-            if self.rank == 0:
-                s = f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j"
-                logger.info(s, master=True)
-                self.e_lst.append(e_total)
-            # self.stats_lst.append(stats)
-
-            if self.only_sample:
-                delta = (time.time_ns() - t0) / 1.00e06
-                if self.rank == 0:
-                    s = f"{epoch}-th only Sampling finished, cost time {delta:.3f} ms\n"
-                    s += "=" * 100
-                    logger.info(s, master=True)
-                continue
-
-            sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
-
-            delta = (time.time_ns() - t0) / 1.00e06
-            if self.rank == 0:
-                self.time_sample.append(delta)
-
-            # calculate model grad
-            t1 = time.time_ns()
-            if self.sr:
-                psi = sr_grad(
-                    self.model,
-                    sample_state,
-                    state_prob,
-                    eloc,
-                    self.exact,
-                    self.dtype,
-                    self.method_grad,
-                    self.method_jacobian,
-                )
-            else:
-                psi = energy_grad(
-                    self.model,
-                    sample_state,
-                    state_prob,
-                    eloc,
-                    eloc_mean,
-                    self.MAX_AD_DIM,
-                    self.dtype,
-                    self.method_grad,
-                )
-            delta_grad = (time.time_ns() - t1) / 1.00e09
-
-            # save the energy grad
-            if self.rank == 0:
-                x: List[np.ndarray] = []
-                for i, param in enumerate(self.model.parameters()):
-                    if param.grad is not None:
-                        x.append(param.grad.reshape(-1).detach().to("cpu").numpy())
-                x = np.concatenate(x)
-                l2_grad = np.linalg.norm(x)
-                max_grad = np.abs(x).max()
-                self.grad_e_lst[0].append(l2_grad)
-                self.grad_e_lst[1].append(max_grad)
+            x: List[np.ndarray] = []
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    x.append(param.grad.reshape(-1).detach().to("cpu").numpy())
+            x = np.concatenate(x)
+            l2_grad = np.linalg.norm(x)
+            max_grad = np.abs(x).max()
+            self.e_lst.append(e_total)
+            self.grad_e_lst[0].append(l2_grad)
+            self.grad_e_lst[1].append(max_grad)
 
     def update_param(self, epoch: int) -> None:
         """
@@ -361,51 +301,46 @@ class BaseVMCOptimizer(ABC):
             if self.lr_scheduler is not None:
                 self.lr_scheduler.step()
 
-            delta_update = (time.time_ns() - t2) / 1.00e09
-
-            # save the checkpoint
-            # print logger
-            if self.rank == 0:
-                if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
-                    checkpoint_file = f"{self.prefix}-checkpoint.pth"
-                    logger.info(f"Save model/opt state: -> {checkpoint_file}", master=True)
-                    lr = self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
-                    torch.save(
-                        {
-                            "epoch": epoch,
-                            "model": self.model_raw.state_dict(),
-                            "optimizer": self.opt.state_dict(),
-                            "scheduler": lr,
-                        },
-                        checkpoint_file,
-                    )
-            delta = (time.time_ns() - t0) / 1.00e09
-            # All-Reduce max-time
-            c = torch.tensor([delta_grad, delta_update, delta], device=self.device)
-            all_reduce_tensor(c, op=dist.ReduceOp.MAX)
-            synchronize()
-            if self.rank == 0:
-                s = f"Calculating grad: {c[0].item():.3E} s, update param: {c[1].item():.3E} s\n"
-                s += f"Total energy {e_total:.9f} a.u., cost time {c[2].item():.3E} s\n"
-                s += f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
-                s += f"{epoch} iteration end {time.ctime()}\n"
-                s += "=" * 100
-                logger.info(s, master=True)
-                self.time_iter.append(c[2].item())
-
-            del sample_state, eloc, state, psi, c
-
-        # end vmc iterations
-        total_vmc_time = (time.time_ns() - begin_vmc) / 1.0e09
-        synchronize()
+    def save_checkpoint(self, epoch: int) -> None:
+        """
+        save the model/opt/lr_scheduler to '.pth' file for resuming calculations
+        """
         if self.rank == 0:
-            logger.info(f"End VMC iteration: {time.ctime()}", master=True)
-            logger.info(
-                f"total cost time: {total_vmc_time:.3E} s, {total_vmc_time/60:.3E} min {total_vmc_time/3600:.3E} h",
-                master=True,
-            )
+            if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
+                checkpoint_file = f"{self.prefix}-checkpoint.pth"
+                logger.info(f"Save model/opt state: -> {checkpoint_file}", master=True)
+                lr = self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model": self.model_raw.state_dict(),
+                        "optimizer": self.opt.state_dict(),
+                        "scheduler": lr,
+                    },
+                    checkpoint_file,
+                )
 
-    def noise_tune(self, noise_lambda: float = None) -> None:
+    def logger_iteration_info(self, epoch: int, cost: Tensor) -> None:
+        """
+        print iteration_info in last of each iteration,
+        include, energy, L2-grad, Max-grad, grad-cost, update-param-cost and total-cost
+
+        epoch(int): the epoch-th iteration.
+        cost(Tensor): grad-cost, update-param-cost and total-cost
+        """
+        if self.rank == 0:
+            e_total = self.e_lst[-1]
+            l2_grad = self.grad_e_lst[0][-1]
+            max_grad = self.grad_e_lst[1][-1]
+            s = f"Calculating grad: {cost[0].item():.3E} s, update param: {cost[1].item():.3E} s\n"
+            s += f"Total energy {e_total:.9f} a.u., cost time {cost[2].item():.3E} s\n"
+            s += f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
+            s += f"{epoch} iteration end {time.ctime()}\n"
+            s += "=" * 100
+            logger.info(s, master=True)
+
+    @abstractmethod
+    def run(self) -> None:
         """
         Run Vmc or CI-NQS progress
         """
