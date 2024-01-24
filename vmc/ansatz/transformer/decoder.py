@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import time
 import warnings
 
 from functools import partial
@@ -374,9 +375,11 @@ class DecoderWaveFunction(nn.Module):
             num_up = sample_unique[:, ::2].sum(dim=1)
             num_down = sample_unique[:, 1::2].sum(dim=1)
             amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
+            t0 = time.time_ns()
             amp_orth_mask = self.orth_mask(
                 states=sample_unique, k=k, num_up=num_up, num_down=num_down
             )
+            self.time_select += (time.time_ns() - t0)/1.0e06
             amp_k = amp[:, -1, :]  # (n_unique, 4)
             amp_mask *= amp_orth_mask
             amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
@@ -529,6 +532,7 @@ class DecoderWaveFunction(nn.Module):
                     f"{self.world_size}.pth",
                 )
             exit()
+        logger.info(f"Select-CI-det: {self.time_select:.3f}ms")
         return sample_unique, sample_counts, wf
 
     @torch.no_grad()
@@ -584,6 +588,7 @@ class DecoderWaveFunction(nn.Module):
             else:
                 wf = amps_value
 
+        logger.info(f"Select-CI-det: {self.time_select:.3f}ms")
         return sample_unique, sample_counts, wf
 
     def forward_wf(self, x: Tensor) -> Tensor:
@@ -619,7 +624,9 @@ class DecoderWaveFunction(nn.Module):
         for k in range(0, self.sorb, 2):
             # (nbatch, 4)
             amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
+            t0 = time.time_ns()
             amp_orth_mask = self.orth_mask(states=x[:, :k], k=k, num_up=num_up, num_down=num_down)
+            self.time_select += (time.time_ns() - t0)/1.0e6
             amp_mask *= amp_orth_mask
             amp_k = amp[:, k // 2, :]  # (nbatch, 4)
             amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
@@ -663,6 +670,7 @@ class DecoderWaveFunction(nn.Module):
             # Nan -> 0.0
             if self.norm_method in (0, 3):
                 wf = torch.where(wf.isnan(), torch.full_like(wf, 0), wf)
+        logger.info(f"Select-CI-det: {self.time_select:.3f}ms")
         return wf
 
     @torch.no_grad()
@@ -691,6 +699,7 @@ class DecoderWaveFunction(nn.Module):
 
     def forward(self, x: Tensor, use_global_phase: bool = False) -> Tensor:
         # exp(i * phase * use_global_phase)
+        self.time_select = 0.0
         return self.forward_wf(x) * self.global_phase(use_global_phase)
 
     def ar_sampling(
@@ -708,6 +717,7 @@ class DecoderWaveFunction(nn.Module):
             sample_counts: the counts of unique sample, s.t. sum(sample_counts) = n_sample
             wf_value: the wavefunction of unique sample
         """
+        self.time_select = 0.0
         if min_tree_height is None:
             return self.forward_sample(n_sample, min_batch)
         elif isinstance(min_tree_height, int):
@@ -720,16 +730,17 @@ if __name__ == "__main__":
     setup_seed(333)
     torch.set_default_dtype(torch.double)
     torch.set_printoptions(precision=6)
-    sorb = 6
+    sorb = 8
     nele = 4
     device = "cuda:0"
     d_model = 5
     use_kv_cache = True
     dtype = torch.double
     norm_method = 0
-    # fci_space = torch.from_numpy(np.load("./3o4e.npy")).to(device)  # +1/-1
-    idx = torch.tensor([0, 1, 2, 3, 4, 5])
-    # det_lut = DetLUT(fci_space[idx], sorb, nele, alpha=nele // 2, beta=nele // 2)
+    fci_space = torch.from_numpy(np.load("./4o4e.npy")).to(device)  # +1/-1
+    fci_space = (fci_space + 1)/2
+    idx = torch.tensor([0, 1, 2, 3, 4, 5, 10, 12, 14, 15])
+    det_lut = DetLUT(fci_space[idx], sorb, nele, alpha=nele // 2, beta=nele // 2)
     # print(det_lut.onv_lst)
     # print(det_lut.tensor_lst)
     # print(det_lut.orth_lst)
@@ -750,11 +761,13 @@ if __name__ == "__main__":
         use_kv_cache=use_kv_cache,
         dtype=dtype,
         norm_method=norm_method,
-        # det_lut=det_lut,
+        det_lut=det_lut,
     )
-    # print(det_lut.det)
-    # wf = model(fci_space)
-    # print(wf)
+    print(det_lut.det)
+    wf = model(fci_space)
+    print(wf)
+    print(torch.allclose(wf[idx], torch.zeros_like(wf[idx])))
+    # breakpoint()
     sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100)
     print(sample)
     # print(det_lut.det)

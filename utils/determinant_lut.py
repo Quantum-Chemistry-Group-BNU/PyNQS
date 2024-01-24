@@ -103,15 +103,26 @@ def get_all_orb_onv(
             if _mask.sum().item() == 0:
                 min_sorb_idx = k - 2
             y = tensor_to_onv(unique[_mask].to(torch.uint8), unique.size(1))
+            if k > 2:
+                y0 = tensor_to_onv(unique[_mask][:, :-2].to(torch.uint8), unique.size(1) - 2)
+                _mask1 = wavefunction_lut(onv_lst[0][k//2 -1], y0, unique.size(1) - 2) == -1 # first-node
+                # print(_mask1.sum(), y.size(0))
+                y = y[_mask1]
+                # print(y.size(0))
+                # print("==========")
+            else:
+                _mask1 = torch.ones(unique[_mask].size(0), device=device, dtype=torch.bool)
             idx = torch_sort_onv(y)
             onv_lst[0][k // 2] = y[idx]
-            states_lst[0][k // 2] = unique[_mask][idx]
+            # states_lst[0][k // 2] = unique[_mask][idx]
+            states_lst[0][k // 2] = unique[_mask][_mask1][idx]
             orth_lst[0][k // 2] = torch.zeros(y.size(0), 4, device=device, dtype=torch.bool)
-    #
     unique = torch.unique(x, dim=0)
     y = tensor_to_onv(unique.to(torch.uint8), unique.size(1))
     idx = torch_sort_onv(y)
-    onv_lst[0][-1] = y[idx]
+    onv_lst[0][-1] = y[idx] # Exact optimization
+    y0 = tensor_to_onv(unique[:, :-2].to(torch.uint8), unique.size(1) -2)
+    _mask_last = wavefunction_lut(onv_lst[0][-2], y0, unique.size(1) - 2) == -1
     states_lst[0][-1] = unique[idx]
     orth_lst[0][-1] = torch.zeros(y.size(0), 4, device=device, dtype=torch.bool)
 
@@ -177,8 +188,17 @@ def get_all_orb_onv(
         if _check_None_empty(result1[i]):
             idx = torch_sort_onv(result1[i])
             result1[i] = result1[i][idx]
-            result2[i] = result2[i][idx]
-            result3[i] = result3[i][idx]
+            if i == len(result1) -1:
+                _mask = _mask_last[idx]
+                result2[i] = result2[i][idx][_mask]
+                result3[i] = result3[i][idx][_mask]
+            else:
+                result2[i] = result2[i][idx]
+                result3[i] = result3[i][idx]
+
+    for p in result2:
+        if p is not None:
+            print(p.shape)
 
     result = (result1, result2, result3)
     # breakpoint()

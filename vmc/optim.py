@@ -521,6 +521,13 @@ class VMCOptimizer(BaseVMCOptimizer):
         self.pre_train_info = pre_train_info
         self.noise_lambda = noise_lambda
 
+        # avoid ansatz remove CI-Det
+        model = self.model_raw.module
+        if hasattr(model, "remove_det") and model.remove_det:
+            raise TypeError(f"NQS does not support removing CI-Det")
+        if hasattr(model, "det_lut") and model.det_lut is not None:
+            raise TypeError(f"NQS does not support removing CI-Det")
+
     # @profile(precision=4, stream=open('opt_memory_profiler.log','w+'))
     def run(self) -> None:
         begin_vmc = time.time_ns()

@@ -113,7 +113,6 @@ if __name__ == "__main__":
     if rank == 0:
         logger.info(f"e_lst: {e_lst}")
     electron_info = ElectronInfo(info_dict, device=device)
-
     # pre-train wavefunction, fci_wf and ucisd_wf
     ucisd_amp = e["ucisd_amp"]
     ucisd_wf = unpack_ucisd(ucisd_amp, sorb, nele, device=device)
@@ -122,7 +121,7 @@ if __name__ == "__main__":
     pre_train_info = {"pre_max_iter": 20, "interval": 10, "loss_type": "sample"}
 
     # select ci > thresh
-    thresh = 0.00
+    thresh = 0.005
     use_hf = False
     det_lut, select_CI = select_det(
         CI=ucisd_wf,
@@ -134,7 +133,9 @@ if __name__ == "__main__":
         thresh=thresh,
         use_hf=use_hf,
     )
-
+    if rank == 0:
+        logger.info(select_CI.energy(electron_info))
+        logger.info(select_CI)
     d_model = 16
     n_warmup = 2000
     transformer = DecoderWaveFunction(
@@ -148,13 +149,12 @@ if __name__ == "__main__":
         device=device,
         d_model=d_model,
         n_heads=4,
-        phase_hidden_size=[512, 512],
+        phase_hidden_size=[128, 128],
         n_out_phase=1,
         use_kv_cache=True,
         norm_method=0,
         det_lut=det_lut,
     )
-
     ansatz = transformer
     if device == "cuda":
         model = DDP(ansatz, device_ids=[local_rank], output_device=local_rank)
@@ -163,7 +163,7 @@ if __name__ == "__main__":
 
     sampler_param = {
         "n_sample": int(1.0e12),
-        "debug_exact": True,  # exact optimization
+        "debug_exact": False,  # exact optimization
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -179,7 +179,7 @@ if __name__ == "__main__":
         # "use_same_tree": True,  # different rank-sample
         # "min_batch": 2000,
         # "min_tree_height": 4,  # different rank-sample
-        "det_lut": det_lut,
+        "det_lut": det_lut, # only use in CI-NQS exact optimization
     }
 
     # opt
@@ -210,26 +210,26 @@ if __name__ == "__main__":
         "sampler_param": sampler_param,
         "only_sample": False,
         "electron_info": electron_info,
-        "max_iter": 2000,
-        "interval": 10,
+        "max_iter": 10,
+        "interval": 1,
         "MAX_AD_DIM": 1000,
         "pre_CI": ucisd_wf,
         "pre_train_info": pre_train_info,
         "noise_lambda": 0.0,
-        # "check_point": "./tmp/vmc-new-333-checkpoint.pth",
+        # "check_point": f"./tmp/vmc-new-{str(seed)}-checkpoint.pth",
         "method_grad": "AD",
         "method_jacobian": "vector",
         "prefix": "./tmp/vmc-new-" + str(seed),
     }
     e_ref = e_lst[0]
-    # opt_vmc = VMCOptimizer(**vmc_opt_params)
-    # opt_vmc.run()
-    # opt_vmc.summary(e_ref, e_lst, prefix=f"./tmp/nqs-H4-1.60-{seed}")
-    semi = NqsCi(select_CI, 
-                 cNqs_pow_min=1.0e-4,
-                 use_sample_space=False,
-                 **vmc_opt_params)
-    semi.run()
-    semi.summary(e_ref, e_lst, prefix=f"./tmp/semi-exact-{seed}")
+    opt_vmc = VMCOptimizer(**vmc_opt_params)
+    opt_vmc.run()
+    opt_vmc.summary(e_ref, e_lst, prefix=f"./tmp/nqs-H4-1.60-{seed}")
+    # semi = NqsCi(select_CI, 
+    #              cNqs_pow_min=1.0e-4,
+    #              use_sample_space=False,
+    #              **vmc_opt_params)
+    # semi.run()
+    # semi.summary(e_ref, e_lst, prefix=f"./tmp/semi-exact-{seed}")
     if rank == 0:
         logger.info(f"e-ref: {e_ref:.10f}, seed: {seed}")

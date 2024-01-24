@@ -66,6 +66,13 @@ class NqsCi(BaseVMCOptimizer):
         vmc_opt_kwargs.pop("noise_lambda", None)
         super(NqsCi, self).__init__(**vmc_opt_kwargs)
 
+        # check ansatz remove det
+        model = self.model_raw.module
+        if not (hasattr(model, "remove_det") and model.remove_det):
+            raise TypeError(f"CI-NQS must remove CI-Det")
+        if not (hasattr(model, "det_lut") and model.det_lut is not None):
+            raise TypeError(f"CI-NQS must remove CI-Det")
+
         self.ci_det = CI.space
         self.ci_num = CI.space.size(0)
         self.factory_kwargs = {"device": self.device, "dtype": self.dtype}
@@ -188,6 +195,8 @@ class NqsCi(BaseVMCOptimizer):
             psi_x1[lut_idx] = lut_value
             # use-sample-space, like eloc-energy
             if self.use_sample_space:
+                ...
+            else:
                 psi_x1[lut_not_idx] = self.model(x1[lut_not_idx])
 
         offset1 = self.rank_ci_num * (self.n_sd + 1) + offset0
