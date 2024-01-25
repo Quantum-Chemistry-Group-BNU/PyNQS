@@ -116,7 +116,9 @@ class NqsCi(BaseVMCOptimizer):
         numel = self.ci_nqs_info[0].numel()
         # psi: (ci_num * n_sd), <ci|H|nqs>: (ci_num)
         numel1 = self.ci_nqs_info[1].size(0)  # (unique, sorb)
-        self.ci_nqs_value = torch.zeros(numel1 + numel + self.rank_ci_num, **self.factory_kwargs)
+        self.ci_nqs_value = torch.zeros(
+            numel1 + numel + self.rank_ci_num + self.ci_num, **self.factory_kwargs
+        )
         # <phi_ci|H|phi_nqs> in sample-space
         self.use_sample_space = use_sample_space
         # synchronize()
@@ -125,11 +127,20 @@ class NqsCi(BaseVMCOptimizer):
         # logger.info(f"numel: {numel}, numel1: {numel1}")
 
         if self.rank == 0:
+            # double or int64
+            pre_memory = sum(map(torch.numel, self.ci_nqs_info)) * 8/2**30
+            # uint8, comb_x
+            pre_memory -= self.ci_nqs_info[2].numel() * 7/2**30
+            if self.dtype == torch.complex128:
+                pre_memory += self.ci_nqs_value.numel() * 8 * 2 / 2**30
+            else:
+                pre_memory += self.ci_nqs_value.numel() * 8 / 2**30
             s = f"CI-NQS, det-num: {self.ci_num}, "
             s += f"Matrix shape: ({dim}, {dim}), "
             s += f"min cNqs^2: {cNqs_pow_min:.4E}\n"
             s += f"start_iter: {self.start_iter}, "
-            s += f"use-sample-space: {self.use_sample_space}"
+            s += f"use-sample-space: {self.use_sample_space}\n"
+            s += f"pre-allocated memory: {pre_memory:.5f}GiB"
             logger.info(s, master=True)
 
     def make_ci_hij(self) -> None:
@@ -201,15 +212,17 @@ class NqsCi(BaseVMCOptimizer):
 
         offset1 = self.rank_ci_num * (self.n_sd + 1) + offset0
         psi = self.ci_nqs_value[offset0:offset1]  # (rank-ci-num, n_sd)
-        rank_value = self.ci_nqs_value[offset1:]  # (rank-ci-num)
+        offset2 = self.rank_ci_num + offset1
+        rank_value = self.ci_nqs_value[offset1:offset2]  # (rank-ci-num)
         psi[det_not_idx] = psi_x1[inverse_index]  # unique inverse
 
-        # All-Gather value
-        # XXX:(zbwu-01-16) allocate all_value memory in initial
+        # All-Gather-value
+        all_value = self.ci_nqs_value[offset2:]  # (ci-num)
+        assert all_value.size(0) == self.ci_num
+
         # value = torch.einsum("ij, ij ->i", hij, psi.reshape(self.rank_ci_num, -1))
         rank_value = (psi.reshape(self.rank_ci_num, -1) * hij).sum(-1)
-        all_value = all_gather_tensor(rank_value, self.device, self.world_size)
-        all_value = torch.cat(all_value)
+        torch.cat(all_gather_tensor(rank_value, self.device, self.world_size), out=all_value)
 
         self.Ham_matrix[: self.ci_num, -1] = all_value
         self.Ham_matrix[-1, : self.ci_num] = all_value.conj()

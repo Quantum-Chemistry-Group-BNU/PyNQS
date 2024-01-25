@@ -1,7 +1,5 @@
 import time
 import torch
-import torch.utils.data as Data
-import torch.distributed as dist
 from functools import partial
 from typing import Callable, Tuple, List, Union
 from loguru import logger
@@ -9,6 +7,7 @@ from torch import Tensor, nn
 
 from memory_profiler import profile
 from line_profiler import LineProfiler
+from torch.profiler import profile, record_function, ProfilerActivity
 
 from libs.C_extension import get_hij_torch, get_comb_tensor, onv_to_tensor
 from utils import check_para
@@ -69,6 +68,13 @@ def local_energy(
                 func = _reduce_psi
             else:
                 func = _simple
+        # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], 
+        #              record_shapes=True, profile_memory=True) as prof:
+        #     value = func(x, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype, WF_LUT, use_unique, eps)
+        # print(prof.key_averages(group_by_input_shape=True).table(sort_by="cuda_time_total", row_limit=20))
+        # print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=20))
+        # return value
+
         return func(x, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype, WF_LUT, use_unique, eps)
 
 
@@ -352,14 +358,16 @@ def _only_sample_space(
         # WF_LUT coming from sampling x must been found in WF_LUT.
         assert not_idx.size(0) == 0
 
-        # <x|H|x'> * psi(x') / psi(x)
-        # XXX: how to opt the path of einsum, reduce memory use
-        # comb_hij is real, sample_value and psi_x is real or complex
-        # eloc = torch.sum(
-        #     comb_hij * torch.div(sample_value.expand(batch, n_sample).T, psi_x).T, dim=-1
-        # )
-        # save memory than the above code.
-        eloc = torch.einsum("ij, j, i ->i", comb_hij.to(WF_LUT.dtype), sample_value, 1 / psi_x)
+        if WF_LUT.dtype == torch.complex128:
+            value = torch.empty(batch * 2, device=device, dtype=torch.double)
+            value[0::2] = torch.matmul(comb_hij, sample_value.real)  # Real-part
+            value[1::2] = torch.matmul(comb_hij, sample_value.imag)  # Imag-part
+            eloc = torch.view_as_complex(value.view(-1, 2)).div(psi_x)
+        elif WF_LUT.dtype == torch.double:
+            eloc = torch.matmul(comb_hij, sample_value).div(psi_x)
+            # eloc = torch.einsum("ij, j, i ->i", comb_hij, sample_value, 1 / psi_x)
+        else:
+            raise NotImplementedError(f"Single/Complex-Single does not been supported")
 
     t3 = time.time_ns()
     delta0 = (t1 - t0) / 1.0e06
