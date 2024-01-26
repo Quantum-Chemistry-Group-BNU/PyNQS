@@ -67,8 +67,8 @@ onv = torch.tensor(
     ],
     dtype=torch.uint8,
 )
-info = wavefunction_lut(key, value, onv, sorb)
-info1 = wavefunction_lut(key.to("cuda"), value.to("cuda"), onv.to("cuda"), sorb)
+info = wavefunction_lut(key, onv, sorb)
+info1 = wavefunction_lut(key.to("cuda"), onv.to("cuda"), sorb)
 print(info, info1)
 
 length = int(10**6)
@@ -96,38 +96,35 @@ onv = torch.cat([onv1, onv2])
 # random sample maybe is slower
 onv = onv[torch.randperm(onv.size(0))]
 
-value = torch.arange(onv.shape[0]) * 0.1
-value = torch.complex(value, value)
 
 print(f"Look-up {key.size(0)}")
 t0 = time.time_ns()
 sort_idx = torch_sort_onv(key)
 key_cpu = key[sort_idx]
-value_cpu = value[sort_idx]
 t1 = time.time_ns()
-x, y = wavefunction_lut(key_cpu, value_cpu, onv, sorb, little_endian=True)
+x = wavefunction_lut(key_cpu , onv, sorb, little_endian=True)
 t2 = time.time_ns()
 print(f"CPU: Sort: {(t1-t0)/1.e06:.3f} ms LooKup: {(t2-t1)/1.0e06:.3f} ms")
 
-t0 = time.time_ns()
-x1, y1 = wavefunction_lut_map(key_cpu, value_cpu, onv, sorb)
-t1 = time.time_ns()
-print(f"HashMap : {(t1-t0)/1.e06:.3f} ms")
+# t0 = time.time_ns()
+# x1 = wavefunction_lut_map(key_cpu, onv, sorb)
+# t1 = time.time_ns()
+# print(f"HashMap : {(t1-t0)/1.e06:.3f} ms")
 
-print(torch.allclose(x1, x), torch.allclose(y1, y))
+# print(torch.allclose(x1, x))
 
 
-key = key.to("cuda")
-value = value.to("cuda")
-onv = onv.to("cuda")
+# key = key.to("cuda")
+# value = value.to("cuda")
+# onv = onv.to("cuda")
 # GPU
 t0 = time.time_ns()
 sort_idx = torch_sort_onv(key)
-key_cuda = key[sort_idx]
-value_cuda = value[sort_idx]
+key_cuda = key[sort_idx].to("cuda")
+onv = onv.to("cuda")
 t1 = time.time_ns()
-x2, y2 = wavefunction_lut(key_cuda, value_cuda, onv, sorb, little_endian=True)
+x2 = wavefunction_lut(key_cuda, onv, sorb, little_endian=True)
 t2 = time.time_ns()
 print(f"GPU: Sort: {(t1-t0)/1.e06:.3f} ms LooKup: {(t2-t1)/1.0e06:.3f} ms")
 
-print(torch.allclose(x1.to("cpu"), x2.to("cpu")))
+print(torch.allclose(x.to("cpu"), x2.to("cpu")))
