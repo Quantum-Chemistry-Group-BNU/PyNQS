@@ -106,6 +106,7 @@ class BaseVMCOptimizer(ABC):
         HF_init: int = 0,
         external_model: any = None,
         check_point: str = None,
+        read_model_only: bool = False,
         only_sample: bool = False,
         method_grad: str = "AD",
         sr: bool = False,
@@ -141,7 +142,7 @@ class BaseVMCOptimizer(ABC):
 
         # read checkpoint file:
         if check_point is not None:
-            self.read_checkpoint(check_point)
+            self.read_checkpoint(check_point, read_model_only)
         # TODO: https://pytorch.org/docs/stable/notes/ddp.html torch.compile(ddp_model)
         self.model = torch.compile(self.model_raw) if self.using_compile else self.model_raw
 
@@ -221,15 +222,19 @@ class BaseVMCOptimizer(ABC):
         self.h1e: Tensor = x["h1e"]
         self.h2e: Tensor = x["h2e"]
 
-    def read_checkpoint(self, checkpoint: str) -> None:
+    def read_checkpoint(self, checkpoint: str, read_model_only: bool = False) -> None:
         if self.rank == 0:
-            s = f"Read model/optimizer/scheduler from {checkpoint}"
+            if not read_model_only:
+                s = f"Read model/optimizer/scheduler from {checkpoint}"
+            else:
+                s = f"Read model from {checkpoint}"
             logger.info(s, master=True)
-        x = torch.load(checkpoint, map_location=self.device)
+        x = torch.load(checkpoint, map_location="cpu").to(self.device)
         self.model_raw.load_state_dict(x["model"])
-        self.opt.load_state_dict(x["optimizer"])
-        if self.lr_scheduler is not None:
-            self.lr_scheduler.load_state_dict(x["scheduler"])
+        if not read_model_only:
+            self.opt.load_state_dict(x["optimizer"])
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.load_state_dict(x["scheduler"])
 
     def dump_input(self) -> None:
         """
@@ -481,6 +486,7 @@ class VMCOptimizer(BaseVMCOptimizer):
         HF_init: int = 0,
         external_model: any = None,
         check_point: str = None,
+        real_model_only: bool = False,
         only_sample: bool = False,
         pre_CI: CIWavefunction = None,
         pre_train_info: dict = None,

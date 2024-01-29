@@ -109,6 +109,8 @@ class NqsCi(BaseVMCOptimizer):
         else:
             self.start_iter = start_iter
 
+        # <phi_ci|H|phi_nqs> in sample-space
+        self.use_sample_space = use_sample_space
         # hij, x1, inverse_index, onv_not_idx
         self.n_sd = self.sampler.n_SinglesDoubles
         self.ci_nqs_info = self.init_ci_nqs()
@@ -119,8 +121,6 @@ class NqsCi(BaseVMCOptimizer):
         self.ci_nqs_value = torch.zeros(
             numel1 + numel + self.rank_ci_num + self.ci_num, **self.factory_kwargs
         )
-        # <phi_ci|H|phi_nqs> in sample-space
-        self.use_sample_space = use_sample_space
         # synchronize()
         # logger.info(f"ci-nqs-value: {self.ci_nqs_value.shape}")
         # logger.info(f"rank-ci-num: {self.rank_ci_num}")
@@ -178,8 +178,13 @@ class NqsCi(BaseVMCOptimizer):
 
         # remove repeated comb_x
         unique_comb, inverse_index = torch.unique(comb_x, dim=0, return_inverse=True)
-        x1 = onv_to_tensor(unique_comb, self.sorb)  # x1: [n_unique, sorb], +1/-1
         onv_x1 = unique_comb
+        # save the memory: unique (nSD * nCI, sorb)
+        if self.use_sample_space and self.exact:
+            x1 = onv_to_tensor(unique_comb, self.sorb)  # x1: [n_unique, sorb], +1/-1
+        else:
+            # x1: [n_unique, 0], placeholders
+            x1 = torch.zeros(unique_comb.size(0), 0, device=self.device, dtype=torch.double)
 
         info = (hij, x1, onv_x1, inverse_index, det_not_idx)
         return info
