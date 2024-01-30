@@ -1,11 +1,10 @@
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-import numpy as np
 
 from typing import Union, Any, Tuple, Union, Callable, List
 
-from utils.public_function import multinomial_tensor, torch_lexsort
+from utils.public_function import multinomial_tensor
 from libs.C_extension import constrain_make_charts
 
 from vmc.ansatz.utils import OrbitalBlock

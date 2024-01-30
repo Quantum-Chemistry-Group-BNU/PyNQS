@@ -36,7 +36,7 @@ class CausalSelfAttention(nn.Module):
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        # regularization
+        # regularization 重正则化，防止过拟合
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.n_head = config.n_head
@@ -56,8 +56,9 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        # 把 x 作用一个线性层然后切成三个部分 Q K V
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
-
+        # kv_cache相关，负责并行
         use_kv_cache: bool = True
         if  kv_idxs is None and kv_cache is None:
             use_kv_cache = False
@@ -74,6 +75,7 @@ class CausalSelfAttention(nn.Module):
             q = q.view(B, -1, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
             v = v.view(B, -1, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
         else:
+            # 把刚才切好的三个 K V Q 分给三个头计算
             k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
             q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
             v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
@@ -115,17 +117,16 @@ class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.mlp = MLP(config)
+        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias) # 层归一化
+        self.attn = CausalSelfAttention(config) # 上面的自注意力层
+        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias) # 层归一化
+        self.mlp = MLP(config) # 作用上gelu的激活函数
 
     def forward(self, x, kv_cache=None, kv_idxs=None):
         # x = x + self.attn(self.ln_1(x))
         # x = x + self.mlp(self.ln_2(x))
         attn_x, kv_cache = self.attn(self.ln_1(x), kv_cache, kv_idxs)
         x = x + attn_x
-        # print(f"block x 2 {x.shape}")
         x = x + self.mlp(self.ln_2(x))
         return x, kv_cache
 
@@ -146,14 +147,14 @@ class GPT(nn.Module):
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
-
+        # input和output的embedding的参数共享。
         # TODO: sc23: vocab_size + 1
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size + 1, config.n_embd), 
-            wpe = nn.Embedding(config.block_size, config.n_embd),
+            wte = nn.Embedding(config.vocab_size + 1, config.n_embd),  # word to embedding，把token转换成embedding
+            wpe = nn.Embedding(config.block_size, config.n_embd), # word position embedding，把位置信息转换成embedding
             drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]), # 一个ModuleList，包含了n_layer个Block，实现transformer中的多层的结构
+            ln_f = LayerNorm(config.n_embd, bias=config.bias), # 进行归一化
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
@@ -376,7 +377,8 @@ def get_decoder_amp(
     n_layers: int = 6,
     n_heads: int = 8,
     dropout: float = 0.0,
-    bias: bool = True
+    bias: bool = True,
+    dcut:int = None,
 ) -> Tuple[GPT, GPTConfig]:
     r"""Wrapper of decoder amplitude.
 
@@ -398,9 +400,12 @@ def get_decoder_amp(
 
     # TODO: sc23
     tgt_len = n_qubits // 2 + 1
-
+    
     config = GPTConfig()
-    config.vocab_size = tgt_vocab_size
+    if dcut == None:
+        config.vocab_size = tgt_vocab_size
+    else:
+        config.vocab_size = dcut**2*tgt_vocab_size
     config.block_size = tgt_len
     config.n_layer = n_layers
     config.n_head = n_heads
