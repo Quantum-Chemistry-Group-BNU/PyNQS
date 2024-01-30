@@ -58,6 +58,7 @@ class NqsCi(BaseVMCOptimizer):
         cNqs_pow_min: float = 1.0e-4,
         start_iter: int = -1,
         use_sample_space: bool = False,
+        MAX_FP_DIM: int = -1,
         **vmc_opt_kwargs: dict,
     ) -> None:
         # Remove pre-train info
@@ -100,6 +101,7 @@ class NqsCi(BaseVMCOptimizer):
         self.rank_ci_coeff = self.ci_coeff[begin:end]
         self.rank_idx_lst = idx_lst
 
+        # TODO:(zbwu-01-31)How to better adjust cNqs^2, e.g. N2-ccpvdz
         # min cNqs^2
         assert cNqs_pow_min > 0.0 and cNqs_pow_min <= 1.0
         self.cNqs_pow_min = cNqs_pow_min
@@ -108,6 +110,9 @@ class NqsCi(BaseVMCOptimizer):
             self.start_iter = self.max_iter
         else:
             self.start_iter = start_iter
+
+        # max forward dim in <phi_ci|H|phi_nqs>
+        self.MAX_FP_DIM = MAX_FP_DIM
 
         # <phi_ci|H|phi_nqs> in sample-space
         self.use_sample_space = use_sample_space
@@ -128,9 +133,9 @@ class NqsCi(BaseVMCOptimizer):
 
         if self.rank == 0:
             # double or int64
-            pre_memory = sum(map(torch.numel, self.ci_nqs_info)) * 8/2**30
+            pre_memory = sum(map(torch.numel, self.ci_nqs_info)) * 8 / 2**30
             # uint8, comb_x
-            pre_memory -= self.ci_nqs_info[2].numel() * 7/2**30
+            pre_memory -= self.ci_nqs_info[2].numel() * 7 / 2**30
             if self.dtype == torch.complex128:
                 pre_memory += self.ci_nqs_value.numel() * 8 * 2 / 2**30
             else:
@@ -140,7 +145,8 @@ class NqsCi(BaseVMCOptimizer):
             s += f"min cNqs^2: {cNqs_pow_min:.4E}\n"
             s += f"start_iter: {self.start_iter}, "
             s += f"use-sample-space: {self.use_sample_space}\n"
-            s += f"pre-allocated memory: {pre_memory:.5f}GiB"
+            s += f"pre-allocated memory: {pre_memory:.5f}GiB\n"
+            s += f"MAX_FP_DIM: {self.MAX_FP_DIM}"
             logger.info(s, master=True)
 
     def make_ci_hij(self) -> None:
@@ -180,7 +186,7 @@ class NqsCi(BaseVMCOptimizer):
         unique_comb, inverse_index = torch.unique(comb_x, dim=0, return_inverse=True)
         onv_x1 = unique_comb
         # save the memory: unique (nSD * nCI, sorb)
-        if self.use_sample_space and self.exact:
+        if not self.use_sample_space or self.exact:
             x1 = onv_to_tensor(unique_comb, self.sorb)  # x1: [n_unique, sorb], +1/-1
         else:
             # x1: [n_unique, 0], placeholders
@@ -188,6 +194,32 @@ class NqsCi(BaseVMCOptimizer):
 
         info = (hij, x1, onv_x1, inverse_index, det_not_idx)
         return info
+
+    @torch.no_grad()
+    def _batch_forward(self, x: Tensor, MAX_DIM: int = -1) -> Tensor:
+        """
+        forward model(x) with batch used in exact <phi_ci|H|phi_nqs>
+        """
+        dim = x.size(0)
+        logger.info(f"dim: {dim}")
+        if dim == 0:
+            placeholder = torch.empty(0, dtype=self.dtype, device=self.device)
+            return placeholder
+
+        if MAX_DIM == -1:
+            min_batch = dim
+        else:
+            assert MAX_DIM > 0
+            min_batch = MAX_DIM
+        idx_lst = [0] + split_batch_idx(dim=dim, min_batch=min_batch)
+
+        result = torch.empty(dim, dtype=self.dtype, device=self.device)
+        for i in range(len(idx_lst) - 1):
+            begin, end = idx_lst[i], idx_lst[i + 1]
+            x_batch = x[begin:end]
+            result[begin:end] = self.model(x_batch)
+
+        return result
 
     @torch.no_grad()
     def make_ci_nqs(self) -> None:
@@ -202,7 +234,8 @@ class NqsCi(BaseVMCOptimizer):
         psi_x1 = self.ci_nqs_value[:offset0]
         if self.exact:
             with torch.no_grad():
-                psi_x1 = self.model(x1)  # +1/-1
+                # psi_x1 = self.model(x1)  # +1/-1
+                psi_x1 = self._batch_forward(x1, self.MAX_FP_DIM)
         else:
             WF_LUT = self.sampler.WF_LUT
             if WF_LUT is None:
@@ -213,7 +246,8 @@ class NqsCi(BaseVMCOptimizer):
             if self.use_sample_space:
                 ...
             else:
-                psi_x1[lut_not_idx] = self.model(x1[lut_not_idx])
+                # psi_x1[lut_not_idx] = self.model(x1[lut_not_idx])
+                psi_x1[lut_not_idx] = self._batch_forward(x1[lut_not_idx], self.MAX_FP_DIM)
 
         offset1 = self.rank_ci_num * (self.n_sd + 1) + offset0
         psi = self.ci_nqs_value[offset0:offset1]  # (rank-ci-num, n_sd)

@@ -228,6 +228,7 @@ if __name__ == "__main__":
     # semi = NqsCi(select_CI, 
     #              cNqs_pow_min=1.0e-4,
     #              use_sample_space=False,
+    #              MAX_FP_DIM=-1,
     #              **vmc_opt_params)
     # semi.run()
     # semi.summary(e_ref, e_lst, prefix=f"./tmp/semi-exact-{seed}")

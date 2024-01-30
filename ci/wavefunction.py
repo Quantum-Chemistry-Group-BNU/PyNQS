@@ -221,9 +221,9 @@ class CITrain:
         self.grad_e_lst = [[], []]  # grad_L2, grad_max
 
         # max auto-grad/backward dim
-        self.AD_MAX_DIM = pre_train_info.get("AD_MAX_DIM", -1)
+        self.MAX_AD_DIM = pre_train_info.get("MAX_AD_DIM", -1)
         # max forward dim
-        self.FR_MAX_DIM = pre_train_info.get("FR_MAX_DIM", -1)
+        self.MAX_FP_DIM = pre_train_info.get("MAX_FP_DIM", -1)
 
     def train(
         self,
@@ -477,7 +477,7 @@ class CITrain:
 
         ovlp, oloc = self.get_local_ovlp(state_prob, psi_sample, idx_sample, idx_ci)
         ovlp_mean = all_reduce_tensor(ovlp, world_size=self.world_size, in_place=False)[0]
-        loss = self.sample_ovlp_grad(states_sample, oloc, ovlp_mean, state_prob, self.AD_MAX_DIM)
+        loss = self.sample_ovlp_grad(states_sample, oloc, ovlp_mean, state_prob, self.MAX_AD_DIM)
 
         # logger.info(f"oloc: {oloc[:10]}, var: {oloc.var()}")
         # logger.info(f"loss: {loss.item():.10f}, ovlp: {ovlp.item():.10f}")
@@ -494,16 +494,16 @@ class CITrain:
         oloc: Tensor,
         ovlp_mean: Tensor,
         state_prob: Tensor,
-        AD_MAX_DIM: int = -1,
+        MAX_AD_DIM: int = -1,
     ) -> Tensor:
         """
         this is similar to vmc/grad/energy_grad/_ad_grad
         """
         dim = oloc.size(0)
-        if AD_MAX_DIM == -1:
+        if MAX_AD_DIM == -1:
             min_batch = dim
         else:
-            min_batch = AD_MAX_DIM
+            min_batch = MAX_AD_DIM
         idx_lst = split_batch_idx(dim=dim, min_batch=min_batch)
         # logger.info((oloc.dim(), min_batch))
         # logger.info(f"idx_lst: {idx_lst}")
@@ -567,7 +567,7 @@ class CITrain:
         # Single-rank sample
         oloc = torch.zeros(psi_sample.size(0), dtype=self.dtype, device=self.device)
         # <psi_ci|psi>
-        psi0 = self._get_rank_psi0(self.FR_MAX_DIM)
+        psi0 = self._get_rank_psi0(self.MAX_FP_DIM)
         # <n|psi_ci><psi_ci|psi>/<n|psi>
         oloc_nonzero = -1 * (self.pre_ci_coeff[idx_ci] * psi0) / psi_sample[idx_sample]
         # ovlp part is non-zero, other part is zeros
@@ -578,23 +578,23 @@ class CITrain:
         return ovlp, oloc
 
     @torch.no_grad()
-    def _get_rank_psi0(self, FR_MAX_DIM: int = -1) -> Tensor:
+    def _get_rank_psi0(self, MAX_FP_DIM: int = -1) -> Tensor:
         """
         calculate <psi_ci|psi> using distributed
 
         Parameters
         ----------
-            FR_MAX_DIM(int): default: -1
+            MAX_FP_DIM(int): default: -1
 
         Returns
         -------
             psi0_all(Tensor), <psi_ci|psi>(all-rank)
         """
         dim = self.rank_ci_state.size(0)
-        if FR_MAX_DIM == -1:
+        if MAX_FP_DIM == -1:
             min_batch = dim
         else:
-            min_batch = self.FR_MAX_DIM
+            min_batch = self.MAX_FP_DIM
         idx_lst = [0] + split_batch_idx(dim=dim, min_batch=min_batch)
 
         # <n|psi_ci> single-rank
@@ -623,8 +623,8 @@ class CITrain:
             loss(Tensor):
             ovlp(Tensor):
         """
-        # self.AD_MAX_DIM = 10
-        loss, ovlp = self.test_ovlp_grad(self.AD_MAX_DIM, use_global_phase=use_global_phase)
+        # self.MAX_AD_DIM = 10
+        loss, ovlp = self.test_ovlp_grad(self.MAX_AD_DIM, use_global_phase=use_global_phase)
         # if self.rank == 0 and use_global_phase:
         #     logger.info(f"global-phase: {self.model.module.global_phase()}")
 
@@ -632,7 +632,7 @@ class CITrain:
 
     def test_ovlp_grad(
         self,
-        AD_MAX_DIM: int = -1,
+        MAX_AD_DIM: int = -1,
         use_global_phase: bool = True,
     ) -> Tuple[Tensor, Tensor]:
         r"""
@@ -641,10 +641,10 @@ class CITrain:
         """
         dim = self.rank_ci_state.size(0)
         device = self.rank_ci_state.device
-        if AD_MAX_DIM == -1:
+        if MAX_AD_DIM == -1:
             min_batch = dim
         else:
-            min_batch = AD_MAX_DIM
+            min_batch = MAX_AD_DIM
         idx_lst = split_batch_idx(dim=dim, min_batch=min_batch)
         # logger.info(f"idx_lst: {idx_lst}")
 
@@ -726,7 +726,7 @@ class CITrain:
             + f"    the number of CI coeff: {self.pre_ci_coeff.shape[0]}\n"
             + f"    CI-coeff norm: {self.ci_norm:.6f}\n"
             + f"    Loss function type: {self.loss_type}\n"
-            + f"    AD_MAX_DIM: {self.AD_MAX_DIM}\n"
-            + f"    FR_MAX_DIM: {self.FR_MAX_DIM}\n"
+            + f"    MAX_AD_DIM: {self.MAX_AD_DIM}\n"
+            + f"    MAX_FP_DIM: {self.MAX_FP_DIM}\n"
             + ")"
         )
