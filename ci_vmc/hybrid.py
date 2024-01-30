@@ -109,6 +109,8 @@ class NqsCi(BaseVMCOptimizer):
         else:
             self.start_iter = start_iter
 
+        # <phi_ci|H|phi_nqs> in sample-space
+        self.use_sample_space = use_sample_space
         # hij, x1, inverse_index, onv_not_idx
         self.n_sd = self.sampler.n_SinglesDoubles
         self.ci_nqs_info = self.init_ci_nqs()
@@ -116,20 +118,29 @@ class NqsCi(BaseVMCOptimizer):
         numel = self.ci_nqs_info[0].numel()
         # psi: (ci_num * n_sd), <ci|H|nqs>: (ci_num)
         numel1 = self.ci_nqs_info[1].size(0)  # (unique, sorb)
-        self.ci_nqs_value = torch.zeros(numel1 + numel + self.rank_ci_num, **self.factory_kwargs)
-        # <phi_ci|H|phi_nqs> in sample-space
-        self.use_sample_space = use_sample_space
+        self.ci_nqs_value = torch.zeros(
+            numel1 + numel + self.rank_ci_num + self.ci_num, **self.factory_kwargs
+        )
         # synchronize()
         # logger.info(f"ci-nqs-value: {self.ci_nqs_value.shape}")
         # logger.info(f"rank-ci-num: {self.rank_ci_num}")
         # logger.info(f"numel: {numel}, numel1: {numel1}")
 
         if self.rank == 0:
+            # double or int64
+            pre_memory = sum(map(torch.numel, self.ci_nqs_info)) * 8/2**30
+            # uint8, comb_x
+            pre_memory -= self.ci_nqs_info[2].numel() * 7/2**30
+            if self.dtype == torch.complex128:
+                pre_memory += self.ci_nqs_value.numel() * 8 * 2 / 2**30
+            else:
+                pre_memory += self.ci_nqs_value.numel() * 8 / 2**30
             s = f"CI-NQS, det-num: {self.ci_num}, "
             s += f"Matrix shape: ({dim}, {dim}), "
             s += f"min cNqs^2: {cNqs_pow_min:.4E}\n"
             s += f"start_iter: {self.start_iter}, "
-            s += f"use-sample-space: {self.use_sample_space}"
+            s += f"use-sample-space: {self.use_sample_space}\n"
+            s += f"pre-allocated memory: {pre_memory:.5f}GiB"
             logger.info(s, master=True)
 
     def make_ci_hij(self) -> None:
@@ -167,8 +178,13 @@ class NqsCi(BaseVMCOptimizer):
 
         # remove repeated comb_x
         unique_comb, inverse_index = torch.unique(comb_x, dim=0, return_inverse=True)
-        x1 = onv_to_tensor(unique_comb, self.sorb)  # x1: [n_unique, sorb], +1/-1
         onv_x1 = unique_comb
+        # save the memory: unique (nSD * nCI, sorb)
+        if self.use_sample_space and self.exact:
+            x1 = onv_to_tensor(unique_comb, self.sorb)  # x1: [n_unique, sorb], +1/-1
+        else:
+            # x1: [n_unique, 0], placeholders
+            x1 = torch.zeros(unique_comb.size(0), 0, device=self.device, dtype=torch.double)
 
         info = (hij, x1, onv_x1, inverse_index, det_not_idx)
         return info
@@ -201,15 +217,17 @@ class NqsCi(BaseVMCOptimizer):
 
         offset1 = self.rank_ci_num * (self.n_sd + 1) + offset0
         psi = self.ci_nqs_value[offset0:offset1]  # (rank-ci-num, n_sd)
-        rank_value = self.ci_nqs_value[offset1:]  # (rank-ci-num)
+        offset2 = self.rank_ci_num + offset1
+        rank_value = self.ci_nqs_value[offset1:offset2]  # (rank-ci-num)
         psi[det_not_idx] = psi_x1[inverse_index]  # unique inverse
 
-        # All-Gather value
-        # XXX:(zbwu-01-16) allocate all_value memory in initial
+        # All-Gather-value
+        all_value = self.ci_nqs_value[offset2:]  # (ci-num)
+        assert all_value.size(0) == self.ci_num
+
         # value = torch.einsum("ij, ij ->i", hij, psi.reshape(self.rank_ci_num, -1))
         rank_value = (psi.reshape(self.rank_ci_num, -1) * hij).sum(-1)
-        all_value = all_gather_tensor(rank_value, self.device, self.world_size)
-        all_value = torch.cat(all_value)
+        torch.cat(all_gather_tensor(rank_value, self.device, self.world_size), out=all_value)
 
         self.Ham_matrix[: self.ci_num, -1] = all_value
         self.Ham_matrix[-1, : self.ci_num] = all_value.conj()
