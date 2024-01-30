@@ -512,6 +512,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             HF_init=HF_init,
             external_model=external_model,
             check_point=check_point,
+            read_model_only=real_model_only,
             only_sample=only_sample,
             method_grad=method_grad,
             sr=sr,
