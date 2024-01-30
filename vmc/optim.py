@@ -229,7 +229,7 @@ class BaseVMCOptimizer(ABC):
             else:
                 s = f"Read model from {checkpoint}"
             logger.info(s, master=True)
-        x = torch.load(checkpoint, map_location="cpu").to(self.device)
+        x = torch.load(checkpoint, map_location="cpu")
         self.model_raw.load_state_dict(x["model"])
         if not read_model_only:
             self.opt.load_state_dict(x["optimizer"])
