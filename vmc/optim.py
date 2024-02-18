@@ -114,7 +114,10 @@ class BaseVMCOptimizer(ABC):
         interval: int = 100,
         prefix: str = "VMC",
         MAX_AD_DIM: int = -1,
-        kfac: KFACPreconditioner = None,
+        kfac: KFACPreconditioner = None,  # type: ignore
+        use_clip_grad: bool = False,
+        max_grad_norm: float = 0.01,
+        start_clip_grad: int = None,
     ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -168,11 +171,22 @@ class BaseVMCOptimizer(ABC):
         self.grad_e_lst = [[], []]  # grad_L2, grad_max
         self.e_lst: List[float] = []
 
+        # clip grad
+        self.use_clip_grad: bool = use_clip_grad
+        if use_clip_grad:
+            if start_clip_grad is None or start_clip_grad >= max_iter:
+                raise ValueError(f"start-clip-grad:{start_clip_grad} must be in (0, {max_iter})")
+        self.start_clip_grad: int = start_clip_grad
+        self.max_grad_norm = max_grad_norm
+
         if self.rank == 0:
             params_num = sum(map(torch.numel, self.model.parameters()))
             s = f"NQS model:\n{self.model}\n"
             s += f"The number param of NQS model: {params_num}\n"
             s += f"Optimizer:\n{self.opt}\n"
+            if self.use_clip_grad:
+                s += f"Clip-grad: g0: {self.max_grad_norm} "
+                s += f"after {self.start_clip_grad}-th iteration\n"
             s += f"Sampler:\n{self.sampler}\n"
             s += f"Grad method: {self.method_grad}\n"
             s += f"Jacobian method: {self.method_jacobian}"
@@ -286,6 +300,17 @@ class BaseVMCOptimizer(ABC):
             self.e_lst.append(e_total)
             self.grad_e_lst[0].append(l2_grad)
             self.grad_e_lst[1].append(max_grad)
+
+    def clip_grad(self, epoch: int) -> None:
+        """
+        clip model grad use 2-norm
+        """
+        if self.use_clip_grad and epoch > self.start_clip_grad:
+            x = nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.max_grad_norm, foreach=True
+            )
+            if self.rank == 0:
+                logger.info(f"Clip-grad, g: {x:.4E}, g0: {self.max_grad_norm:4E}", master=True)
 
     def update_param(self, epoch: int) -> None:
         """
@@ -486,7 +511,7 @@ class VMCOptimizer(BaseVMCOptimizer):
         HF_init: int = 0,
         external_model: any = None,
         check_point: str = None,
-        real_model_only: bool = False,
+        read_model_only: bool = False,
         only_sample: bool = False,
         pre_CI: CIWavefunction = None,
         pre_train_info: dict = None,
@@ -497,7 +522,10 @@ class VMCOptimizer(BaseVMCOptimizer):
         interval: int = 100,
         prefix: str = "VMC",
         MAX_AD_DIM: int = -1,
-        kfac: KFACPreconditioner = None,
+        kfac: KFACPreconditioner = None,  # type: ignore
+        use_clip_grad: bool = False,
+        max_grad_norm: float = 0.01,
+        start_clip_grad: int = None,
     ) -> None:
         super().__init__(
             nqs=nqs,
@@ -512,7 +540,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             HF_init=HF_init,
             external_model=external_model,
             check_point=check_point,
-            read_model_only=real_model_only,
+            read_model_only=read_model_only,
             only_sample=only_sample,
             method_grad=method_grad,
             sr=sr,
@@ -521,6 +549,9 @@ class VMCOptimizer(BaseVMCOptimizer):
             prefix=prefix,
             MAX_AD_DIM=MAX_AD_DIM,
             kfac=kfac,
+            use_clip_grad=use_clip_grad,
+            max_grad_norm=max_grad_norm,
+            start_clip_grad=start_clip_grad,
         )
 
         # pre-train CI wavefunction

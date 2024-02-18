@@ -92,7 +92,7 @@ class NqsCi(BaseVMCOptimizer):
         self.coeff_lst = []
 
         # split different rank
-        assert self.ci_num > self.world_size
+        assert self.ci_num >= self.world_size
         idx_lst = [0] + split_length_idx(dim=self.ci_num, length=self.world_size)
         begin = idx_lst[self.rank]
         end = idx_lst[self.rank + 1]
@@ -271,17 +271,17 @@ class NqsCi(BaseVMCOptimizer):
     @torch.no_grad()
     def make_nqs_nqs(self, phi_nqs: Tensor, eloc_mean: Tensor) -> None:
         """
-        <phi_NQS|H|phi_NQS> = sum(prob * eloc) * <phi_nqs|phi_nqs>
+        <phi_NQS|H|phi_NQS> = sum(prob * eloc)
         """
-        if self.exact:
-            # Single-Rank, value = 1.0 if use AR-ansatz
-            value = torch.dot(phi_nqs.conj(), phi_nqs).real * self.world_size
-        else:
-            # Single-Rank
-            value = torch.dot(phi_nqs.conj(), phi_nqs).real * self.world_size
-        all_reduce_tensor(value, world_size=self.world_size)
+        # if self.exact:
+        #     # Single-Rank, value = 1.0 if use AR-ansatz
+        #     value = torch.dot(phi_nqs.conj(), phi_nqs).real * self.world_size
+        # else:
+        #     # Single-Rank
+        #     value = torch.dot(phi_nqs.conj(), phi_nqs).real * self.world_size
+        # all_reduce_tensor(value, world_size=self.world_size)
 
-        self.Ham_matrix[-1, -1] = eloc_mean * value
+        self.Ham_matrix[-1, -1] = eloc_mean.real
 
     def solve_eigh(self) -> float:
         # TODO:(zbwu-23-12-27) davsion or scipy.sparse.linalg.eigsh
@@ -322,7 +322,16 @@ class NqsCi(BaseVMCOptimizer):
 
         ci = self.ci_coeff
         # Single-Rank
-        x = torch.einsum("ij, j, i ->i", hij.to(self.dtype), ci, 1 / (phi_nqs * cNqs))
+        # x = torch.einsum("ij, j, i ->i", hij.to(self.dtype), ci, 1 / (phi_nqs * cNqs))
+        if self.dtype == torch.complex128:
+            value = torch.empty(bra.size(0) * 2, device=self.device, dtype=torch.double)
+            value[0::2] = torch.matmul(hij, ci.real)  # Real-part
+            value[1::2] = torch.matmul(hij, ci.imag)  # imag-part
+            x = torch.view_as_complex(value.view(-1, 2)).div(phi_nqs * cNqs)
+        elif self.dtype == torch.double:
+            x = torch.matmul(hij, ci).div(phi_nqs * cNqs)
+        else:
+            raise NotImplementedError(f"Single/Complex-Single dose not been supported")
         return x
 
     def new_nqs_grad(
@@ -455,7 +464,8 @@ class NqsCi(BaseVMCOptimizer):
 
             delta_grad = (time.time_ns() - t3) / 1.00e09
 
-            # save the energy grad
+            # save the energy grad and clip-grad
+            self.clip_grad(epoch=epoch)
             self.save_grad_energy(E0 + self.ecore)
 
             # update param
