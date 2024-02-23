@@ -625,7 +625,8 @@ class VMCOptimizer(BaseVMCOptimizer):
                 )
             delta_grad = (time.time_ns() - t1) / 1.00e09
 
-            # save the energy grad
+            # save the energy grad and clip-grad
+            self.clip_grad(epoch=epoch)
             self.save_grad_energy(e_total)
 
             t2 = time.time_ns()

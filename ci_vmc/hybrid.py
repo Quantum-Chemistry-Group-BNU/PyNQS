@@ -5,13 +5,13 @@ import os
 import torch
 import torch.distributed as dist
 import numpy as np
+import scipy
 
 from dataclasses import dataclass
 from typing import Union, Tuple, List
 from loguru import logger
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
-from numpy import ndarray
 
 from vmc.optim import BaseVMCOptimizer
 from utils.public_function import (
@@ -23,6 +23,9 @@ from utils.determinant_lut import DetLUT
 from utils.distributed import all_reduce_tensor, synchronize, all_gather_tensor
 from libs.C_extension import get_hij_torch, onv_to_tensor, tensor_to_onv, get_comb_tensor
 from ci import CIWavefunction
+
+USE_SCIPY = False
+USE_CPU = True
 
 
 @dataclass
@@ -59,6 +62,7 @@ class NqsCi(BaseVMCOptimizer):
         start_iter: int = -1,
         use_sample_space: bool = False,
         MAX_FP_DIM: int = -1,
+        grad_strategy: int = 0,
         **vmc_opt_kwargs: dict,
     ) -> None:
         # Remove pre-train info
@@ -73,6 +77,10 @@ class NqsCi(BaseVMCOptimizer):
             raise TypeError(f"CI-NQS must remove CI-Det")
         if not (hasattr(model, "det_lut") and model.det_lut is not None):
             raise TypeError(f"CI-NQS must remove CI-Det")
+
+        if grad_strategy not in (0, 1):
+            raise TypeError(f"grad-strategy muse be in 0/1")
+        self.grad_strategy = grad_strategy
 
         self.ci_det = CI.space
         self.ci_num = CI.space.size(0)
@@ -146,6 +154,7 @@ class NqsCi(BaseVMCOptimizer):
             s += f"start_iter: {self.start_iter}, "
             s += f"use-sample-space: {self.use_sample_space}\n"
             s += f"pre-allocated memory: {pre_memory:.5f}GiB\n"
+            s += f"Grad-strategy: {self.grad_strategy}, "
             s += f"MAX_FP_DIM: {self.MAX_FP_DIM}"
             logger.info(s, master=True)
 
@@ -292,9 +301,21 @@ class NqsCi(BaseVMCOptimizer):
         ------
             ε0(ground energy)
         """
-        result = torch.linalg.eigh(self.Ham_matrix)
-        E0 = result[0][0]
-        coeff = result[1][:, 0]
+        if USE_SCIPY:
+            # use scipy.linalg.eigh in CPU
+            result = scipy.linalg.eigh(self.Ham_matrix.cpu().numpy())
+            E0 = result[0][0]
+            coeff = torch.from_numpy(result[1][:, 0])
+        else:
+            # use torch.linalg.eigh in CPU or CUDA
+            if USE_CPU:
+                result = torch.linalg.eigh(self.Ham_matrix.cpu())
+            else:
+                result = torch.linalg.eigh(self.Ham_matrix)
+            E0 = result[0][0]
+            coeff = result[1][:, 0]
+
+        # assert (self.Ham_matrix - self.Ham_matrix.T.conj()).norm() < 1e-6
 
         # update ci-coeff and nqs-coeff
         self.total_coeff = coeff.to(self.device)
@@ -313,7 +334,7 @@ class NqsCi(BaseVMCOptimizer):
         cNqs: Tensor,
     ) -> Tensor:
         """
-        calculate (<n|H|phi_i> * c_i) / (<n|phi_nqs> * c_N)
+        calculate new-term (<n|H|phi_i> * c_i) / <n|phi_nqs>
         """
         # Single-Rank
         bra = tensor_to_onv(((state + 1) / 2).to(torch.uint8), self.sorb)
@@ -322,14 +343,14 @@ class NqsCi(BaseVMCOptimizer):
 
         ci = self.ci_coeff
         # Single-Rank
-        # x = torch.einsum("ij, j, i ->i", hij.to(self.dtype), ci, 1 / (phi_nqs * cNqs))
+        # x = torch.einsum("ij, j, i ->i", hij.to(self.dtype), ci, 1 / phi_nqs)
         if self.dtype == torch.complex128:
             value = torch.empty(bra.size(0) * 2, device=self.device, dtype=torch.double)
             value[0::2] = torch.matmul(hij, ci.real)  # Real-part
             value[1::2] = torch.matmul(hij, ci.imag)  # imag-part
-            x = torch.view_as_complex(value.view(-1, 2)).div(phi_nqs * cNqs)
+            x = torch.view_as_complex(value.view(-1, 2)).div(phi_nqs)
         elif self.dtype == torch.double:
-            x = torch.matmul(hij, ci).div(phi_nqs * cNqs)
+            x = torch.matmul(hij, ci).div(phi_nqs)
         else:
             raise NotImplementedError(f"Single/Complex-Single dose not been supported")
         return x
@@ -357,10 +378,20 @@ class NqsCi(BaseVMCOptimizer):
             MAX_AD_DIM = dim
         idx_lst = [0] + split_batch_idx(dim=dim, min_batch=MAX_AD_DIM)
 
-        # TODO:(zbwu-24-01-24) how to scale c0
-        c0 = cNqs.norm().item() ** 2
-        if epoch < self.start_iter:
-            c0 = max(c0, self.cNqs_pow_min)
+        # scale cNqs
+        scale = 1.0
+        if self.grad_strategy == 0:
+            c0 = cNqs.norm().item() ** 2
+            if epoch < self.start_iter:
+                # c0 = max(c0, self.cNqs_pow_min)
+                scale = max(c0, self.cNqs_pow_min) / c0
+        elif self.grad_strategy == 1:
+            c0 = cNqs.conj().clone()
+            if epoch < self.start_iter:
+                # c0 /= c0.norm()/max(c0.norm(), self.cNqs_pow_min**0.5)
+                scale = (max(c0.norm(), self.cNqs_pow_min**0.5) / c0.norm()).item()
+        scale = 1.0
+        logger.info(f"scale: {scale:.4f}")
 
         def batch_loss_backward(begin: int, end: int) -> None:
             nonlocal loss_sum
@@ -371,8 +402,13 @@ class NqsCi(BaseVMCOptimizer):
             state_prob_batch = state_prob[begin:end]
             eloc_batch = eloc[begin:end]
             new_term_batch = new_term[begin:end]
-            corr = eloc_batch + new_term_batch - E0
-            loss = 2 * (c0 * (torch.sum(state_prob_batch * log_psi_batch.conj() * corr))).real
+            if self.grad_strategy == 0:
+                corr = eloc_batch + new_term_batch / cNqs - E0
+            elif self.grad_strategy == 1:
+                corr = eloc_batch * cNqs + new_term_batch - E0 * cNqs
+            loss = (
+                2 * (c0 * scale * (torch.sum(state_prob_batch * log_psi_batch.conj() * corr))).real
+            )
             loss.backward()
             loss_sum += loss.detach()
 

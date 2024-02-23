@@ -41,7 +41,7 @@ def diff_rank_seed(x: int, rank: int = 0) -> int:
     """
     diff rank random seed
     """
-    x = (rank * 2**rank * 10000 + x) % (1 << 32)
+    x = (rank * 2*rank * 10000 + x) % (1 << 32)
     setup_seed(x)
     return x
 
