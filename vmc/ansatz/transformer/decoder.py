@@ -210,11 +210,11 @@ class DecoderWaveFunction(nn.Module):
         s += f"params: phase: {phase_num}, amplitude: {amp_param}"
         return s
 
-    def joint_next_samples(self, unique_sample: Tensor) -> Tensor:
+    def joint_next_samples(self, unique_sample: Tensor, mask: Tensor = None) -> Tensor:
         """
         Creative the next possible unique sample
         """
-        return joint_next_samples(unique_sample, sites=self.ar_sites)
+        return joint_next_samples(unique_sample, mask=mask, sites=self.ar_sites)
 
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
         """
@@ -298,15 +298,17 @@ class DecoderWaveFunction(nn.Module):
 
             # FIXME: (zbwu-23-12-14) Needs to be optimized
             # creative next-cache, extremely inelegant
-            # kv-cache shape
             if self.use_kv_cache:
-                seq_length, d_model = kv_caches[0][0].shape[1:]
                 kv_length = len(kv_caches)
-                shape = (kv_length, 2, dim, seq_length + 1, d_model)
-                kv_rand = torch.empty(shape, **self.factory_kwargs)
-                kv_caches_next: KVCaches = [
-                    (kv_rand[i][0], kv_rand[i][1]) for i in range(kv_length)
-                ]
+                # seq_length, d_model = kv_caches[0][0].shape[1:]
+                # shape = (kv_length, 2, dim, seq_length + 1, d_model)
+                # kv_rand = torch.empty(shape, **self.factory_kwargs)
+                # kv_caches_next: KVCaches = [
+                #     (kv_rand[i][0], kv_rand[i][1]) for i in range(kv_length)
+                # ]
+
+                # save batch-kv-caches
+                kv_caches_lst: List[KVCaches] = []
 
             for idx in idx_lst:
                 end = idx
@@ -323,14 +325,24 @@ class DecoderWaveFunction(nn.Module):
                     # kv_idxs=_kv_idx,
                 )[0]
                 if self.use_kv_cache:
-                    for cache, cache_next in zip(_kv_caches, kv_caches_next):
-                        cache_next[0][begin:end] = cache[0]  # next-batch-k-cache
-                        cache_next[1][begin:end] = cache[1]  # next-batch-v-cache
+                    kv_caches_lst.append(_kv_caches)
+                    # for cache, cache_next in zip(_kv_caches, kv_caches_next):
+                    #     cache_next[0][begin:end] = cache[0]  # next-batch-k-cache
+                    #     cache_next[1][begin:end] = cache[1]  # next-batch-v-cache
                 begin = end
 
             if self.use_kv_cache:
-                for i in range(len(kv_caches_next)):
-                    kv_caches[i] = kv_caches_next[i]
+                for i in range(kv_length):
+                    # kv_caches[i] = kv_caches_next[i]  # update kv-caches
+                    # _kv_idx must be in order
+                    k_cache = torch.cat(
+                        [_kv_cache[i][0] for _kv_cache in kv_caches_lst], dim=0
+                    )
+                    v_cache = torch.cat(
+                        [_kv_cache[i][1] for _kv_cache in kv_caches_lst], dim=0
+                    )
+                    kv_caches[i] = (k_cache, v_cache)
+
         return amp
 
     def _interval_sample(
@@ -388,31 +400,30 @@ class DecoderWaveFunction(nn.Module):
             # (n_unique * 4)
             if self.norm_method == 0:
                 # Log-softmax
-                counts_i = multinomial_tensor(sample_counts, amp_k_mask.exp()).T.flatten()
+                counts_i = multinomial_tensor(sample_counts, amp_k_mask.exp())
             else:
                 # norm
-                counts_i = multinomial_tensor(sample_counts, amp_k_mask.pow(2)).T.flatten()
-            idx_count = counts_i > 0
-            sample_counts = counts_i[idx_count]
-            sample_unique = self.joint_next_samples(sample_unique)[idx_count]
+                counts_i = multinomial_tensor(sample_counts, amp_k_mask.pow(2))
+            mask_count = counts_i > 0  # (n_unique, 4)
+            sample_counts = counts_i[mask_count]  # (n_unique_next)
+            sample_unique = self.joint_next_samples(sample_unique, mask=mask_count)
+            repeat_nums = mask_count.sum(dim=1)  # bool in [0-4]
+
             if self.use_kv_cache:
-                kv_idxs = (
-                    torch.arange(x0.size(0), device=self.device)
-                    .unsqueeze_(1)
-                    .repeat(1, 4)
-                    .T.flatten()[idx_count]
+                kv_idxs = torch.arange(x0.size(0), device=self.device).repeat_interleave(
+                    repeat_nums
                 )
             else:
                 kv_idxs = None
 
             if self.norm_method == 0:
                 amps_value = torch.add(
-                    amps_value.unsqueeze(1).repeat(1, 4), amp_k_mask
-                ).T.flatten()[idx_count]
+                    amps_value.repeat_interleave(repeat_nums, 0), amp_k_mask[mask_count]
+                )
             else:
                 amps_value = torch.mul(
-                    amps_value.unsqueeze(1).repeat(1, 4), amp_k_mask
-                ).T.flatten()[idx_count]
+                    amps_value.repeat_interleave(repeat_nums, 0), amp_k_mask[mask_count]
+                )
             l += interval
         return sample_unique, sample_counts, amp_k, amps_value, kv_idxs, l
 
@@ -549,7 +560,7 @@ class DecoderWaveFunction(nn.Module):
                     f"{self.world_size}.pth",
                 )
             exit()
-        logger.info(f"Select-CI-det: {self.time_select:.3f}ms")
+        logger.info(f"Select-CI-det: {self.time_select:.3f} ms")
         return sample_unique, sample_counts, wf
 
     @torch.no_grad()
@@ -650,11 +661,25 @@ class DecoderWaveFunction(nn.Module):
                     #     f"start recursively dfs\n k_th {k_th} _sample_unique \n {_sample_unique}\n _sample_counts \n {_sample_counts} \n _amps_value \n {_amps_value}\n===========\n"
                     # )
                     if kv_caches is not None:
-                        _kv_idxs = kv_idxs[begin:end]
+                        _begin_kv_idx = kv_idxs[begin]
+                        # kv_idxs is in order, check out this
+                        _kv_idxs = kv_idxs[begin:end] - _begin_kv_idx
+                        # avoid overflow using kv_idxs[end]
+                        _end_kv_idx = _kv_idxs[-1] + _begin_kv_idx + 1
+                        # logger.info(f"_kv_idxs: {_kv_idxs}")
+                        # logger.info(f"kv_idxs: {kv_idxs[begin:end]}")
+                        # logger.info(f"kv_shape: {kv_caches[0][0].shape}")
+                        # logger.info(f"begin: end {_begin_kv_idx} {_end_kv_idx}")
+                        _kv_caches_local = [
+                            (
+                                cache[0][_begin_kv_idx:_end_kv_idx],
+                                cache[1][_begin_kv_idx:_end_kv_idx],
+                            )
+                            for cache in kv_caches
+                        ]
                         # trivial vision, due to the join next sample ways, kv cache can't be split
-                        # _kv_caches_local = copy.deepcopy(kv_caches)
-                        # breakpoint()
-                        _kv_caches_local = kv_caches.copy()
+                        # _kv_idxs = kv_idxs[begin:end]
+                        # _kv_caches_local = kv_caches.copy()
                         # logger.info(f"use dfs in kth {k_th}, loop {i} kv cache shape {kv_caches[0][0].shape}")
                     else:
                         _kv_caches_local = None
@@ -837,7 +862,7 @@ if __name__ == "__main__":
     setup_seed(333)
     torch.set_default_dtype(torch.double)
     torch.set_printoptions(precision=6)
-    sorb = 12
+    sorb = 16
     nele = 6
     device = "cuda:0"
     d_model = 5
@@ -877,10 +902,12 @@ if __name__ == "__main__":
     # breakpoint()
     t0 = time.time_ns()
     sample, counts, wf = model.ar_sampling(
-        n_sample=int(1e8), min_batch=100, use_dfs_sample=True, min_tree_height=4
+        n_sample=int(1e12), min_batch=1000, use_dfs_sample=False, min_tree_height=4
     )
     wf1 = model((sample * 2 - 1).double())
-    # print(det_lut.det)
+    print(wf1.abs().pow(2)[:20])
+    print((counts / counts.sum())[:20])
+    breakpoint()
     # sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100)
     print(f"use-kv-cache: {use_kv_cache}")
     print(f"param dtype: {dtype}")

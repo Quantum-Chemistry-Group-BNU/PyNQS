@@ -7,29 +7,29 @@ from torch import Tensor, nn
 from utils.distributed import get_rank
 
 
-def joint_next_samples(unique_sample: Tensor, sites: int = 2) -> Tensor:
+def joint_next_samples(unique_sample: Tensor, sites: int = 2, mask: Tensor = None) -> Tensor:
     """
     Creative the next possible unique sample
     unique_sample: (nbatch, k)
-    repeat method: row, [u1, u1, u1, u1] / [u1, u1]
-
+    mask: (nbatch, 4/2) or None
     Returns:
     -------
         the next uniques_sample:
-        (nbatch * 2, k + 1) if sites = 1
-        (nbatch * 4, k + 2) if sites = 2
+        (nbatch * 2, k + 1) if sites = 1 and mask is None
+        (nbatch * 4, k + 2) if sites = 2 and mask is None
     """
     if sites == 2:
-        return _joint_next_sample_two_sites(unique_sample)
+        return _joint_next_sample_two_sites(unique_sample, mask=mask)
     elif sites == 1:
-        return _joint_next_sample_one_sites(unique_sample)
+        return _joint_next_sample_one_sites(unique_sample, mask=mask)
     else:
         raise NotImplementedError
 
 
-def _joint_next_sample_two_sites(tensor: Tensor) -> Tensor:
+def _joint_next_sample_two_sites(tensor: Tensor, mask: Tensor = None) -> Tensor:
     """
     tensor: (nbatch, k)
+    mask: (nbatch, 4) or None
     return: x: (nbatch * 4, k + 2)
     """
     dtype = tensor.dtype
@@ -42,33 +42,46 @@ def _joint_next_sample_two_sites(tensor: Tensor) -> Tensor:
     maybe = maybe.to(dtype=dtype, device=device)
 
     nbatch, k = tuple(tensor.shape)
-    x = torch.empty(nbatch * 4, k + 2, dtype=dtype, device=device)
-    for i in range(4):
-        x[i * nbatch : (i + 1) * nbatch, -2:] = maybe[i].repeat(nbatch, 1)
+    if mask is None:
+        x = torch.empty(nbatch * 4, k + 2, dtype=dtype, device=device)
+        for i in range(4):
+            x[i * nbatch : (i + 1) * nbatch, -2:] = maybe[i].repeat(nbatch, 1)
 
-    x[:, :-2] = tensor.repeat(4, 1)
-
+        x[:, :-2] = tensor.repeat(4, 1)
+    else:
+        assert mask.size(1) == 4
+        assert mask.size(0) == nbatch
+        repeat_nums = mask.sum(dim=1)  # bool in [0-4]
+        maybe_idx = torch.where(mask)[1]
+        x = torch.cat([tensor.repeat_interleave(repeat_nums, 0), maybe[maybe_idx]], dim=1)
     return x
 
 
-def _joint_next_sample_one_sites(tensor: Tensor) -> Tensor:
+def _joint_next_sample_one_sites(tensor: Tensor, mask: Tensor = None) -> Tensor:
     """
     tensor: (nbatch, k)
     return: x: (nbatch * 2, k + 1)
     """
     dtype = tensor.dtype
     device = tensor.device
-    nbatch, k = tuple(tensor.shape)
     unoccupied = torch.tensor([0])
     occupied = torch.tensor([1])
     maybe = torch.cat([unoccupied, occupied])
     maybe = maybe.to(device=device, dtype=dtype)
-    x = torch.empty(nbatch * 2, k + 1, dtype=dtype, device=device)
-    for i in range(2):
-        x[i * nbatch : (i + 1) * nbatch, -1:] = maybe[i].repeat(nbatch, 1)
 
-    x[:, :-1] = tensor.repeat(2, 1)
+    nbatch, k = tuple(tensor.shape)
+    if mask is None:
+        x = torch.empty(nbatch * 2, k + 1, dtype=dtype, device=device)
+        for i in range(2):
+            x[i * nbatch : (i + 1) * nbatch, -1:] = maybe[i].repeat(nbatch, 1)
 
+        x[:, :-1] = tensor.repeat(2, 1)
+    else:
+        assert mask.size(1) == 2
+        assert mask.size(0) == nbatch
+        repeat_nums = mask.sum(dim=1)  # bool in [0-4]
+        maybe_idx = torch.where(mask)[1]
+        x = torch.cat([tensor.repeat_interleave(repeat_nums, 0), maybe[maybe_idx]], dim=1)
     return x
 
 

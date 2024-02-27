@@ -390,8 +390,8 @@ class NqsCi(BaseVMCOptimizer):
             if epoch < self.start_iter:
                 # c0 /= c0.norm()/max(c0.norm(), self.cNqs_pow_min**0.5)
                 scale = (max(c0.norm(), self.cNqs_pow_min**0.5) / c0.norm()).item()
-        scale = 1.0
-        logger.info(f"scale: {scale:.4f}")
+        if self.rank == 0:
+            logger.info(f"scale: {scale:.4f}", master=True)
 
         def batch_loss_backward(begin: int, end: int) -> None:
             nonlocal loss_sum
