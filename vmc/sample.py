@@ -81,6 +81,7 @@ class Sampler:
         min_batch: int = 10000,
         min_tree_height: int = None,
         det_lut: DetLUT = None,
+        use_dfs_sample: bool = False,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -182,6 +183,10 @@ class Sampler:
                 self.use_same_tree
             ), f"use-same-tree({self.use_same_tree}) muse be is True, if use min-tree-height"
         self.sample_min_tree_height = min_tree_height
+         # DFS Sample, default BFS
+        self.use_dfs_sample = use_dfs_sample
+        if self.use_dfs_sample and not self.sampling_batch_rank:
+            raise TypeError(f"DFS only be supported in Multi-Rank-Sampling")
 
         # Det-LUT, remove part det in CI-NQS
         self.remove_det = False
@@ -414,7 +419,10 @@ class Sampler:
                 sample_unique, sample_counts, wf_value = self.nqs.module.ar_sampling(self.n_sample)
             else:
                 sample_unique, sample_counts, wf_value = self.nqs.module.ar_sampling(
-                    self.n_sample, self.sample_min_sample_batch, self.sample_min_tree_height
+                    self.n_sample,
+                    self.sample_min_sample_batch,
+                    self.sample_min_tree_height,
+                    self.use_dfs_sample,
                 )
             dim = sample_unique.size(0)
             rank_counts = torch.tensor([dim], device=self.device, dtype=torch.int64)
@@ -640,6 +648,7 @@ class Sampler:
             + f"    use-same-tree: {self.use_same_tree}\n"
             + f"    min-tree-height: {self.sample_min_tree_height}\n"
             + f"    min-nbatch: {self.sample_min_sample_batch}\n"
+            + f"    use-dfs-sample: {self.use_dfs_sample}\n"
             + f"    Random seed: {self.seed}\n"
             + f"    alpha: {self.alpha}\n"
             + f"    max_memory: {self.max_memory}\n"

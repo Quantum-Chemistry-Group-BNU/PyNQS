@@ -27,7 +27,7 @@ def select_det(
         coeff = torch.ones(1, device=device, dtype=torch.double)
         ci = CIWavefunction(coeff, CI.space[0].reshape(1, -1), device=device)
         return HF_lut, ci
-    mask = CI.coeff.abs() < threshold
+    mask = CI.coeff.abs() >= threshold
     _bra_len = CI.space.size(1)
     space = CI.space[mask].reshape(-1, _bra_len)
     x = ((onv_to_tensor(space, sorb) + 1) / 2).reshape(-1, sorb)
@@ -59,7 +59,6 @@ def sort_det(
     space = CI.space[mask].reshape(-1, _bra_len)
     x = ((onv_to_tensor(space, sorb) + 1) / 2).reshape(-1, sorb)
     det_lut = DetLUT(det=x, sorb=sorb, nele=nele, alpha=alpha, beta=beta, device=device)
-    breakpoint()
     coeff = CI.coeff[mask]
     ci = CIWavefunction(coeff, space, device=device)
     return det_lut, ci

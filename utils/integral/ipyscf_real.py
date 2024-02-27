@@ -148,11 +148,14 @@ def integral_pyscf(atom: str,
                    fci_coeff: bool = False,
                    cisd_coeff: bool = False,
                    model_type: str = "chem",
-                   hubbard_info: tuple = None) -> Tuple[int, int, List[float], Union[ndarray, None]]:
+                   hubbard_info: tuple = None,
+                   localized_orb: bool = False,
+                   localized_method: str = "lowdin",
+                   ) -> Tuple[int, int, List[float], Union[ndarray, None]]:
     MODEL_TYPE = ("Chem", "Hubbard")
     model_type = model_type.capitalize()
     if model_type not in MODEL_TYPE:
-        assert ValueError(f"model-type is {model_type}, but excepted in {MODEL_TYPE}")
+        raise ValueError(f"model-type is {model_type}, but excepted in {MODEL_TYPE}")
 
     if model_type == "Chem":
         mol = gto.Mole(atom=atom, verbose=5, basis=basis, symmetry=False)
@@ -171,8 +174,19 @@ def integral_pyscf(atom: str,
         iface.mol = mol
         iface.mf = mf
         iface.nfrozen = 0
-        info = iface.get_integral(mf.mo_coeff)
+
+        # Localized orbitals
+        if localized_orb:
+            from pyscf import lo
+            coeff_lo = lo.orth_ao(mf, localized_method)
+            print(f"Use {localized_method} localized orbitals")
+            mo_coeff = coeff_lo
+        else:
+            mo_coeff = mf.mo_coeff
+        info = iface.get_integral(mo_coeff)
     elif model_type == "Hubbard":
+        if localized_orb:
+            raise NotImplementedError
         nbas, nele = hubbard_info[:2]
         sorb = nbas * 2
         mol, mf, info = get_hubbard_model(*hubbard_info)
@@ -182,7 +196,7 @@ def integral_pyscf(atom: str,
     Iface.dump(info, fname=integral_file)
 
     if sorb <= 20:
-        cisolver = fci.FCI(mf)
+        cisolver = fci.FCI(mf, mo_coeff)
         e_ref, coeff = cisolver.kernel()
         try:
             mycc = cc.CCSD(mf)

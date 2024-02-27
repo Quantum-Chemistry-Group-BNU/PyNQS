@@ -379,7 +379,7 @@ class DecoderWaveFunction(nn.Module):
             amp_orth_mask = self.orth_mask(
                 states=sample_unique, k=k, num_up=num_up, num_down=num_down
             )
-            self.time_select += (time.time_ns() - t0)/1.0e06
+            self.time_select += (time.time_ns() - t0) / 1.0e06
             amp_k = amp[:, -1, :]  # (n_unique, 4)
             amp_mask *= amp_orth_mask
             amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
@@ -424,6 +424,7 @@ class DecoderWaveFunction(nn.Module):
         min_tree_height: int = 8,
         kv_caches: KVCaches = None,
         kv_idxs: Tensor = None,
+        use_dfs_sample: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
         sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
@@ -474,17 +475,33 @@ class DecoderWaveFunction(nn.Module):
         amps_value = amps_value[begin:end]
         if self.use_kv_cache:
             kv_idxs = kv_idxs[begin:end]
+        else:
+            kv_idxs = None
 
-        sample_unique, sample_counts, amp_k, amps_value, kv_idxs, _ = self._interval_sample(
-            sample_unique=sample_unique,
-            sample_counts=sample_counts,
-            amps_value=amps_value,
-            begin=k,
-            end=self.sorb,
-            min_batch=self.min_batch,
-            kv_caches=kv_caches,
-            kv_idxs=kv_idxs,
-        )
+        if not use_dfs_sample:
+            # BFS sample
+            sample_unique, sample_counts, _, amps_value, _, _ = self._interval_sample(
+                sample_unique=sample_unique,
+                sample_counts=sample_counts,
+                amps_value=amps_value,
+                begin=k,
+                end=self.sorb,
+                min_batch=self.min_batch,
+                kv_caches=kv_caches,
+                kv_idxs=kv_idxs,
+            )
+        else:
+            # DFS sample
+            sample_unique, sample_counts, amps_value = self.forward_dfs(
+                sample_unique=sample_unique,
+                sample_counts=sample_counts,
+                amps_value=amps_value,
+                k_start=k,
+                k_end=self.sorb,
+                min_batch=min_batch,
+                kv_caches=kv_caches,
+                kv_idxs=kv_idxs,
+            )
 
         if self.compute_phase:
             phases = self.phase_layers[0]((sample_unique * 2 - 1).double())  # +1/-1
@@ -591,6 +608,93 @@ class DecoderWaveFunction(nn.Module):
         logger.info(f"Select-CI-det: {self.time_select:.3f}ms")
         return sample_unique, sample_counts, wf
 
+    def forward_dfs(
+        self,
+        sample_unique,
+        sample_counts,
+        amps_value,
+        k_start: int,
+        k_end: int,
+        min_batch: int,
+        kv_caches: KVCaches,
+        kv_idxs: Tensor,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        """
+        return sample_unique, sample_counts, amps_value
+        note:
+        recursive calls. every calls will keep current kv cache.
+        should be very carefully choose mini-batch and control recursive call times.
+        """
+        for k_th in range(k_start, k_end, 2):
+            if sample_unique.shape[0] > min_batch:
+                # logger.info(f"start recursively dfs\n k_th {k_th} sample_unique shape {sample_unique.shape}")
+                # logger.info(f"dfs k_th {k_th}, in split period, sample unique shape {sample_unique.shape}, min batch {min_batch}")
+                dim = sample_unique.shape[0]
+                num_loop = int(((dim - 1) // min_batch) + 1)
+                idx_rank_lst = [0] + split_length_idx(dim, length=num_loop)
+                # logger.info(f"rank {get_rank()} dim: {dim}, world-size: {self.world_size}", master=True)
+                # logger.info(f"dfs k_th {k_th}, split idx_rank_lst: {idx_rank_lst}")
+                # logger.info(f"dfs k_th {k_th}, kv shape {kv_caches[0][0].shape} kv idx value ")
+                # logger.info(f"{kv_idxs}")
+                sample_unique_list, sample_counts_list, amp_value_list = [], [], []
+                for i in range(num_loop):
+                    begin = idx_rank_lst[i]
+                    end = idx_rank_lst[i + 1]
+                    _sample_unique, _sample_counts, _amps_value = (
+                        sample_unique[begin:end, :].clone(),
+                        sample_counts[begin:end].clone(),
+                        amps_value[begin:end].clone(),
+                    )
+                    # logger.info(f"=======\nin kth {k_th} loop {i} begin {begin} end {end}")
+                    # logger.info(
+                    #     f"start recursively dfs\n k_th {k_th} _sample_unique \n {_sample_unique}\n _sample_counts \n {_sample_counts} \n _amps_value \n {_amps_value}\n===========\n"
+                    # )
+                    if kv_caches is not None:
+                        _kv_idxs = kv_idxs[begin:end]
+                        # trivial vision, due to the join next sample ways, kv cache can't be split
+                        # _kv_caches_local = copy.deepcopy(kv_caches)
+                        # breakpoint()
+                        _kv_caches_local = kv_caches.copy()
+                        # logger.info(f"use dfs in kth {k_th}, loop {i} kv cache shape {kv_caches[0][0].shape}")
+                    else:
+                        _kv_caches_local = None
+                        _kv_idxs = None
+                    su, sc, av = self.forward_dfs(
+                        _sample_unique,
+                        _sample_counts,
+                        _amps_value,
+                        k_th,
+                        k_end,
+                        min_batch,
+                        _kv_caches_local,
+                        _kv_idxs,
+                    )
+                    # logger.info(f"dfs in kth {k_th}, end loop {i}")
+                    sample_unique_list.append(su)
+                    sample_counts_list.append(sc)
+                    amp_value_list.append(av)
+                    # logger.info(f"============================")
+                    # logger.info(
+                    #     f"forward dfs end kth {k_th} \n generate sample unique\n {torch.cat(sample_unique_list, dim=0)} \n sample counts \n {torch.cat(sample_counts_list, dim=0)}\n amp value {torch.cat(amp_value_list, dim=0)}"
+                    # )
+                return (
+                    torch.cat(sample_unique_list, dim=0),
+                    torch.cat(sample_counts_list, dim=0),
+                    torch.cat(amp_value_list, dim=0),
+                )
+            else:
+                sample_unique, sample_counts, _, amps_value, kv_idxs, _ = self._interval_sample(
+                    sample_unique=sample_unique,
+                    sample_counts=sample_counts,
+                    amps_value=amps_value,
+                    begin=k_th,
+                    end=k_th + 2,
+                    min_batch=min_batch,
+                    kv_caches=kv_caches,
+                    kv_idxs=kv_idxs,
+                )
+        return sample_unique, sample_counts, amps_value
+
     def forward_wf(self, x: Tensor) -> Tensor:
         """
         input x: (+1/-1)
@@ -626,7 +730,7 @@ class DecoderWaveFunction(nn.Module):
             amp_mask = self.symmetry_mask(k=k, num_up=num_up, num_down=num_down)
             t0 = time.time_ns()
             amp_orth_mask = self.orth_mask(states=x[:, :k], k=k, num_up=num_up, num_down=num_down)
-            self.time_select += (time.time_ns() - t0)/1.0e6
+            self.time_select += (time.time_ns() - t0) / 1.0e6
             amp_mask *= amp_orth_mask
             amp_k = amp[:, k // 2, :]  # (nbatch, 4)
             amp_k_mask = self.apply_activations(amp_k=amp_k, phase_k=None, amp_mask=amp_mask)[0]
@@ -707,6 +811,7 @@ class DecoderWaveFunction(nn.Module):
         n_sample: int,
         min_batch: int = -1,
         min_tree_height: int = None,
+        use_dfs_sample: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         r"""
         ar sample
@@ -721,7 +826,9 @@ class DecoderWaveFunction(nn.Module):
         if min_tree_height is None:
             return self.forward_sample(n_sample, min_batch)
         elif isinstance(min_tree_height, int):
-            return self.forward_sample_rank(n_sample, min_batch, min_tree_height)
+            return self.forward_sample_rank(
+                n_sample, min_batch, min_tree_height, use_dfs_sample=use_dfs_sample
+            )
 
 
 if __name__ == "__main__":
@@ -730,17 +837,17 @@ if __name__ == "__main__":
     setup_seed(333)
     torch.set_default_dtype(torch.double)
     torch.set_printoptions(precision=6)
-    sorb = 8
-    nele = 4
+    sorb = 12
+    nele = 6
     device = "cuda:0"
     d_model = 5
-    use_kv_cache = True
+    use_kv_cache = False
     dtype = torch.double
     norm_method = 0
-    fci_space = torch.from_numpy(np.load("./4o4e.npy")).to(device)  # +1/-1
-    fci_space = (fci_space + 1)/2
-    idx = torch.tensor([0, 1, 2, 3, 4, 5, 10, 12, 14, 15])
-    det_lut = DetLUT(fci_space[idx], sorb, nele, alpha=nele // 2, beta=nele // 2)
+    # fci_space = torch.from_numpy(np.load("./4o4e.npy")).to(device)  # +1/-1
+    # fci_space = (fci_space + 1) / 2
+    # idx = torch.tensor([0, 1, 2, 3, 4, 5, 10, 12, 14, 15])
+    # det_lut = DetLUT(fci_space[idx], sorb, nele, alpha=nele // 2, beta=nele // 2)
     # print(det_lut.onv_lst)
     # print(det_lut.tensor_lst)
     # print(det_lut.orth_lst)
@@ -761,15 +868,18 @@ if __name__ == "__main__":
         use_kv_cache=use_kv_cache,
         dtype=dtype,
         norm_method=norm_method,
-        det_lut=det_lut,
+        # det_lut=det_lut,
     )
-    print(det_lut.det)
-    wf = model(fci_space)
-    print(wf)
-    print(torch.allclose(wf[idx], torch.zeros_like(wf[idx])))
+    # print(det_lut.det)
+    # wf = model(fci_space)
+    # print(wf)
+    # print(torch.allclose(wf[idx], torch.zeros_like(wf[idx])))
     # breakpoint()
-    sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100)
-    print(sample)
+    t0 = time.time_ns()
+    sample, counts, wf = model.ar_sampling(
+        n_sample=int(1e8), min_batch=100, use_dfs_sample=True, min_tree_height=4
+    )
+    wf1 = model((sample * 2 - 1).double())
     # print(det_lut.det)
     # sample, counts, wf = model.ar_sampling(n_sample=int(1e8), min_batch=100)
     print(f"use-kv-cache: {use_kv_cache}")
