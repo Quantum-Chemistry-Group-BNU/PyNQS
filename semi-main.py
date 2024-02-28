@@ -16,12 +16,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from pyscf import fci
 
 from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string
-from utils.integral import read_integral, integral_pyscf
+from utils.pyscf_helper import read_integral, interface
 from utils import convert_onv, get_fock_space
 from utils.determinant_lut import DetLUT
 from utils.distributed import get_rank
 from utils.loggings import dist_print
-from utils.select import select_det
+from utils.select import select_det, sort_det
+from utils.pyscf_helper.dice_pyscf import read_dice_wf, run_shci
 from vmc.ansatz import DecoderWaveFunction
 from vmc.optim import VMCOptimizer
 from ci_vmc.hybrid import NqsCi
@@ -56,14 +57,19 @@ if __name__ == "__main__":
     # if dist.get_rank() == 0:
     #     atom: str = ""
     #     bond = 1.60
-    #     for k in range(10):
-    #         atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
+    #     atom = "N, 0.0, 0.0, 0.0; N, 0.0, 0.0, 2.20"
+    #     # for k in range(6):
+    #     #     atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
     #     integral_file = tempfile.mkstemp()[1]
-    #     sorb, nele, e_lst, fci_amp, ucisd_amp = integral_pyscf(
+    #     sorb, nele, e_lst, fci_amp, ucisd_amp, mf = integral_pyscf(
     #         atom, integral_file=integral_file, cisd_coeff=True,
+    #         basis="sto-3g",
+    #         # localized_orb=False,
+    #         # localized_method="meta-lowdin",
     #     )
+    #     cas = (sorb//2, (nele//2, nele//2))
+    #     shci_from_dice(mf, cas, det_file="./molecule/dets.bin")
     #     logger.info(e_lst)
-
     #     h1e, h2e, ci_space, ecore, sorb = read_integral(
     #         integral_file,
     #         nele,
@@ -87,9 +93,9 @@ if __name__ == "__main__":
     #             "ucisd_amp": ucisd_amp,
     #             "fci_amp": fci_amp,
     #         },
-    #         "./molecule/H10-1.60.pth",
+    #         "./molecule/SHCI/N2-2.20.pth",
     #     )
-    e = torch.load("./molecule/H6-1.60.pth", map_location="cpu")
+    e = torch.load("./molecule/SHCI/N2-2.20.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -116,26 +122,38 @@ if __name__ == "__main__":
     # pre-train wavefunction, fci_wf and ucisd_wf
     ucisd_amp = e["ucisd_amp"]
     ucisd_wf = unpack_ucisd(ucisd_amp, sorb, nele, device=device)
-    # fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
+    fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
     # ucisd_fci_wf = ucisd_to_fci(ucisd_amp, ci_space, sorb, nele, device=device)
     pre_train_info = {"pre_max_iter": 20, "interval": 10, "loss_type": "sample"}
 
+    sci_wf = read_dice_wf("./molecule/dets.bin")
     # select ci > thresh
-    thresh = 0.005
-    use_hf = False
-    det_lut, select_CI = select_det(
-        CI=ucisd_wf,
+    # thresh = 1e-12
+    # use_hf = False
+    # det_lut, select_CI = select_det(
+    #     CI=fci_wf,
+    #     sorb=sorb,
+    #     nele=nele,
+    #     alpha=noa,
+    #     beta=nob,
+    #     device=device,
+    #     threshold=thresh,
+    #     use_hf=use_hf,
+    # )
+    det_lut, select_CI = sort_det(
+        CI=fci_wf,
         sorb=sorb,
         nele=nele,
         alpha=noa,
         beta=nob,
         device=device,
-        thresh=thresh,
-        use_hf=use_hf,
+        end=50,
+        descending=True,
     )
     if rank == 0:
         logger.info(select_CI.energy(electron_info))
         logger.info(select_CI)
+    breakpoint()
     d_model = 16
     n_warmup = 2000
     transformer = DecoderWaveFunction(
@@ -163,7 +181,7 @@ if __name__ == "__main__":
 
     sampler_param = {
         "n_sample": int(1.0e12),
-        "debug_exact": False,  # exact optimization
+        "debug_exact": True,  # exact optimization
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -210,9 +228,9 @@ if __name__ == "__main__":
         "sampler_param": sampler_param,
         "only_sample": False,
         "electron_info": electron_info,
-        "max_iter": 10,
+        "max_iter": 100,
         "interval": 1,
-        "MAX_AD_DIM": 1000,
+        "MAX_AD_DIM": 5000,
         "pre_CI": ucisd_wf,
         "pre_train_info": pre_train_info,
         "noise_lambda": 0.0,
@@ -220,17 +238,21 @@ if __name__ == "__main__":
         "method_grad": "AD",
         "method_jacobian": "vector",
         "prefix": "./tmp/vmc-new-" + str(seed),
+        "use_clip_grad": True,
+        "max_grad_norm": 100,
+        "start_clip_grad": 4,
     }
     e_ref = e_lst[0]
-    opt_vmc = VMCOptimizer(**vmc_opt_params)
-    opt_vmc.run()
-    opt_vmc.summary(e_ref, e_lst, prefix=f"./tmp/nqs-H4-1.60-{seed}")
-    # semi = NqsCi(select_CI, 
-    #              cNqs_pow_min=1.0e-4,
-    #              use_sample_space=False,
-    #              MAX_FP_DIM=-1,
-    #              **vmc_opt_params)
-    # semi.run()
-    # semi.summary(e_ref, e_lst, prefix=f"./tmp/semi-exact-{seed}")
+    # opt_vmc = VMCOptimizer(**vmc_opt_params)
+    # opt_vmc.run()
+    # opt_vmc.summary(e_ref, e_lst, prefix=f"./tmp/nqs-H4-1.60-{seed}")
+    semi = NqsCi(select_CI, 
+                 cNqs_pow_min=0.01,
+                 use_sample_space=False,
+                 MAX_FP_DIM=-1,
+                 grad_strategy = 0,
+                 **vmc_opt_params)
+    semi.run()
+    semi.summary(e_ref, e_lst, prefix=f"./tmp/semi-exact-{seed}")
     if rank == 0:
         logger.info(f"e-ref: {e_ref:.10f}, seed: {seed}")

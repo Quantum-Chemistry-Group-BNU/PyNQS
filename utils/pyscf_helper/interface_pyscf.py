@@ -2,19 +2,21 @@
 # Optimized version of interface for dumping integrals
 # The cutted mo_coeff must be inputed directly (maybe with nfrozen).
 #
-
+from __future__ import annotations
 import numpy
 import numpy as np
 import functools
+import warnings
+
 from numpy import ndarray
 from typing import Tuple, List, Union
 from pyscf.scf import hf
-from pyscf import ao2mo, gto, scf, fci, cc, ci
+from pyscf import ao2mo, gto, scf, fci, cc, ci, lo
 
 
 from .hubbard_pyscf import get_hubbard_model, get_RHF_int_h1h2
 
-__all__ = ["integral_pyscf"]
+__all__ = ["interface"]
 
 
 # Provide the basic interface
@@ -26,11 +28,11 @@ class Iface:
 
     # This is the central part
     def get_integral(self, mo_coeff):
-        print('\n[iface.get_integral]')
+        print("\n[iface.get_integral]")
         ecore = self.mol.energy_nuc()
         # Intergrals
-        mcoeffC = mo_coeff[:, :self.nfrozen].copy()
-        mcoeffA = mo_coeff[:, self.nfrozen:].copy()
+        mcoeffC = mo_coeff[:, : self.nfrozen].copy()
+        mcoeffA = mo_coeff[:, self.nfrozen :].copy()
         hcore = self.mf.get_hcore()
         if self.nfrozen > 0:
             # Core part
@@ -45,15 +47,15 @@ class Iface:
         nact = mcoeffA.shape[1]
         eri = ao2mo.general(self.mol, (mcoeffA, mcoeffA, mcoeffA, mcoeffA), compact=0)
         eri = eri.reshape(nact, nact, nact, nact)
-        print('finished')
+        print("finished")
         print(ecore)
         return ecore, hmo, eri
 
-    def get_integral_FCIDUMP(self, fname='FCIDUMP') -> Tuple[float, ndarray, ndarray]:
-        print('\n[iface.get_integral_FCIDUMP] fname=', fname)
-        with open(fname, 'r') as f:
-            line = f.readline().split(',')[0].split(' ')[-1]
-            print('Num of orb: ', int(line))
+    def get_integral_FCIDUMP(self, fname="FCIDUMP") -> Tuple[float, ndarray, ndarray]:
+        print("\n[iface.get_integral_FCIDUMP] fname=", fname)
+        with open(fname, "r") as f:
+            line = f.readline().split(",")[0].split(" ")[-1]
+            print("Num of orb: ", int(line))
             f.readline()
             f.readline()
             f.readline()
@@ -79,12 +81,12 @@ class Iface:
                     int2e[ind[3], ind[2], ind[0], ind[1]] = float(data[0])
                     int2e[ind[2], ind[3], ind[1], ind[0]] = float(data[0])
                     int2e[ind[3], ind[2], ind[1], ind[0]] = float(data[0])
-        print('finished')
+        print("finished")
         return e, int1e, int2e
 
     @staticmethod
-    def dump(info, fname='mole.info'):
-        print('\n[iface.dump] fname=', fname)
+    def dump(info, fname="mole.info"):
+        print("\n[iface.dump] fname=", fname)
         ecore, int1e, int2e = info
         print(f"int1e: {int1e.shape} int2e: {int2e.shape}")
         # Spin orbital integrals
@@ -99,10 +101,10 @@ class Iface:
         h2e[1::2, 1::2, 0::2, 0::2] = int2e  # BBAA
         h2e = h2e.transpose(0, 2, 1, 3)  # <ij|kl> = [ik|jl]
         h2e = h2e - h2e.transpose(0, 1, 3, 2)  # Antisymmetrize V[pqrs]=<pq||rs>
-        thresh = 1.e-16
-        with open(fname, 'w+') as f:
+        thresh = 1.0e-16
+        with open(fname, "w+") as f:
             n = sbas
-            line = str(n) + '\n'
+            line = str(n) + "\n"
             f.writelines(line)
             # int2e
             nblk = 0
@@ -117,41 +119,60 @@ class Iface:
                             lmax = k
                         for l in range(lmax):
                             nblk += 1
-                            if abs(h2e[i, j, k, l]) < thresh: continue
-                            line = str(i+1) + ' ' \
-                                 + str(j+1) + ' ' \
-                                 + str(k+1) + ' ' \
-                                 + str(l+1) + ' ' \
-                                 + str(h2e[i,j,k,l]) \
-                                 + '\n'
+                            if abs(h2e[i, j, k, l]) < thresh:
+                                continue
+                            line = (
+                                str(i + 1)
+                                + " "
+                                + str(j + 1)
+                                + " "
+                                + str(k + 1)
+                                + " "
+                                + str(l + 1)
+                                + " "
+                                + str(h2e[i, j, k, l])
+                                + "\n"
+                            )
                             f.writelines(line)
             assert nq == nblk
             # int1e
             for i in range(n):
                 for j in range(n):
-                    if abs(h1e[i, j]) < thresh: continue
-                    line = str(i+1) + ' ' \
-                         + str(j+1) + ' ' \
-                         + '0 0 ' \
-                         + str(h1e[i,j]) \
-                         + '\n'
+                    if abs(h1e[i, j]) < thresh:
+                        continue
+                    line = str(i + 1) + " " + str(j + 1) + " " + "0 0 " + str(h1e[i, j]) + "\n"
                     f.writelines(line)
             # ecore
-            line = '0 0 0 0 ' + str(ecore) + '\n'
+            line = "0 0 0 0 " + str(ecore) + "\n"
             f.writelines(line)
-        print('finished')
+        print("finished")
         return 0
 
-def integral_pyscf(atom: str,
-                   basis="sto-3g",
-                   integral_file: str = "integral.info",
-                   fci_coeff: bool = False,
-                   cisd_coeff: bool = False,
-                   model_type: str = "chem",
-                   hubbard_info: tuple = None,
-                   localized_orb: bool = False,
-                   localized_method: str = "lowdin",
-                   ) -> Tuple[int, int, List[float], Union[ndarray, None]]:
+
+def interface(
+    atom: str,
+    basis="sto-3g",
+    integral_file: str = "integral.info",
+    fci_coeff: bool = False,
+    cisd_coeff: bool = False,
+    model_type: str = "chem",
+    hubbard_info: tuple = None,
+    localized_orb: bool = False,
+    localized_method: str = "lowdin",
+) -> tuple[int, int, list[float], ndarray, ndarray, any]:
+    """
+    PYSCF interface
+
+    Returns
+    -------
+    sorb(int):
+    nele(int):
+    e_lst(list[float]): Ref energy: [FCI/CCSD, UCISD, HF]
+    coeff(ndarray): fci_coeff, if 'fci_coeff' is True and sorb <= 20.
+    amp(ndarray): ucisd_amp, if 'cisd_coeff' is True.
+    mf: SCF.RHF
+    """
+
     MODEL_TYPE = ("Chem", "Hubbard")
     model_type = model_type.capitalize()
     if model_type not in MODEL_TYPE:
@@ -163,10 +184,10 @@ def integral_pyscf(atom: str,
         sorb = mol.nao * 2
         nele = mol.nelectron
         mf = scf.RHF(mol)
-        mf.init_guess = 'atom'
+        mf.init_guess = "atom"
         mf.level_shift = 0.0
         mf.max_cycle = 200
-        mf.conv_tol = 1.e-14
+        mf.conv_tol = 1.0e-14
         e_hf = mf.scf()
 
         # Integral interface
@@ -177,7 +198,6 @@ def integral_pyscf(atom: str,
 
         # Localized orbitals
         if localized_orb:
-            from pyscf import lo
             coeff_lo = lo.orth_ao(mf, localized_method)
             print(f"Use {localized_method} localized orbitals")
             mo_coeff = coeff_lo
@@ -202,42 +222,45 @@ def integral_pyscf(atom: str,
             mycc = cc.CCSD(mf)
             _ = mycc.kernel()
             print(f"CCSD energy: {mycc.e_tot:.10f}")
-            # et = mycc.ccsd_t()
-            # print(f'CCSD(T) total energy: {mycc.e_tot + et:.10f}')
         except:
-            import warnings
             warnings.warn(f"CCSD kernel failed")
         print(f"Full CI energy: {e_ref:.10f}")
     else:
-        mycc = cc.CCSD(mf)
-        _ = mycc.kernel()
-        coeff = numpy.zeros(1)
-        e_ref = mycc.e_tot
-        print(f"CCSD energy: {mycc.e_tot:.10f}")
-        # et = mycc.ccsd_t()
-        # print(f'CCSD(T) total energy: {mycc.e_tot + et:.10f}')
-        # return (sorb, nele, mycc.e_tot)
+        try:
+            mycc = cc.CCSD(mf)
+            _ = mycc.kernel()
+            coeff = numpy.zeros(1)
+            e_ref = mycc.e_tot
+            print(f"CCSD energy: {mycc.e_tot:.10f}")
+            # et = mycc.ccsd_t()
+            # print(f'CCSD(T) total energy: {mycc.e_tot + et:.10f}')
+        except:
+            warnings.warn(f"CCSD kernel failed")
 
     e_lst: List[float]
     if cisd_coeff:
         myuci = ci.UCISD(mf)
-        e_cisd, cisd_amp = myuci.kernel()
-        e_lst = [e_ref, e_cisd + e_hf, e_hf]
-        return (sorb, nele, e_lst, coeff, cisd_amp)
+        e_ucisd, ucisd_amp = myuci.kernel()
+        e_lst = [e_ref, e_ucisd + e_hf, e_hf]
+        return (sorb, nele, e_lst, coeff, ucisd_amp, mf)
 
     e_lst = [e_ref, e_hf]
     if not fci_coeff:
-        return (sorb, nele, e_lst)
+        coeff = np.zeros(1)
+        amp = np.zeros(1)
+        return (sorb, nele, e_lst, coeff, amp, mf)
     else:
-        return (sorb, nele, e_lst, coeff)
+        amp = np.zeros(1)
+        return (sorb, nele, e_lst, coeff, amp, mf)
 
 
 if __name__ == "__main__":
+    import tempfile, os
+
     atom: str = ""
     bond = 1.50
     for k in range(4):
         atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
-    import tempfile, os
     filename = tempfile.mkstemp()[1]
-    integral_pyscf(atom, integral_file=filename)
+    interface(atom, integral_file=filename)
     os.remove(filename)

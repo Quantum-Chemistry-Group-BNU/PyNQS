@@ -15,7 +15,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from pyscf import fci
 
 from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string
-from utils.integral import read_integral, integral_pyscf
+from utils.pyscf_helper import read_integral, interface
 from utils import convert_onv, get_fock_space
 from utils.loggings import dist_print
 from vmc.ansatz import RBMWavefunction, RNNWavefunction, RBMSites
@@ -44,7 +44,7 @@ if __name__ == "__main__":
         for k in range(4):
             atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
         integral_file = tempfile.mkstemp()[1]
-        sorb, nele, e_lst, fci_amp, ucisd_amp = integral_pyscf(
+        sorb, nele, e_lst, fci_amp, ucisd_amp = interface(
             atom, integral_file=integral_file, cisd_coeff=True, fci_coeff=True,
             # model_type="hubbard", hubbard_info=(8, 4)
         )

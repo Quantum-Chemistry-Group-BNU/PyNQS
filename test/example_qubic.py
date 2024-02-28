@@ -10,7 +10,7 @@ from numpy import ndarray
 from typing import List, Tuple
 
 from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string, EnterDir
-from utils.integral import read_integral, integral_pyscf
+from utils.pyscf_helper import read_integral, interface
 
 from qubic import RunQubic
 from qubic.mps import MPS_c, mps_CIcoeff, mps_sample
@@ -27,7 +27,7 @@ for k in range(6):
 integral_file = tempfile.mkstemp()[1]
 
 # ElectronInfo
-sorb, nele, e_lst, fci_amp = integral_pyscf(atom, integral_file=integral_file, cisd_coeff=False, fci_coeff=True)
+sorb, nele, e_lst, fci_amp = interface(atom, integral_file=integral_file, cisd_coeff=False, fci_coeff=True)
 h1e, h2e, ci_space, ecore, sorb = read_integral(integral_file, nele, device=device)
 
 # run qubic
