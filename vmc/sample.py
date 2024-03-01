@@ -38,7 +38,7 @@ from utils.distributed import (
     broadcast_tensor,
 )
 from utils.public_function import torch_unique_index, WavefunctionLUT
-from utils.determinant_lut import DetLUT
+from utils.det_helper import DetLUT
 
 print = partial(print, flush=True)
 

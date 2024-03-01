@@ -19,7 +19,7 @@ from utils.public_function import (
     split_batch_idx,
     MemoryTrack,
 )
-from utils.determinant_lut import DetLUT
+from utils.det_helper import DetLUT
 from utils.distributed import all_reduce_tensor, synchronize, all_gather_tensor
 from libs.C_extension import get_hij_torch, onv_to_tensor, tensor_to_onv, get_comb_tensor
 from ci import CIWavefunction
@@ -55,6 +55,14 @@ class NqsCi(BaseVMCOptimizer):
     ci_coeff: Tensor = None
     """CI-det coeff, (m)"""
 
+    grad_strategy: int = None
+    """
+    update grad strategy.
+    0: ||cN||^2 * scale * ...
+    1: cN * scale * ...
+    2: only opt NQS, fail
+    """
+
     def __init__(
         self,
         CI: CIWavefunction,
@@ -78,9 +86,11 @@ class NqsCi(BaseVMCOptimizer):
         if not (hasattr(model, "det_lut") and model.det_lut is not None):
             raise TypeError(f"CI-NQS must remove CI-Det")
 
-        if grad_strategy not in (0, 1):
-            raise TypeError(f"grad-strategy muse be in 0/1")
+        if grad_strategy not in (0, 1, 2):
+            raise NotImplementedError(f"grad-strategy muse be in 0,1,2")
         self.grad_strategy = grad_strategy
+        if self.grad_strategy == 2:
+            raise TypeError(f"This method is fail")
 
         self.ci_det = CI.space
         self.ci_num = CI.space.size(0)
@@ -336,6 +346,11 @@ class NqsCi(BaseVMCOptimizer):
         """
         calculate new-term (<n|H|phi_i> * c_i) / <n|phi_nqs>
         """
+        if self.grad_strategy == 2:
+            # not calculate new-term, so return zeros
+            x = torch.zeros(state.size(0), dtype=self.dtype, device=self.device)
+            return x
+
         # Single-Rank
         bra = tensor_to_onv(((state + 1) / 2).to(torch.uint8), self.sorb)
         ket = self.ci_det  # ci-det, not rank-ci-det
@@ -361,6 +376,7 @@ class NqsCi(BaseVMCOptimizer):
         state: Tensor,
         state_prob: Tensor,
         eloc: Tensor,
+        eloc_mean: Tensor,
         new_term: Tensor,
         cNqs: Tensor,
         E0: float,
@@ -390,6 +406,9 @@ class NqsCi(BaseVMCOptimizer):
             if epoch < self.start_iter:
                 # c0 /= c0.norm()/max(c0.norm(), self.cNqs_pow_min**0.5)
                 scale = (max(c0.norm(), self.cNqs_pow_min**0.5) / c0.norm()).item()
+        elif self.grad_strategy == 2:
+            # only optimize NQS
+            c0 = 1.0
         if self.rank == 0:
             logger.info(f"scale: {scale:.4f}", master=True)
 
@@ -406,6 +425,8 @@ class NqsCi(BaseVMCOptimizer):
                 corr = eloc_batch + new_term_batch / cNqs - E0
             elif self.grad_strategy == 1:
                 corr = eloc_batch * cNqs + new_term_batch - E0 * cNqs
+            elif self.grad_strategy == 2:
+                corr = eloc_batch - eloc_mean
             loss = (
                 2 * (c0 * scale * (torch.sum(state_prob_batch * log_psi_batch.conj() * corr))).real
             )
@@ -486,6 +507,7 @@ class NqsCi(BaseVMCOptimizer):
                 state=sample_state,
                 state_prob=state_prob,
                 eloc=eloc,
+                eloc_mean=eloc_mean,
                 new_term=new_term,
                 cNqs=self.nqs_coeff,
                 E0=E0,

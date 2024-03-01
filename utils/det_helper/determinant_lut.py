@@ -13,6 +13,8 @@ from torch import Tensor
 from libs.C_extension import wavefunction_lut, tensor_to_onv, onv_to_tensor
 from utils.public_function import torch_sort_onv
 
+__all__ = ["DetLUT"]
+
 def _joint_next_sample_two_sites(tensor: Tensor) -> Tensor:
     """
     tensor: (nbatch, k)

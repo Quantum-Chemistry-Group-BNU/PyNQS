@@ -5,7 +5,7 @@ import torch
 from torch import Tensor
 
 from libs.C_extension import constrain_make_charts
-from utils.determinant_lut import DetLUT
+from utils.det_helper import DetLUT
 
 
 @torch.no_grad()

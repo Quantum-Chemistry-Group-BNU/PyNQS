@@ -28,7 +28,7 @@ from utils.public_function import (
     split_length_idx,
     setup_seed,
 )
-from utils.determinant_lut import DetLUT
+from utils.det_helper import DetLUT
 from vmc.ansatz.symmetry import symmetry_mask, orthonormal_mask
 
 from utils.distributed import get_rank, get_world_size, synchronize

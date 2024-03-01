@@ -1,10 +1,14 @@
+"""
+select Determinant using index or threshold
+"""
 from __future__ import annotations
 import torch
 
 from ci import CIWavefunction
 from libs.C_extension import onv_to_tensor
-from utils.determinant_lut import DetLUT
+from .determinant_lut import DetLUT
 
+__all__ = ["select_det", "sort_det"]
 
 def select_det(
     CI: CIWavefunction,
@@ -17,7 +21,7 @@ def select_det(
     use_hf: bool = False,
 ) -> tuple[DetLUT, CIWavefunction]:
     """
-    select |ci| > thresh or only use HF
+    select |ci| > threshold or only use HF
     """
     assert threshold >= 0.0
     if use_hf:
