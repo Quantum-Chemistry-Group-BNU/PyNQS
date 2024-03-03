@@ -21,12 +21,10 @@ from utils import convert_onv, get_fock_space
 from utils.det_helper import DetLUT, select_det, sort_det
 from utils.distributed import get_rank
 from utils.loggings import dist_print
-from utils.pyscf_helper.dice_pyscf import read_dice_wf, run_shci
-from vmc.ansatz import DecoderWaveFunction
-from vmc.optim import VMCOptimizer
-from ci_vmc.hybrid import NqsCi
-from ci import unpack_ucisd, ucisd_to_fci, fci_revise, CIWavefunction
-from libs.C_extension import onv_to_tensor, tensor_to_onv
+from vmc.ansatz import RBMWavefunction, RNNWavefunction, RBMSites, DecoderWaveFunction, MPS_RNN_1D, MPS_RNN_2D
+from vmc.optim import VMCOptimizer, GD
+from ci import unpack_ucisd, ucisd_to_fci, fci_revise
+from libs.C_extension import onv_to_tensor
 from torchinfo import summary
 
 # from qubic import MPS_c, mps_CIcoeff, mps_sample, RunQubic
@@ -122,35 +120,55 @@ if __name__ == "__main__":
     # ucisd_fci_wf = ucisd_to_fci(ucisd_amp, ci_space, sorb, nele, device=device)
     pre_train_info = {"pre_max_iter": 20, "interval": 10, "loss_type": "sample"}
 
-    # thresh = 1e-12
-    # use_hf = False
-    # det_lut, select_CI = select_det(
-    #     CI=fci_wf,
-    #     sorb=sorb,
-    #     nele=nele,
-    #     alpha=noa,
-    #     beta=nob,
+    rnn = RNNWavefunction(
+        sorb,
+        nele,
+        num_hiddens=sorb * 2,
+        num_labels=2,
+        rnn_type="complex",
+        num_layers=1,
+        device=device,
+        common_linear=False,
+        combine_amp_phase=False,
+        phase_batch_norm=False,
+        phase_hidden_size=[64, 64],
+        n_out_phase=1,
+    ).to(device=device)
+    ansatz = rnn
+    modelname = "RNN"
+    # rbm = RBMWavefunction(sorb, alpha=2, device=device, rbm_type="cos")
+
+    # ar_rbm = RBMSites(
+    #     sorb,
+    #     nele,
+    #     alpha=2,
     #     device=device,
-    #     threshold=thresh,
-    #     use_hf=use_hf,
+    #     symmetry=True,
+    #     common_weight=True,
+    #     ar_sites=1,
+    #     activation_type="cos",
     # )
-    # det_lut, select_CI = sort_det(
-    #     CI=ucisd_wf,
-    #     sorb=sorb,
-    #     nele=nele,
-    #     alpha=noa,
-    #     beta=nob,
-    #     device=device,
-    #     end=50,
-    #     descending=True,
-    # )
-    # if rank == 0:
-    #     logger.info(select_CI.energy(electron_info))
-    #     logger.info(select_CI)
+    # ansatz = ar_rbm
     d_model = 16
     n_warmup = 2000
-    transformer = DecoderWaveFunction(
-        sorb=sorb,
+    # transformer = DecoderWaveFunction(
+    #     sorb=sorb,
+    #     nele=nele,
+    #     alpha=noa,
+    #     beta=nob,
+    #     device=device,
+    #     d_model=d_model,
+    #     n_heads=4,
+    #     phase_hidden_size=[512, 521],
+    #     n_out_phase=4,
+    #     use_kv_cache=True,
+    #     norm_method=0,
+    # )
+
+    # ansatz = transformer
+    dcut=10
+    MPS_RNN_2D = MPS_RNN_2D(
+        nqubits=sorb,
         nele=nele,
         alpha_nele=nele // 2,
         beta_nele=nele // 2,
@@ -158,15 +176,17 @@ if __name__ == "__main__":
         wf_type="complex",
         n_layers=2,
         device=device,
-        d_model=d_model,
-        n_heads=8,
-        phase_hidden_size=[512, 512],
-        n_out_phase=1,
-        use_kv_cache=True,
-        norm_method=0,
-        # det_lut=det_lut, # use det-LUT in CI-VMC
+        dcut=dcut,
+        # hilbert_local = 4,
     )
-    ansatz = transformer
+    ansatz = MPS_RNN_2D
+    modelname = "MPS_RNN_2D"
+    if rank == 0:
+        net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
+        logger.info(net_param_num(ansatz))
+        logger.info(sum(map(torch.numel, ansatz.parameters())))
+    # summary(ansatz, input_size=(int(1.0e6), 20))
+    # breakpoint()
     if device == "cuda":
         model = DDP(ansatz, device_ids=[local_rank], output_device=local_rank)
     else:
@@ -209,32 +229,36 @@ if __name__ == "__main__":
 
     # data-dtype
     dtype = Dtype(dtype=torch.complex128, device=device)
-
-    vmc_opt_params = {
-        "nqs": model,
-        "opt_type": opt_type,
-        "opt_params": opt_params,
-        "lr_scheduler": lr_scheduler,
-        "lr_sch_params": lr_sch_params,
-        # "external_model": "H4-1.60-sample.pth",
-        "dtype": dtype,
-        "sampler_param": sampler_param,
-        "only_sample": False,
-        "electron_info": electron_info,
-        "max_iter": 2500,
-        "interval": 1,
-        "MAX_AD_DIM": 5000,
-        "pre_CI": ucisd_wf,
-        "pre_train_info": pre_train_info,
-        "noise_lambda": 0.0,
-        # "check_point": f"./molecule/SHCI/N2-2.20-333-checkpoint.pth",
-        "method_grad": "AD",
-        "method_jacobian": "vector",
-        "prefix": "./tmp/vmc-new-" + str(seed),
-        "use_clip_grad": True,
-        "max_grad_norm": 100,
-        "start_clip_grad": 4,
-    }
+    preconditioner = KFACPreconditioner(model)
+    # dtype = Dtype(dtype=torch.double, device=device)
+    # print(f"rank: {dist.get_rank()}, size: {dist.get_world_size()}")
+    opt_vmc = VMCOptimizer(
+        nqs=model,
+        opt_type=opt_type,
+        opt_params=opt_params,
+        lr_scheduler=lr_scheduler,
+        lr_sch_params=lr_sch_params,
+        # external_model="H4-1.60-sample.pth",
+        dtype=dtype,
+        sampler_param=sampler_param,
+        only_sample=False,
+        electron_info=electron_info,
+        max_iter=1000,
+        interval=10,
+        MAX_AD_DIM=1000,
+        sr=False,
+        pre_CI=ucisd_wf,
+        pre_train_info=pre_train_info,
+        noise_lambda=0.0,
+        # check_point="./tmp/vmc-111-pre-train-checkpoint.pth",
+        method_grad="AD",
+        method_jacobian="vector",
+        prefix=make_prefix(ansatz=modelname, seed=seed, no="dcut="+f"{dcut}", e_name= e_name),
+        kfac = preconditioner,
+    )
+    # opt_vmc.pre_train()
+    # breakpoint()
+    opt_vmc.run()
     e_ref = e_lst[0]
     opt_vmc = VMCOptimizer(**vmc_opt_params)
     opt_vmc.run()
