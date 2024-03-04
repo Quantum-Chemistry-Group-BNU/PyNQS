@@ -33,6 +33,7 @@ class RNNWavefunction(nn.Module):
         phase_batch_norm: bool = False,
         phase_norm_momentum=0.1,
         n_out_phase: int = 1,
+        nn_type = "GRU",
     ) -> None:
         super(RNNWavefunction, self).__init__()
         self.device = device
@@ -43,23 +44,46 @@ class RNNWavefunction(nn.Module):
         self.num_layers = num_layers
         self.symmetry = symmetry
         self.rnn_type = rnn_type
+        self.nn_type = nn_type
         if rnn_type == "complex":
             self.compute_phase = True
         elif rnn_type == "real":
             self.compute_phase = False
         else:
             raise TypeError(f"RNN-nqs types{rnn_type} must be in ('complex', 'real')")
-
-        # input_size: spin 1/2
-        self.GRU = nn.GRU(
-            input_size=2,
-            hidden_size=num_hiddens,
-            num_layers=num_layers,
-            batch_first=True,
-            bias=False,
-            **self.factory_kwargs,
-        )
-        # self.GRU = nn.GRUCell(input_size=2, hidden_size=num_hiddens, **self.factory_kwargs)
+        if self.nn_type == "GRU":
+            # input_size: spin 1/2
+            self.GRU = nn.GRU(
+                input_size=2,
+                hidden_size=num_hiddens,
+                num_layers=num_layers,
+                batch_first=True,
+                bias=False,
+                **self.factory_kwargs,
+            )
+            self.RNNnn = self.GRU
+            # self.GRU = nn.GRUCell(input_size=2, hidden_size=num_hiddens, **self.factory_kwargs)
+        if self.nn_type == "RNN":
+            self.RNN = nn.RNN(
+                input_size=2,
+                hidden_size=num_hiddens,
+                num_layers=num_layers,
+                batch_first=True,
+                bias=False,
+                **self.factory_kwargs,
+            )
+            self.RNNnn = self.RNN
+        if self.nn_type == "LSTM":
+            self.LSTM = nn.LSTM(
+                input_size=2,
+                hidden_size=num_hiddens,
+                num_layers=num_layers,
+                batch_first=True,
+                bias=False,
+                **self.factory_kwargs,
+            )
+            self.RNNnn = self.LSTM
+        
         self.linear_amp = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
 
         self.common_linear = common_linear
@@ -108,7 +132,7 @@ class RNNWavefunction(nn.Module):
         s += f"amplitude and phase common Linear: {self.common_linear}, "
         s += f"combined amplitude and phase layers: {self.combine_amp_phase}\n"
         net_param_num = lambda net: sum(p.numel() for p in net.parameters())
-        gru_num = net_param_num(self.GRU)
+        gru_num = net_param_num(self.RNNnn)
         amp_num = net_param_num(self.linear_amp)
         s += f"params: GRU: {gru_num}, amp: {amp_num}, "
         if self.compute_phase:
@@ -122,7 +146,7 @@ class RNNWavefunction(nn.Module):
         return s
 
     def rnn(self, x: Tensor, hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
-        output, hidden_state = self.GRU(x, hidden_state)
+        output, hidden_state = self.RNNnn(x, hidden_state)
         # output: (nbatch, 1, sorb)
         return output.squeeze(1), hidden_state
 
