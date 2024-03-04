@@ -26,6 +26,7 @@ from vmc.optim import VMCOptimizer, GD
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise
 from libs.C_extension import onv_to_tensor
 from torchinfo import summary
+from tmp.support import make_prefix
 
 # from qubic import MPS_c, mps_CIcoeff, mps_sample, RunQubic
 # from qubic.qmatrix import convert_mps
@@ -38,7 +39,7 @@ print = partial(print, flush=True)
 if __name__ == "__main__":
     # dist.init_process_group("nccl")
     dist.init_process_group("gloo")
-    device = "cuda"
+    device = "cpu"
     # init_process(backend="nccl", device=device)
     # local_rank = int(os.environ["LOCAL_RANK"])
     local_rank = 0
@@ -89,7 +90,8 @@ if __name__ == "__main__":
     #         },
     #         "./molecule/SHCI/N2-2.20.pth",
     #     )
-    e = torch.load("./molecule/H6-1.60.pth", map_location="cpu")
+    e_name = "H6-1.60"
+    e = torch.load("./molecule/"+e_name+".pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -134,8 +136,7 @@ if __name__ == "__main__":
         phase_hidden_size=[64, 64],
         n_out_phase=1,
     ).to(device=device)
-    ansatz = rnn
-    modelname = "RNN"
+    
     # rbm = RBMWavefunction(sorb, alpha=2, device=device, rbm_type="cos")
 
     # ar_rbm = RBMSites(
@@ -166,21 +167,29 @@ if __name__ == "__main__":
     # )
 
     # ansatz = transformer
-    dcut=10
+    dcut = 4
+    MPS_RNN_1D = MPS_RNN_1D(
+        nqubits=sorb,
+        nele=nele,
+        device=device,
+        dcut=dcut,
+        # param_dtype = torch.complex128
+        # tensor=False,
+    )
+
     MPS_RNN_2D = MPS_RNN_2D(
         nqubits=sorb,
         nele=nele,
-        alpha_nele=nele // 2,
-        beta_nele=nele // 2,
-        use_symmetry=True,
-        wf_type="complex",
-        n_layers=2,
         device=device,
         dcut=dcut,
-        # hilbert_local = 4,
+        # param_dtype = torch.complex128
+        # tensor=False,
     )
+    # ansatz = rnn
+    # modelname = "RNN"
     ansatz = MPS_RNN_2D
     modelname = "MPS_RNN_2D"
+
     if rank == 0:
         net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
         logger.info(net_param_num(ansatz))
@@ -194,7 +203,7 @@ if __name__ == "__main__":
 
     sampler_param = {
         "n_sample": int(1.0e12),
-        "debug_exact": False,  # exact optimization
+        "debug_exact": True,  # exact optimization
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -214,7 +223,7 @@ if __name__ == "__main__":
     }
 
     # opt
-    opt_type = optim.Adam
+    opt_type = optim.AdamW
     opt_params = {"lr": 1.0, "betas": (0.9, 0.99), "weight_decay": 0.0}
     # opt_params = {"lr": 0.005, "betas": (0.9, 0.99)}
     # lr_scheduler = optim.lr_scheduler.MultiStepLR
@@ -229,40 +238,38 @@ if __name__ == "__main__":
 
     # data-dtype
     dtype = Dtype(dtype=torch.complex128, device=device)
-    preconditioner = KFACPreconditioner(model)
+    # preconditioner = KFACPreconditioner(model)
     # dtype = Dtype(dtype=torch.double, device=device)
     # print(f"rank: {dist.get_rank()}, size: {dist.get_world_size()}")
-    opt_vmc = VMCOptimizer(
-        nqs=model,
-        opt_type=opt_type,
-        opt_params=opt_params,
-        lr_scheduler=lr_scheduler,
-        lr_sch_params=lr_sch_params,
-        # external_model="H4-1.60-sample.pth",
-        dtype=dtype,
-        sampler_param=sampler_param,
-        only_sample=False,
-        electron_info=electron_info,
-        max_iter=1000,
-        interval=10,
-        MAX_AD_DIM=1000,
-        sr=False,
-        pre_CI=ucisd_wf,
-        pre_train_info=pre_train_info,
-        noise_lambda=0.0,
-        # check_point="./tmp/vmc-111-pre-train-checkpoint.pth",
-        method_grad="AD",
-        method_jacobian="vector",
-        prefix=make_prefix(ansatz=modelname, seed=seed, no="dcut="+f"{dcut}", e_name= e_name),
-        kfac = preconditioner,
-    )
-    # opt_vmc.pre_train()
-    # breakpoint()
-    opt_vmc.run()
+    vmc_opt_params = {
+        "nqs": model,
+        "opt_type": opt_type,
+        "opt_params": opt_params,
+        "lr_scheduler": lr_scheduler,
+        "lr_sch_params": lr_sch_params,
+        # "external_model": "H4-1.60-sample.pth",
+        "dtype": dtype,
+        "sampler_param": sampler_param,
+        "only_sample": False,
+        "electron_info": electron_info,
+        "max_iter": 10000,
+        "interval": 1,
+        "MAX_AD_DIM": 5000,
+        "pre_CI": ucisd_wf,
+        "pre_train_info": pre_train_info,
+        "noise_lambda": 0.0,
+        # "check_point": f"./molecule/SHCI/N2-2.20-333-checkpoint.pth",
+        "method_grad": "AD",
+        "method_jacobian": "vector",
+        "prefix": make_prefix(seed = seed,ansatz=modelname,no="dcut="+str(dcut)+"_dt="+"c_",e_name=e_name),
+        "use_clip_grad": True,
+        "max_grad_norm": 100,
+        "start_clip_grad": 4,
+    }
     e_ref = e_lst[0]
     opt_vmc = VMCOptimizer(**vmc_opt_params)
     opt_vmc.run()
-    opt_vmc.summary(e_ref, e_lst, prefix=f"./tmp/nqs-H4-1.60-{seed}")
+    opt_vmc.summary(e_ref, e_lst, prefix=make_prefix(seed = seed,ansatz=modelname,no="dcut="+str(dcut),e_name=e_name))
     # semi = NqsCi(select_CI, 
     #              cNqs_pow_min=0.01,
     #              use_sample_space=False,
