@@ -137,7 +137,7 @@ class MPS_RNN_2D(nn.Module):
         self.bottom_boundary = torch.zeros((self.hilbert_local, self.dcut),device=self.device, dtype=self.param_dtype)
         self.boundary = torch.zeros((self.hilbert_local, self.dcut),device=self.device, dtype=self.param_dtype)
         ## 竖着
-        self.h_boundary = torch.ones((self.M,self.L,self.hilbert_local, self.dcut), dtype=self.param_dtype)
+        self.h_boundary = torch.ones((self.M,self.L,self.hilbert_local, self.dcut),device=self.device , dtype=self.param_dtype)
 
         self.order = get_order("snake", dim_graph=2, L=self.L, M=self.M, site=2)
         # 初始化部分

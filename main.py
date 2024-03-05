@@ -54,15 +54,15 @@ if __name__ == "__main__":
     # electronic structure information
     # if dist.get_rank() == 0:
     #     atom: str = ""
-    #     bond = 1.60
-    #     # for k in range(6):
-    #     #     atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
+    #     bond = 1.10
+    #     for k in range(2):
+    #         atom += f"N, 0.00, 0.00, {k * bond:.3f} ;"
     #     integral_file = tempfile.mkstemp()[1]
     #     sorb, nele, e_lst, fci_amp, ucisd_amp, mf = interface(
     #         atom, integral_file=integral_file, cisd_coeff=True,
     #         basis="sto-3g",
-    #         localized_orb=False,
-    #         localized_method="lowdin",
+    #         # localized_orb=False,
+    #         # localized_method="lowdin",
     #     )
     #     logger.info(e_lst)
     #     h1e, h2e, ci_space, ecore, sorb = read_integral(
@@ -88,9 +88,9 @@ if __name__ == "__main__":
     #             "ucisd_amp": ucisd_amp,
     #             "fci_amp": fci_amp,
     #         },
-    #         "./molecule/SHCI/N2-2.20.pth",
+    #         "./molecule/N2-1.10.pth",
     #     )
-    e_name = "H6-1.60"
+    e_name = "H8-1.60"
     e = torch.load("./molecule/"+e_name+".pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
@@ -135,6 +135,7 @@ if __name__ == "__main__":
         phase_batch_norm=False,
         phase_hidden_size=[64, 64],
         n_out_phase=1,
+        nn_type="RNN",
     ).to(device=device)
     
     # rbm = RBMWavefunction(sorb, alpha=2, device=device, rbm_type="cos")
@@ -167,7 +168,7 @@ if __name__ == "__main__":
     # )
 
     # ansatz = transformer
-    dcut = 4
+    dcut = 10
     MPS_RNN_1D = MPS_RNN_1D(
         nqubits=sorb,
         nele=nele,
@@ -176,19 +177,23 @@ if __name__ == "__main__":
         # param_dtype = torch.complex128
         # tensor=False,
     )
-
+    # print(sorb)
+    # breakpoint()
     MPS_RNN_2D = MPS_RNN_2D(
         nqubits=sorb,
         nele=nele,
         device=device,
         dcut=dcut,
-        # param_dtype = torch.complex128
-        # tensor=False,
+        param_dtype = torch.complex128,
+        tensor=False,
+        # 这两个是规定二维计算的长宽的。
+        M=10,
+        hilbert_local=4,
     )
-    # ansatz = rnn
-    # modelname = "RNN"
-    ansatz = MPS_RNN_2D
-    modelname = "MPS_RNN_2D"
+    ansatz = rnn
+    modelname = "RNN"
+    # ansatz = MPS_RNN_2D
+    # modelname = "MPS_RNN_2D"
 
     if rank == 0:
         net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
