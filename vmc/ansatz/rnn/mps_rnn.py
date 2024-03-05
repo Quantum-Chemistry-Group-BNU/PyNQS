@@ -14,17 +14,18 @@ from utils.public_function import (
     setup_seed,
 )
 
-def get_order(order_type, dim_graph, L, M):
+def get_order(order_type, dim_graph, L, M, site=1):
     '''
     用于给图指定排序,snake代表蛇形排序.
     '''
     assert dim_graph == 2
+    if site == 2:
+        M = M//2
 
     if order_type == "none":
         a = torch.arange(L * M)
     elif order_type == "snake":
         a = torch.arange(L * M).reshape((L, M)) # 编号
-        # print(a)
         a[1::2] = torch.flip(a[1::2], dims=[1]) # reorder： 排成蛇形
         # a = torch.flip(a, dims=[0]) # reorder： 反过来，蛇从底下开始爬
     return a
@@ -93,12 +94,7 @@ def caculate_p(h, gamma):
     the equation is
     P=\vec{h}^\dagger\bm{\gamma}\vec{h}
     '''
-    # if h.dtype == torch.complex128:
-        # return torch.einsum("iac,ibc,ab->ic",h.conj(),h,gamma)
     return torch.einsum("iac,ibc,ab->ic",torch.abs(h),torch.abs(h),gamma)
-    # else:
-    #     return torch.einsum("iac,ibc,ab->ic",torch.abs(h),torch.abs(h),gamma)
-    
 
 
 
@@ -137,18 +133,55 @@ class MPS_RNN_2D(nn.Module):
         self.tensor = tensor
 
         # 边界条件
-        self.left_boundary = torch.ones((self.hilbert_local, self.dcut), dtype=self.param_dtype)
-        self.bottom_boundary = torch.zeros((self.hilbert_local, self.dcut), dtype=self.param_dtype)
-        self.boundary = torch.zeros((self.hilbert_local, self.dcut), dtype=self.param_dtype)
+        self.left_boundary = torch.ones((self.hilbert_local, self.dcut),device=self.device, dtype=self.param_dtype)
+        self.bottom_boundary = torch.zeros((self.hilbert_local, self.dcut),device=self.device, dtype=self.param_dtype)
+        self.boundary = torch.zeros((self.hilbert_local, self.dcut),device=self.device, dtype=self.param_dtype)
         ## 竖着
         self.h_boundary = torch.ones((self.M,self.L,self.hilbert_local, self.dcut), dtype=self.param_dtype)
 
-        self.order = get_order("snake", dim_graph=2, L=self.L, M=self.M)
+        self.order = get_order("snake", dim_graph=2, L=self.L, M=self.M, site=2)
         # 初始化部分
         self.factory_kwargs = {"device": self.device, "dtype": self.param_dtype}
         self.factory_kwargs_complex = {"device": self.device, "dtype": torch.complex128}
-        self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}    
+        self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
 
+        if self.hilbert_local == 2:
+            self.param_init_one_site()
+        else:
+            self.param_init_two_site()   
+
+        
+    def update_h(self, i, j, h_h, h_v):
+        '''
+        x: 输入的编码，是一个长条矩阵 (n_batch, n_qubits) -1/+1
+        '''
+        # 更新纵向 (M,L,hilbert_local,dcut,dcut) (dcut,n_batch)
+        h_v = h_v + torch.einsum("abc,bd->acd",self.parm_M_v[i,j,...], h_v)
+        # 更新横向
+        h_h = h_h + torch.einsum("abc,bd->acd",self.parm_M_h[i,j,...], h_h)
+        return h_h, h_v
+    def forward(self, x: Tensor):
+        '''
+        定义输入 x
+        如何算出一个数出来（或者说算出一个矢量）
+        '''
+        target = (x+1)//2
+        n_batch = x.shape[0]
+        h = self.h_boundary
+        h = (torch.unsqueeze(h, -1)).repeat(1,1,1,1,n_batch) # (local_hilbert_dim, dcut, n_batch)
+        phi = torch.zeros(n_batch ,device=self.device) # (n_batch,)
+        amp = torch.ones(n_batch ,device=self.device) # (n_batch,)
+        if self.hilbert_local == 2:
+            amp, phi = self.caculate_one_site(h,target,n_batch,amp,phi)
+        else:
+            amp, phi = self.caculate_two_site(h,target,n_batch,amp,phi)
+        psi_amp = amp
+        # 相位部分
+        psi_phase = torch.exp(1j*phi)
+        psi = psi_amp * psi_phase
+        return psi
+        
+    def param_init_one_site(self):
         if self.param_dtype == torch.complex128:
             self.parm_M_h_r = nn.Parameter(torch.randn(self.M*self.L*self.hilbert_local*self.dcut*self.dcut,2, **self.factory_kwargs_real) * self.iscale / (self.dcut)**0.5)
             self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(self.M, self.L, self.hilbert_local, self.dcut, self.dcut)
@@ -169,9 +202,7 @@ class MPS_RNN_2D(nn.Module):
             self.parm_v = nn.Parameter(torch.randn(self.M, self.L, self.hilbert_local, self.dcut, **self.factory_kwargs) * self.iscale)
             if self.tensor:
                 self.parm_T = nn.Parameter(torch.randn(self.M, self.L, self.hilbert_local, self.dcut, self.dcut, self.dcut, **self.factory_kwargs) * self.iscale / (self.dcut)**0.5)
-
-
-
+        
         self.parm_w_r = nn.Parameter(torch.randn(self.M * self.L*self.dcut,2, **self.factory_kwargs_real) * self.iscale)
         self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.M, self.L, self.dcut)
 
@@ -180,28 +211,40 @@ class MPS_RNN_2D(nn.Module):
 
         self.parm_eta_r = nn.Parameter(torch.randn(self.M*self.L*self.dcut*self.dcut,2, **self.factory_kwargs_real) * self.iscale)
         self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(self.M, self.L, self.dcut,self.dcut)
+
+    def param_init_two_site(self):
+        if self.param_dtype == torch.complex128:
+            self.parm_M_h_r = nn.Parameter(torch.randn(self.M*self.L*self.hilbert_local*self.dcut*self.dcut//2,2, **self.factory_kwargs_real) * self.iscale / (self.dcut)**0.5)
+            self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(self.M//2, self.L, self.hilbert_local, self.dcut, self.dcut)
+            
+            self.parm_M_v_r = nn.Parameter(torch.randn(self.M*self.L*self.hilbert_local*self.dcut*self.dcut//2,2, **self.factory_kwargs_real) * self.iscale / (self.dcut)**0.5)
+            self.parm_M_v = torch.view_as_complex(self.parm_M_v_r).view(self.M//2, self.L, self.hilbert_local, self.dcut, self.dcut)
+
+            self.parm_v_r = nn.Parameter(torch.randn(self.M*self.L*self.hilbert_local*self.dcut//2,2, **self.factory_kwargs_real) * self.iscale)
+            self.parm_v = torch.view_as_complex(self.parm_v_r).view(self.M//2, self.L, self.hilbert_local, self.dcut)
+            if self.tensor:
+                self.parm_T_r = nn.Parameter(torch.randn(self.M*self.L*self.hilbert_local*self.dcut*self.dcut*self.dcut//2,2, **self.factory_kwargs_real) * self.iscale / (self.dcut)**0.5)
+                self.parm_T = torch.view_as_complex(self.parm_T_r).view(self.M//2, self.L, self.hilbert_local, self.dcut, self.dcut, self.dcut)
+
+        else:
+            self.parm_M_h = nn.Parameter(torch.randn(self.M//2, self.L, self.hilbert_local, self.dcut, self.dcut, **self.factory_kwargs) * self.iscale / (self.dcut)**0.5)
+            self.parm_M_v = nn.Parameter(torch.randn(self.M//2, self.L, self.hilbert_local, self.dcut, self.dcut, **self.factory_kwargs) * self.iscale / (self.dcut)**0.5)
+
+            self.parm_v = nn.Parameter(torch.randn(self.M//2, self.L, self.hilbert_local, self.dcut, **self.factory_kwargs) * self.iscale)
+            if self.tensor:
+                self.parm_T = nn.Parameter(torch.randn(self.M//2, self.L, self.hilbert_local, self.dcut, self.dcut, self.dcut, **self.factory_kwargs) * self.iscale / (self.dcut)**0.5)
+        self.parm_w_r = nn.Parameter(torch.randn(self.M * self.L*self.dcut//2,2, **self.factory_kwargs_real) * self.iscale)
+        self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.M//2, self.L, self.dcut)
+
+        self.parm_c_r = nn.Parameter(torch.randn(self.M * self.L//2,2, **self.factory_kwargs_real) * self.iscale)
+        self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.M//2, self.L)
+
+        self.parm_eta_r = nn.Parameter(torch.randn(self.M*self.L*self.dcut*self.dcut//2,2, **self.factory_kwargs_real) * self.iscale)
+        self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(self.M//2, self.L, self.dcut,self.dcut)
         
-    def update_h(self, i, j, h_h, h_v):
-        '''
-        x: 输入的编码，是一个长条矩阵 (n_batch, n_qubits) -1/+1
-        '''
-        # 更新纵向 (M,L,hilbert_local,dcut,dcut) (dcut,n_batch)
-        h_v = h_v + torch.einsum("abc,bd->acd",self.parm_M_v[i,j,...], h_v)
-        # 更新横向
-        h_h = h_h + torch.einsum("abc,bd->acd",self.parm_M_h[i,j,...], h_h)
-        return h_h, h_v
-    def forward(self, x: Tensor):
-        '''
-        定义输入 x
-        如何算出一个数出来（或者说算出一个矢量）
-        '''
-        target = (x+1)//2
-        n_batch = x.shape[0]
-        h = self.h_boundary
-        h = (torch.unsqueeze(h, -1)).repeat(1,1,1,1,n_batch) # (local_hilbert_dim, dcut, n_batch)
-        phi = torch.zeros(n_batch) # (n_batch,)
-        amp = torch.ones(n_batch) # (n_batch,)
-        for i in range(0,self.M*self.L):
+
+    def caculate_one_site(self, h, target, n_batch, amp, phi):
+        for i in range(0,self.nqubits):
             k=i
             if i > 0:
                 k = k-1
@@ -211,7 +254,6 @@ class MPS_RNN_2D(nn.Module):
             idx = torch.nonzero(self.order == i)
             a = idx[0,1] # x
             b = idx[0,0] # y
-            # breakpoint()
             if a % 2 == 0: #偶数行，左->右
                 if a ==0:
                     h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(1,1,n_batch) # (hilbert_local, dcut ,n_batch) 索引i前面的h（h未更新）
@@ -263,12 +305,72 @@ class MPS_RNN_2D(nn.Module):
             phi_i = self.parm_w[a,b] @ h_i # (dcut, n_batch) (dcut) -> (n_batch)
             phi_i = phi_i + self.parm_c[a,b]
             phi = phi + torch.angle(phi_i)
-        psi_amp = amp
-        # 相位部分
-        psi_phase = torch.exp(1j*phi)
-        psi = psi_amp * psi_phase
-        return psi
-        
+        return amp, phi
+
+    def caculate_two_site(self, h, target, n_batch, amp, phi):
+        for i in range(0,self.nqubits//2):
+            k=i
+            if i > 0:
+                k = k-1
+            q_k = (self.state_to_int(target[:,2*k:2*k+2],sites=2)) # 第i-1个site的具体sigma (n_batch)
+            q_k = (q_k.view(1,1,-1)).repeat(1,self.dcut,1)
+            # 横向传播并纵向计算概率
+            idx = torch.nonzero(self.order == i)
+            a = idx[0,1] # x
+            b = idx[0,0] # y
+            if a % 2 == 0: #偶数行，左->右
+                if a ==0:
+                    h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(1,1,n_batch) # (hilbert_local, dcut ,n_batch) 索引i前面的h（h未更新）
+                else:
+                    if a ==0 and b !=0 :
+                        h_h = (torch.unsqueeze(self.boundary, -1)).repeat(1,1,n_batch)
+                    else:
+                        h_h = h[a-1,b,...] # (hilbert_local, dcut ,n_batch)
+            else: #奇数行，右->左
+                if a ==self.M-1:
+                    h_h = (torch.unsqueeze(self.boundary, -1)).repeat(1,1,n_batch)
+                else:
+                    h_h = h[a+1,b,...] # (hilbert_local, dcut ,n_batch)
+            if b == 0:
+                h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(1,1,n_batch) # (hilbert_local, dcut ,n_batch)
+            else:
+                h_v = h[a,b-1,...] # (hilbert_local, dcut ,n_batch)
+            # 取上一个设置的条件
+            h_h = h_h.gather(0, q_k).view(self.dcut,n_batch) # (dcut ,n_batch) 
+            h_v = h_v.gather(0, q_k).view(self.dcut,n_batch) # (dcut ,n_batch) 
+            if self.tensor:
+                T = torch.einsum("iabc,an,bn->icn",self.parm_T[a,b,...], h_h, h_v)
+            # 更新纵向 (hilbert_local,dcut,dcut) (dcut,n_batch) -> (hilbert_local,dcut,n_batch)
+            h_v = h_v + torch.einsum("abc,bd->acd",self.parm_M_v[a,b,...], h_v) # 这里不是h了实际上是h的更新
+            # 更新横向
+            h_h = h_h + torch.einsum("abc,bd->acd",self.parm_M_h[a,b,...], h_h)
+            # 更新h 
+            h_ud = h[a,b]
+            # breakpoint()
+            h_ud = h_ud + h_v + h_h + (torch.unsqueeze(self.parm_v[a,b], -1)).repeat(1,1,n_batch)
+            if self.tensor:
+                h_ud  =h_ud + T
+            # 确保数值稳定性的操作
+            normal = torch.einsum("ijk,ijk->k",h_ud.conj(),h_ud) # 分母上sqrt里面
+            normal = normal ** 0.5
+            h_ud = h_ud / (normal.view(1,1,-1)).repeat(self.hilbert_local,self.dcut,1) # 确保数值稳定性的归一化（是按照(S5)归一化，计算矩阵Frobenius二范数）
+            h = h.clone()
+            h[a, b] = h_ud # 更新h
+            # 计算概率（振幅部分）
+            P = caculate_p(h[a,b], torch.abs(self.parm_eta[a,b])+1e-15) # -> (local_hilbert_dim, n_batch)
+            P = P**0.5 
+            P = P / ((torch.max(P, dim=0)[0]).view(1, -1)).repeat(self.hilbert_local, 1) # 数值稳定性
+            P = F.normalize(P,  dim=0, eps=1e-15)
+            index = self.state_to_int(target[:,2*i:2*i+2],sites=2).view(1,-1)
+            amp = amp * P.gather(0, index).view(-1) # (local_hilbert_dim, n_batch) -> (n_batch)
+            h_i = h[a,b].gather(0, q_k).view(self.dcut,n_batch)
+            h_i = h_i.to(torch.complex128)
+            # 计算相位
+            phi_i = self.parm_w[a,b] @ h_i # (dcut, n_batch) (dcut) -> (n_batch)
+            phi_i = phi_i + self.parm_c[a,b]
+            phi = phi + torch.angle(phi_i)
+        return amp, phi
+            
     def state_to_int(self, x: Tensor, value=-1, sites: int = 2) -> Tensor:
         """
         convert +1/-1 -> (0, 1, 2, 3), or +1/0, dtype = torch.int64
@@ -305,14 +407,16 @@ class MPS_RNN_1D(nn.Module):
         self.hilbert_local = hilbert_local
         self.param_dtype = param_dtype
 
-        # 边界条件
-        self.left_boundary = torch.ones((self.hilbert_local, self.dcut), dtype=self.param_dtype)
-        self.right_boundary = torch.ones((self.hilbert_local, self.dcut), dtype=self.param_dtype)
+        
         
         # 初始化部分
         self.factory_kwargs = {"device": self.device, "dtype": self.param_dtype}
         self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
         self.factory_kwargs_complex = {"device": self.device, "dtype": torch.complex128}
+
+        # 边界条件
+        self.left_boundary = torch.ones((self.hilbert_local, self.dcut), **self.factory_kwargs)
+        self.right_boundary = torch.ones((self.hilbert_local, self.dcut), **self.factory_kwargs)
 
         if self.param_dtype == torch.complex128:
             self.parm_M_r = nn.Parameter(torch.randn(self.nqubits//2 * self.hilbert_local*self.dcut*self.dcut,2, **self.factory_kwargs_real) * self.iscale / (self.dcut)**0.5)
