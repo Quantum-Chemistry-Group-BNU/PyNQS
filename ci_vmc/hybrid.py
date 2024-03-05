@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import os
+import warnings
 import torch
 import torch.distributed as dist
 import numpy as np
@@ -71,6 +72,8 @@ class NqsCi(BaseVMCOptimizer):
         use_sample_space: bool = False,
         MAX_FP_DIM: int = -1,
         grad_strategy: int = 0,
+        use_KNN_E0: bool = False,
+        K_step: int = 1000,
         **vmc_opt_kwargs: dict,
     ) -> None:
         # Remove pre-train info
@@ -90,7 +93,7 @@ class NqsCi(BaseVMCOptimizer):
             raise NotImplementedError(f"grad-strategy muse be in 0,1,2")
         self.grad_strategy = grad_strategy
         if self.grad_strategy == 2:
-            raise TypeError(f"This method is fail")
+            warnings.warn(f"This method is fail", RuntimeWarning)
 
         self.ci_det = CI.space
         self.ci_num = CI.space.size(0)
@@ -149,6 +152,12 @@ class NqsCi(BaseVMCOptimizer):
         # logger.info(f"rank-ci-num: {self.rank_ci_num}")
         # logger.info(f"numel: {numel}, numel1: {numel1}")
 
+        # E0_mean: K-step E0 mean
+        use_KNN_E0 = True
+        self.use_KNN_E0 = use_KNN_E0
+        self.k_step = K_step
+        self.E0_mean: float = 0.0
+        self.E0_lst = np.zeros(self.max_iter, dtype=np.double)
         if self.rank == 0:
             # double or int64
             pre_memory = sum(map(torch.numel, self.ci_nqs_info)) * 8 / 2**30
@@ -158,14 +167,18 @@ class NqsCi(BaseVMCOptimizer):
                 pre_memory += self.ci_nqs_value.numel() * 8 * 2 / 2**30
             else:
                 pre_memory += self.ci_nqs_value.numel() * 8 / 2**30
-            s = f"CI-NQS, det-num: {self.ci_num}, "
+            s = "CI-NQS:(\n"
+            s += f"CI-NQS, det-num: {self.ci_num}, "
             s += f"Matrix shape: ({dim}, {dim}), "
             s += f"min cNqs^2: {cNqs_pow_min:.4E}\n"
             s += f"start_iter: {self.start_iter}, "
             s += f"use-sample-space: {self.use_sample_space}\n"
             s += f"pre-allocated memory: {pre_memory:.5f}GiB\n"
             s += f"Grad-strategy: {self.grad_strategy}, "
-            s += f"MAX_FP_DIM: {self.MAX_FP_DIM}"
+            s += f"MAX_FP_DIM: {self.MAX_FP_DIM}\n"
+            s += f"USE KNN E0-mean: {self.use_KNN_E0}, "
+            s += f"K-step: {self.k_step}"
+            s += "\n)"
             logger.info(s, master=True)
 
     def make_ci_hij(self) -> None:
@@ -393,6 +406,17 @@ class NqsCi(BaseVMCOptimizer):
         if MAX_AD_DIM == -1:
             MAX_AD_DIM = dim
         idx_lst = [0] + split_batch_idx(dim=dim, min_batch=MAX_AD_DIM)
+
+        if self.use_KNN_E0:
+            self.E0_lst[epoch] = E0
+            if epoch < self.k_step:
+                E0 = E0
+            else:
+                start = epoch - self.k_step
+                end = epoch
+                E0 = self.E0_lst[start:end].mean()
+            if self.rank == 0:
+                logger.info(f"KNN-E0: {E0:.12f}", master=True)
 
         # scale cNqs
         scale = 1.0

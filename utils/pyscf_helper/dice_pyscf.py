@@ -15,6 +15,7 @@ from pyscf import scf, gto, lo
 
 from libs.C_extension import tensor_to_onv
 from ci import CIWavefunction
+from utils.onv import ONV
 
 
 def run_shci(
@@ -66,7 +67,7 @@ def run_shci(
     e_PT = shci.readEnergy(mc.fcisolver)
     print(f"SHCI Variational: {e_noPT:.12f}")
     print(f"SHCI Perturbative: {e_PT:.12f}")
-    
+
     if det_file is not None:
         # default: ./dets.bin
         path = os.path.join(os.getcwd(), "./dets.bin")
@@ -131,7 +132,12 @@ def read_dice_wf(filename: str, device: str = None) -> CIWavefunction:
     space[ob] = 1
     space = space.reshape(num_det, norbs * 2)
 
-    coeffs = torch.from_numpy(coeffs)
+    # sign IaIb => onv
+    sign = np.ones(num_det, dtype=np.double)
+    for i in range(num_det):
+        sign[i] = ONV(onv=space[i]).phase()
+    coeffs = torch.from_numpy(coeffs * sign)
+
     space = torch.from_numpy(space).to(torch.uint8)  # 0/1
     x = tensor_to_onv(space, norbs * 2)  # uint8 0b1111
     wf = CIWavefunction(coeffs, x, device=device)
