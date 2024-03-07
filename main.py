@@ -90,7 +90,7 @@ if __name__ == "__main__":
     #         },
     #         "./molecule/N2-1.10.pth",
     #     )
-    e_name = "H8-1.60"
+    e_name = "N2-1.10"
     e = torch.load("./molecule/"+e_name+".pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
@@ -168,8 +168,9 @@ if __name__ == "__main__":
     # )
 
     # ansatz = transformer
-    dcut = 10
+    dcut = 6
     MPS_RNN_1D = MPS_RNN_1D(
+        use_symmetry=True,
         nqubits=sorb,
         nele=nele,
         device=device,
@@ -180,6 +181,7 @@ if __name__ == "__main__":
     # print(sorb)
     # breakpoint()
     MPS_RNN_2D = MPS_RNN_2D(
+        use_symmetry=True,
         nqubits=sorb,
         nele=nele,
         device=device,
@@ -190,10 +192,10 @@ if __name__ == "__main__":
         M=10,
         hilbert_local=4,
     )
-    ansatz = rnn
-    modelname = "RNN"
-    # ansatz = MPS_RNN_2D
-    # modelname = "MPS_RNN_2D"
+    # ansatz = rnn
+    # modelname = "RNN"
+    ansatz = MPS_RNN_2D
+    modelname = "MPS_RNN_2D"
 
     if rank == 0:
         net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
@@ -207,8 +209,8 @@ if __name__ == "__main__":
         model = DDP(ansatz)
 
     sampler_param = {
-        "n_sample": int(1.0e12),
-        "debug_exact": True,  # exact optimization
+        "n_sample": int(1.0e4),
+        "debug_exact": False,  # exact optimization
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -218,7 +220,7 @@ if __name__ == "__main__":
         "use_LUT": True,
         "use_unique": True,
         "reduce_psi": False,
-        "use_sample_space": False,
+        "use_sample_space": True,
         "eps": 1.0e-10,
         "only_AD": False,
         # "use_same_tree": True,  # different rank-sample

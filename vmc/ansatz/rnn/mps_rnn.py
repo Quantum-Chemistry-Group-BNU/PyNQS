@@ -10,7 +10,7 @@ import sys
 
 sys.path.append("./")
 
-from vmc.ansatz.utils import OrbitalBlock, joint_next_samples
+from vmc.ansatz.utils import joint_next_samples, joint_next_samples
 from vmc.ansatz.symmetry import symmetry_mask
 from libs.C_extension import onv_to_tensor
 from utils.public_function import (
@@ -172,6 +172,32 @@ class MPS_RNN_2D(nn.Module):
             self.param_init_one_site()
         else:
             self.param_init_two_site()
+        
+        # 对称性
+        self.use_symmetry = use_symmetry
+        if alpha_nele == None:
+            self.alpha_nele = self.nele // 2
+        else:
+            self.alpha_nele = alpha_nele
+        self.beta_nele = self.nele - self.alpha_nele
+
+        self.min_n_sorb = min(
+            [
+                self.nqubits - 2 * self.alpha_nele,
+                self.nqubits - 2 * self.beta_nele,
+                2 * self.alpha_nele,
+                2 * self.beta_nele,
+            ]
+        )
+        
+        self._symmetry_mask = partial(
+            symmetry_mask,
+            sorb=self.nqubits,
+            alpha=self.alpha_nele,
+            beta=self.beta_nele,
+            min_k=self.min_n_sorb,
+            sites=2,
+        )
 
     def update_h(self, i, j, h_h, h_v):
         """
@@ -196,10 +222,13 @@ class MPS_RNN_2D(nn.Module):
         )  # (local_hilbert_dim, dcut, n_batch)
         phi = torch.zeros(n_batch, device=self.device)  # (n_batch,)
         amp = torch.ones(n_batch, device=self.device)  # (n_batch,)
+        num_up = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
+        num_down = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
         if self.hilbert_local == 2:
-            amp, phi = self.caculate_one_site(h, target, n_batch, amp, phi)
+            amp, phi = self.caculate_one_site(h, target, n_batch, i, num_up, num_down, amp, phi)
         else:
-            amp, phi = self.caculate_two_site(h, target, n_batch, amp, phi)
+            for i in range(0, self.nqubits // 2):
+                amp, phi, h = self.caculate_two_site(h, target, n_batch, i, num_up, num_down, amp, phi)
         psi_amp = amp
         # 相位部分
         psi_phase = torch.exp(1j * phi)
@@ -434,6 +463,31 @@ class MPS_RNN_2D(nn.Module):
             self.M // 2, self.L, self.dcut, self.dcut
         )
 
+    def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
+        """
+        Constraints Fock space -> FCI space
+        """
+        if self.use_symmetry:
+            return self._symmetry_mask(k=k, num_up=num_up, num_down=num_down)
+        else:
+            return torch.ones(num_up.size(0), 4, **self.factory_kwargs)
+    
+    def mask_input(self, x, mask, val) -> Tensor:
+        """
+        用来mask输入作对称性
+        """
+        if mask is not None:
+            m = mask.clone()
+            if m.dtype == torch.bool:
+                x_ = x.masked_fill(~m.to(x.device), val)
+            else:
+                x_ = x.masked_fill(((1 - m.to(x.device)).real).bool(), val)
+        else:
+            x_ = x
+        if x_.dim() < 2:
+            x_.unsqueeze_(0)
+        return x_
+
     def caculate_one_site(self, h, target, n_batch, amp, phi):
         for i in range(0, self.nqubits):
             k = i
@@ -510,74 +564,87 @@ class MPS_RNN_2D(nn.Module):
             phi = phi + torch.angle(phi_i)
         return amp, phi
 
-    def caculate_two_site(self, h, target, n_batch, amp, phi):
-        for i in range(0, self.nqubits // 2):
-            k = i
-            if i > 0:
-                k = k - 1
-            q_k = self.state_to_int(
-                target[:, 2 * k : 2 * k + 2], sites=2
-            )  # 第i-1个site的具体sigma (n_batch)
-            q_k = (q_k.view(1, 1, -1)).repeat(1, self.dcut, 1)
-            # 横向传播并纵向计算概率
-            idx = torch.nonzero(self.order == i)
-            a = idx[0, 1]  # x
-            b = idx[0, 0]  # y
-            if a % 2 == 0:  # 偶数行，左->右
-                if a == 0:
-                    h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
-                        1, 1, n_batch
-                    )  # (hilbert_local, dcut ,n_batch) 索引i前面的h（h未更新）
-                else:
-                    if a == 0 and b != 0:
-                        h_h = (torch.unsqueeze(self.boundary, -1)).repeat(1, 1, n_batch)
-                    else:
-                        h_h = h[a - 1, b, ...]  # (hilbert_local, dcut ,n_batch)
-            else:  # 奇数行，右->左
-                if a == self.M - 1:
+    def caculate_two_site(self, h, target, n_batch, i, num_up, num_down, amp, phi=None):
+        # symm.
+        psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
+        k = i
+        if i > 0:
+            k = k - 1
+        q_k = self.state_to_int(
+            target[:, 2 * k : 2 * k + 2], sites=2
+        )  # 第i-1个site的具体sigma (n_batch)
+        q_k = (q_k.view(1, 1, -1)).repeat(1, self.dcut, 1)
+
+        if phi == None:
+            if i==0 :
+                q_k = torch.zeros(1,self.dcut,n_batch,device=self.device, dtype=torch.int64)
+        # 横向传播并纵向计算概率
+        idx = torch.nonzero(self.order == i)
+        a = idx[0, 1]  # x
+        b = idx[0, 0]  # y
+        if a % 2 == 0:  # 偶数行，左->右
+            if a == 0:
+                h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
+                    1, 1, n_batch
+                )  # (hilbert_local, dcut ,n_batch) 索引i前面的h（h未更新）
+            else:
+                if a == 0 and b != 0:
                     h_h = (torch.unsqueeze(self.boundary, -1)).repeat(1, 1, n_batch)
                 else:
-                    h_h = h[a + 1, b, ...]  # (hilbert_local, dcut ,n_batch)
-            if b == 0:
-                h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
-                    1, 1, n_batch
-                )  # (hilbert_local, dcut ,n_batch)
+                    h_h = h[a - 1, b, ...]  # (hilbert_local, dcut ,n_batch)
+        else:  # 奇数行，右->左
+            if a == self.M - 1:
+                h_h = (torch.unsqueeze(self.boundary, -1)).repeat(1, 1, n_batch)
             else:
-                h_v = h[a, b - 1, ...]  # (hilbert_local, dcut ,n_batch)
-            # 取上一个设置的条件
-            h_h = h_h.gather(0, q_k).view(self.dcut, n_batch)  # (dcut ,n_batch)
-            h_v = h_v.gather(0, q_k).view(self.dcut, n_batch)  # (dcut ,n_batch)
-            if self.tensor:
-                T = torch.einsum("iabc,an,bn->icn", self.parm_T[a, b, ...], h_h, h_v)
-            # 更新纵向 (hilbert_local,dcut,dcut) (dcut,n_batch) -> (hilbert_local,dcut,n_batch)
-            h_v = h_v + torch.einsum(
-                "abc,bd->acd", self.parm_M_v[a, b, ...], h_v
-            )  # 这里不是h了实际上是h的更新
-            # 更新横向
-            h_h = h_h + torch.einsum("abc,bd->acd", self.parm_M_h[a, b, ...], h_h)
-            # 更新h
-            h_ud = h[a, b]
-            # breakpoint()
-            h_ud = h_ud + h_v + h_h + (torch.unsqueeze(self.parm_v[a, b], -1)).repeat(1, 1, n_batch)
-            if self.tensor:
-                h_ud = h_ud + T
-            # 确保数值稳定性的操作
-            normal = torch.einsum("ijk,ijk->k", h_ud.conj(), h_ud)  # 分母上sqrt里面
-            normal = normal**0.5
-            h_ud = h_ud / (normal.view(1, 1, -1)).repeat(
-                self.hilbert_local, self.dcut, 1
-            )  # 确保数值稳定性的归一化（是按照(S5)归一化，计算矩阵Frobenius二范数）
-            h = h.clone()
-            h[a, b] = h_ud  # 更新h
-            # 计算概率（振幅部分）
-            P = caculate_p(
-                h[a, b], torch.abs(self.parm_eta[a, b]) + 1e-15
-            )  # -> (local_hilbert_dim, n_batch)
-            P = P**0.5
-            P = P / ((torch.max(P, dim=0)[0]).view(1, -1)).repeat(
-                self.hilbert_local, 1
-            )  # 数值稳定性
-            P = F.normalize(P, dim=0, eps=1e-15)
+                h_h = h[a + 1, b, ...]  # (hilbert_local, dcut ,n_batch)
+        if b == 0:
+            h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
+                1, 1, n_batch
+            )  # (hilbert_local, dcut ,n_batch)
+        else:
+            h_v = h[a, b - 1, ...]  # (hilbert_local, dcut ,n_batch)
+        # 取上一个设置的条件
+        h_h = h_h.gather(0, q_k).view(self.dcut, n_batch)  # (dcut ,n_batch)
+        h_v = h_v.gather(0, q_k).view(self.dcut, n_batch)  # (dcut ,n_batch)
+        if self.tensor:
+            T = torch.einsum("iabc,an,bn->icn", self.parm_T[a, b, ...], h_h, h_v)
+        # 更新纵向 (hilbert_local,dcut,dcut) (dcut,n_batch) -> (hilbert_local,dcut,n_batch)
+        h_v = h_v + torch.einsum(
+            "abc,bd->acd", self.parm_M_v[a, b, ...], h_v
+        )  # 这里不是h了实际上是h的更新
+        # 更新横向
+        h_h = h_h + torch.einsum("abc,bd->acd", self.parm_M_h[a, b, ...], h_h)
+        # 更新h
+        h_ud = h[a, b]
+        # breakpoint()
+        h_ud = h_ud + h_v + h_h + (torch.unsqueeze(self.parm_v[a, b], -1)).repeat(1, 1, n_batch)
+        if self.tensor:
+            h_ud = h_ud + T
+        # 确保数值稳定性的操作
+        normal = torch.einsum("ijk,ijk->k", h_ud.conj(), h_ud)  # 分母上sqrt里面
+        normal = normal**0.5
+        h_ud = h_ud / (normal.view(1, 1, -1)).repeat(
+            self.hilbert_local, self.dcut, 1
+        )  # 确保数值稳定性的归一化（是按照(S5)归一化，计算矩阵Frobenius二范数）
+        h = h.clone()
+        h[a, b] = h_ud  # 更新h
+        # 计算概率（振幅部分）
+        P = caculate_p(
+            h[a, b], torch.abs(self.parm_eta[a, b]) + 1e-15
+        )  # -> (local_hilbert_dim, n_batch)
+        P = P**0.5
+        P = P / ((torch.max(P, dim=0)[0]).view(1, -1)).repeat(
+            self.hilbert_local, 1
+        )  # 数值稳定性
+        if phi != None:
+            # symm.
+            P = self.mask_input(P.T, psi_mask, 0.0).T
+            num_up.add_(target[..., 2 * i].to(torch.int64))
+            num_down.add_(target[..., 2 * i + 1].to(torch.int64))
+        P = F.normalize(P, dim=0, eps=1e-15)
+        if phi == None:
+            return P, h
+        else:
             index = self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).view(1, -1)
             amp = amp * P.gather(0, index).view(-1)  # (local_hilbert_dim, n_batch) -> (n_batch)
             h_i = h[a, b].gather(0, q_k).view(self.dcut, n_batch)
@@ -586,7 +653,7 @@ class MPS_RNN_2D(nn.Module):
             phi_i = self.parm_w[a, b] @ h_i  # (dcut, n_batch) (dcut) -> (n_batch)
             phi_i = phi_i + self.parm_c[a, b]
             phi = phi + torch.angle(phi_i)
-        return amp, phi
+            return amp, phi, h
 
     def extra_repr(self) -> str:
         s = f"The MPS_RNN_2D is working on {self.device}.\n"
@@ -605,6 +672,12 @@ class MPS_RNN_2D(nn.Module):
         s += f"The bond dim in MPS part is{self.dcut}, the local dim of Hilbert space is {self.hilbert_local}."
         return s
 
+    def joint_next_samples(self, unique_sample: Tensor, mask: Tensor = None) -> Tensor:
+        """
+        Creative the next possible unique sample
+        """
+        return joint_next_samples(unique_sample, mask=mask, sites=2)
+
     def state_to_int(self, x: Tensor, value=-1, sites: int = 2) -> Tensor:
         """
         convert +1/-1 -> (0, 1, 2, 3), or +1/0, dtype = torch.int64
@@ -615,6 +688,46 @@ class MPS_RNN_2D(nn.Module):
         else:
             idxs = x
         return idxs
+    
+    def _interval_sample(
+        self,
+        sample_unique: Tensor,
+        sample_counts: Tensor,
+        amps_value: Tensor,
+        begin: int,
+        end: int,
+        min_batch: int = -1,
+        interval: int = 1,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, int]:
+        l = begin
+        h = self.h_boundary
+        for i in range(begin, end, interval):
+            x0 = sample_unique
+            num_up = sample_unique[:, ::2].sum(dim=1)
+            num_down = sample_unique[:, 1::2].sum(dim=1)
+            n_batch = x0.shape[0]
+            amp = torch.ones(n_batch, device=self.device)  # (n_batch,)
+            h = (torch.unsqueeze(h, -1)).repeat(1, 1, 1, 1, n_batch)  # (local_hilbert_dim, dcut, n_batch)
+            if self.hilbert_local == 4:
+                psi_amp_k, h = self.caculate_two_site(h, x0, n_batch, i, num_up, num_down, amp, phi=None)
+            else:
+                raise NotImplementedError(f"Please use the 2-sites mode")
+            psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
+            psi_amp_k = self.mask_input(psi_amp_k.T, psi_mask, 0.0)
+            psi_amp_k = psi_amp_k / (torch.max(psi_amp_k, dim=1)[0]).view(-1, 1)
+            psi_amp_k = F.normalize(psi_amp_k, dim=1, eps=1e-14)
+
+            counts_i = multinomial_tensor(sample_counts, psi_amp_k.pow(2)).T.flatten()
+
+            idx_count = counts_i > 0
+            sample_counts = counts_i[idx_count]
+            sample_unique = self.joint_next_samples(sample_unique)[idx_count]
+            amps_value = torch.mul(amps_value.unsqueeze(1).repeat(1, 4), psi_amp_k).T.flatten()[
+                idx_count
+            ]
+            l += interval
+            h = h[...,0]
+        return sample_unique, sample_counts, amps_value, 2 * l
 
     @torch.no_grad()
     def forward_sample(self, n_sample: int, min_batch: int = -1) -> Tuple[Tensor, Tensor, Tensor]:
@@ -824,12 +937,12 @@ class MPS_RNN_1D(nn.Module):
         q_i = torch.unsqueeze(q_i.T, 1).repeat(1, h.shape[1], 1) # 用来索引 (1 ,dcut ,n_batch)
         if phi == None:
             if i==0 :
-                q_i = torch.zeros(1,h.shape[1],n_batch, dtype=torch.int64)
+                q_i = torch.zeros(1,h.shape[1],n_batch,device=self.device, dtype=torch.int64)
         # 横向传播并纵向计算概率
         # breakpoint()
         # print(i)
         h = h.gather(0, q_i).view(
-            q_i.shape[1], n_batch
+            self.dcut, n_batch
         )  # (dcut ,n_batch) 索引i前面的h（h未更新）
         # 更新h
         h = torch.einsum(
@@ -879,7 +992,7 @@ class MPS_RNN_1D(nn.Module):
             amp = amp * P.gather(0, index).view(-1)  # (local_hilbert_dim, n_batch) -> (n_batch)
             # 计算相位
             # breakpoint()
-            h_i = h.gather(0, q_i).view(q_i.shape[1], n_batch)
+            h_i = h.gather(0, q_i).view(self.dcut, n_batch)
             h_i = h_i.to(torch.complex128)
             phi_i = self.parm_w[i] @ h_i  # (dcut, n_batch) (dcut) -> (n_batch)
             phi_i = phi_i + self.parm_c[i]
@@ -898,6 +1011,12 @@ class MPS_RNN_1D(nn.Module):
         s += f"The number included in eta is {(self.parm_eta.numel())}\n"
         s += f"The bond dim in MPS part is{self.dcut}, the local dim of Hilbert space is {self.hilbert_local}\n"
         return s
+
+    def joint_next_samples(self, unique_sample: Tensor, mask: Tensor = None) -> Tensor:
+        """
+        Creative the next possible unique sample
+        """
+        return joint_next_samples(unique_sample, mask=mask, sites=2)
 
     def state_to_int(self, x: Tensor, value=-1, sites: int = 2) -> Tensor:
         """
@@ -940,7 +1059,7 @@ class MPS_RNN_1D(nn.Module):
 
             idx_count = counts_i > 0
             sample_counts = counts_i[idx_count]
-            sample_unique = joint_next_samples(sample_unique)[idx_count]
+            sample_unique = self.joint_next_samples(sample_unique)[idx_count]
             amps_value = torch.mul(amps_value.unsqueeze(1).repeat(1, 4), psi_amp_k).T.flatten()[
                 idx_count
             ]
@@ -977,27 +1096,40 @@ if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
     device = "cpu"
-    sorb = 4
-    nele = 2
+    sorb = 12
+    nele = 4
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     length = fock_space.shape[0]
     fci_space = onv_to_tensor(
         get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb
     )
     dim = fci_space.size(0)
-    MPS_RNN_1D = MPS_RNN_1D(
+    MPS_RNN_1D = MPS_RNN_2D(
         use_symmetry=True,
+        hilbert_local=4,
         nqubits=sorb,
         nele=nele,
         device=device,
         dcut=2,
     )
+    # MPS_RNN_1D = MPS_RNN_2D(
+    #     nqubits=sorb,
+    #     nele=nele,
+    #     device=device,
+    #     dcut=2,
+    #     param_dtype = torch.complex128,
+    #     tensor=False,
+    #     # 这两个是规定二维计算的长宽的。
+    #     M=10,
+    #     hilbert_local=4,
+    # )
     print("============MPS--RNN============")
     print(f"Psi^2 in AR-Sampling")
     print("--------------------------------")
     sample, counts, wf = MPS_RNN_1D.ar_sampling(n_sample=int(1e12))
     wf1 = MPS_RNN_1D((sample * 2 - 1).double())
     print(wf1)
+    breakpoint()
     print(f"The Size of the Samples' set is {wf1.shape}")
     print(f"Psi^2: {(wf1*wf1.conj()).sum()}")
     print(f"Sample-wf == forward-wf: {torch.allclose(wf, wf1)}")
