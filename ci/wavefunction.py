@@ -225,6 +225,10 @@ class CITrain:
         # max forward dim
         self.MAX_FP_DIM = pre_train_info.get("MAX_FP_DIM", -1)
 
+        self.use_clip_grad: bool = False
+        self.max_grad_norm: float = 1.0
+        self.start_clip_grad: int = 1000
+
     def train(
         self,
         prefix: str = None,
@@ -294,6 +298,7 @@ class CITrain:
                 loss, ovlp = self.test_phase_loss(use_global_phase=True)
 
             if epoch <= self.pre_max_iter:
+                self.clip_grad(epoch=epoch)
                 self.opt.step()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
@@ -390,6 +395,17 @@ class CITrain:
             logger.info("*" * 100, master=True)
             self.plot_figure(prefix)
 
+    def clip_grad(self, epoch: int) -> None:
+        """
+        clip model grad use 2-norm
+        """
+        if self.use_clip_grad and epoch > self.start_clip_grad:
+            x = nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.max_grad_norm, foreach=True
+            )
+            if self.rank == 0:
+                logger.info(f"Clip-grad, g: {x:.4E}, g0: {self.max_grad_norm:4E}", master=True)
+
     def sqaure_loss(self) -> Tuple[Tensor, Tensor, Tensor]:
         """
         using least sqaure method to fits CI-space coefficient
@@ -400,6 +416,7 @@ class CITrain:
         model_CI = psi / torch.norm(psi).flatten().to(self.dtype)
         ovlp = torch.einsum("i, i", model_CI, self.pre_ci_coeff)
         loss = 1 - ovlp.norm() ** 2
+        loss.backward()
         return (loss, ovlp.detach(), model_CI.detach())
 
     def QGT_loss(

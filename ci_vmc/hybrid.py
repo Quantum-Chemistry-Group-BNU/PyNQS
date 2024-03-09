@@ -80,6 +80,7 @@ class NqsCi(BaseVMCOptimizer):
         vmc_opt_kwargs.pop("pre_CI", None)
         vmc_opt_kwargs.pop("pre_train_info", None)
         vmc_opt_kwargs.pop("noise_lambda", None)
+        vmc_opt_kwargs.pop("clean_opt_state", None)
         super(NqsCi, self).__init__(**vmc_opt_kwargs)
 
         # check ansatz remove det
@@ -273,7 +274,7 @@ class NqsCi(BaseVMCOptimizer):
             if WF_LUT is None:
                 raise ValueError(f"Use LUT to speed up <ci|H|phi_nqs>")
             lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(onv_x1)
-            psi_x1[lut_idx] = lut_value
+            psi_x1[lut_idx] = lut_value.to(self.dtype)
             # use-sample-space, like eloc-energy
             if self.use_sample_space:
                 ...
@@ -575,3 +576,37 @@ class NqsCi(BaseVMCOptimizer):
             s = f"End CI-NQS iteration: {time.ctime()}\n"
             s += f"total cost time: {vmc_time:.3E} s, {vmc_time/60:.3E} min {vmc_time/3600:.3E} h"
             logger.info(s, master=True)
+
+    def operator_expected(
+        self,
+        h1e: Tensor = None,
+        h2e: Tensor = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor]:
+        """
+        calculate <O> using different h1e, h2e, e.g. S_S+, H.
+
+        Returns:
+            state, prob, eloc, eloc_mean, E0, ci_coeff, nqs_coeff
+        """
+
+        state, prob, eloc, eloc_mean, e_total = self._operator_expected(h1e, h2e)
+
+        sample_state = onv_to_tensor(state, self.sorb)
+        if self.exact:
+            with torch.no_grad():
+                phi_nqs = self.model(sample_state)
+        else:
+            WF_LUT = self.sampler.WF_LUT
+            if WF_LUT is None:
+                raise ValueError(f"Use LUT to speed up <phi_nqs|H|phi_nqs>")
+            not_idx, phi_nqs = WF_LUT.lookup(state)[1:]
+            assert not_idx.size(0) == 0
+
+        self.make_ci_nqs()  # <phi_i|H|phi_nqs>
+        self.make_nqs_nqs(phi_nqs, eloc_mean)  # <phi_nqs|H|phi_nqs>
+        E0 = self.solve_eigh()  # solve HC = εC, C0({ci},c_N)
+
+        c1 = self.ci_coeff
+        c2 = self.nqs_coeff
+
+        return sample_state, prob, eloc, eloc_mean, E0, c1, c2

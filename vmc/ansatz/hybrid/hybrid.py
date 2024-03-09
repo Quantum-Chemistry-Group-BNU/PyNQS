@@ -32,6 +32,12 @@ class HybridWaveFunction(nn.Module):
         self.device = device
         self.dtype = dtype
 
+        # CI-NQS check
+        if hasattr(amp_layers, "remove_det"):
+            self.remove_det = amp_layers.remove_det
+        if hasattr(amp_layers, "det_lut"):
+            self.det_lut = amp_layers.det_lut
+
         # phase model: exp(i * phase) or phase
         self.phase_exp = phase_exp
 
@@ -45,16 +51,29 @@ class HybridWaveFunction(nn.Module):
             phase = torch.complex(torch.zeros_like(phase), phase).exp()
         return phase
 
-    def hybrid_forward(self, x: Tensor) -> Tensor:
+    def hybrid_forward(self, x: Tensor, *keys, **kwargs) -> Tensor:
         # x: -1/+1
-        amp = self.amp_layers(x)
-        phase = self.phase_comb(-1 * x.double()) # -1/1 -> 1/-1
+        amp = self.amp_layers(x, *keys, **kwargs)
+        phase = self.phase_comb(-1 * x.double())  # -1/1 -> 1/-1
         # amp * exp(i * phase)
         wf = amp * phase
 
         return wf
 
-    def ar_sampling(self, n_sample: int, *keys, **kwargs) -> Tuple[Tensor, Tensor, Tensor]:
+    def __repr__(self) -> str:
+        net_param_num = lambda net: sum(p.numel() for p in net.parameters())
+        phase_num = net_param_num(self.phase_layers)
+        amp_param = net_param_num(self.amp_layers)
+        s = f"params: phase: {phase_num}, amplitude: {amp_param}\n"
+        s += f"Amp: {self.amp_layers}\n"
+        s += f"Phase: {self.phase_layers}\n"
+        if self.phase_exp:
+            s += f"Phase model: exp(i * phase)\n"
+        else:
+            s += f"Phase model: phase\n"
+        return s
+
+    def ar_sampling(self,n_sample: int, *keys, **kwargs) -> Tuple[Tensor, Tensor, Tensor]:
         r"""
         ar sample
 
@@ -70,8 +89,8 @@ class HybridWaveFunction(nn.Module):
 
         return sample_unique, sample_counts, wf
 
-    def forward(self, x: Tensor) -> Tensor:
-        return self.hybrid_forward(x)
+    def forward(self, x, *keys, **kwargs) -> Tensor:
+        return self.hybrid_forward(x, *keys, **kwargs)
 
 
 if __name__ == "__main__":

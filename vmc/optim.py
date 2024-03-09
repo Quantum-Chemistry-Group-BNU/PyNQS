@@ -4,6 +4,7 @@ import time
 import random
 import platform
 import os
+import collections
 import subprocess
 import sys
 import warnings
@@ -59,6 +60,7 @@ class BaseVMCOptimizer(ABC):
 
     you need implement 'run' and 'pre_train' method
     """
+
     sys_name = platform.node()
     # torch.compile is lower in GTX 1650, but faster in A100
     # using_compile: bool = True if sys_name != "myarch" and TORCH_VERSION >= '2.0.0' else False
@@ -375,6 +377,40 @@ class BaseVMCOptimizer(ABC):
         pre train
         """
 
+
+    def _operator_expected(
+        self,
+        h1e: Tensor = None,
+        h2e: Tensor = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """
+        calculate <O> using different h1e, h2e, e.g. S_S+, H.
+
+        Returns:
+            state, prob, eloc, eloc-mean, e-total
+        """
+        if h1e is not None:
+            h1e_old = self.sampler.h1e
+            assert h1e.shape == h1e_old.shape
+            self.sampler.h1e = h1e.to(self.device)
+        if h2e is not None:
+            h2e_old = self.sampler.h2e
+            assert h2e.shape == h2e_old.shape
+            self.sampler.h2e = h2e.to(self.device)
+
+        initial_state = self.onstate[0].clone().detach()
+        epoch = self.max_iter
+        state, prob, eloc, e_total, stats, eloc_mean = self.sampler.run(initial_state, epoch)
+        sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
+
+        # revise
+        if h1e is not None:
+            self.sampler.h1e = h1e_old
+        if h2e is not None:
+            self.sampler.h2e = h2e_old
+
+        return sample_state, prob, eloc, eloc_mean
+
     def summary(
         self,
         e_ref: float = None,
@@ -515,6 +551,7 @@ class VMCOptimizer(BaseVMCOptimizer):
         only_sample: bool = False,
         pre_CI: CIWavefunction = None,
         pre_train_info: dict = None,
+        clean_opt_state: bool = False,
         noise_lambda: float = 0.05,
         method_grad: str = "AD",
         sr: bool = False,
@@ -558,6 +595,7 @@ class VMCOptimizer(BaseVMCOptimizer):
         self.pre_CI = pre_CI
         self.pre_train_info = pre_train_info
         self.noise_lambda = noise_lambda
+        self.clean_opt_state = clean_opt_state
 
         # avoid ansatz remove CI-Det
         model = self.model_raw.module
@@ -655,6 +693,19 @@ class VMCOptimizer(BaseVMCOptimizer):
             s += f"{total_time/60:.3E} min {total_time/3600:.3E} h"
             logger.info(s, master=True)
 
+    def operator_expected(
+        self,
+        h1e: Tensor = None,
+        h2e: Tensor = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """
+        calculate <O> using different h1e, h2e, e.g. S_S+, H.
+
+        Returns:
+            state, prob, eloc, eloc-mean
+        """
+        return self._operator_expected(h1e, h2e)
+
     def noise_tune(self, noise_lambda: float = None) -> None:
         """
         NoisyTune
@@ -662,6 +713,14 @@ class VMCOptimizer(BaseVMCOptimizer):
         """
         if noise_lambda is None:
             noise_lambda = self.noise_lambda
+
+        # avoid tensor.numel() == 1
+        def _std(tensor: Tensor):
+            if tensor.numel() > 1:
+                return torch.std(tensor)
+            else:
+                return torch.zeros_like(tensor)
+
         if noise_lambda > 0.0:
             for name, para in self.model.named_parameters():
                 dtype = para.dtype
@@ -669,7 +728,7 @@ class VMCOptimizer(BaseVMCOptimizer):
                 self.model.state_dict()[name][:] += (
                     (torch.rand(para.size(), device=device, dtype=dtype) - 0.5)
                     * noise_lambda
-                    * torch.std(para)
+                    * _std(para)
                 )
 
     def pre_train(self, prefix: str = None) -> None:
@@ -685,10 +744,21 @@ class VMCOptimizer(BaseVMCOptimizer):
             self.lr_scheduler,
             self.exact,
         )
+
+        # clip-grad using VMC-opt params
+        t.max_grad_norm = self.max_grad_norm
+        t.use_clip_grad = self.use_clip_grad
+        t.start_clip_grad = self.start_clip_grad
         if self.rank == 0:
             logger.info(f"pre-train:\n{t}", master=True)
         t.train(prefix=prefix, electron_info=self.sampler.ele_info, sampler=self.sampler)
 
+        if self.clean_opt_state:
+            self.opt.state = collections.defaultdict(dict)
+            if self.rank == 0:
+                s = "Clean opt-state after pre-train"
+                s += "*" * 100
+                logger.info(s, master=True)
         # Add noise
         self.noise_tune(self.noise_lambda)
         del t

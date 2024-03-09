@@ -245,11 +245,11 @@ class GlobalPhase(nn.Module):
     def __init__(self, device=None) -> None:
         super(GlobalPhase, self).__init__()
         # init phi [0, 2pi]
-        self.phi = nn.Parameter(torch.rand(1, device=device)[0] * 2 * torch.pi)
+        self.phi = nn.Parameter(torch.rand(1, device=device) * 2 * torch.pi)
 
     def __repr__(self) -> str:
         return "GlobalPhase exp(i * phi)"
 
     def forward(self, use: bool = True) -> Tensor:
         # * bool, avoid use find_unused_parameters=True
-        return torch.exp(1j * self.phi * use)
+        return torch.exp(1j * self.phi[0] * use)
