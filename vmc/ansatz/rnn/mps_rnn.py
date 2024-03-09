@@ -435,45 +435,53 @@ class MPS_RNN_2D(nn.Module):
                         self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut, self.dcut
                     )
                     self.parm_T = nn.Parameter(self.parm_T)
-        else:
-            self.parm_M_h = nn.Parameter(
-                torch.randn(
-                    self.M // 2,
-                    self.L,
-                    self.hilbert_local,
-                    self.dcut,
-                    self.dcut,
-                    **self.factory_kwargs,
-                )
-                * self.iscale
-                / (self.dcut) ** 0.5
-            )
-            self.parm_M_v = nn.Parameter(
-                torch.randn(
-                    self.M // 2,
-                    self.L,
-                    self.hilbert_local,
-                    self.dcut,
-                    self.dcut,
-                    **self.factory_kwargs,
-                )
-                * self.iscale
-                / (self.dcut) ** 0.5
-            )
+                
+                self.parm_M_h = torch.view_as_real(self.parm_M_h).view(-1,2)
+                self.parm_M_v = torch.view_as_real(self.parm_M_v).view(-1,2)
+                self.parm_v = torch.view_as_real(self.parm_v).view(-1,2)
+                if self.tensor:
+                    self.parm_T = torch.view_as_real(self.parm_T).view(-1,2)
 
-            self.parm_v = nn.Parameter(
-                torch.randn(
-                    self.M // 2, self.L, self.hilbert_local, self.dcut, **self.factory_kwargs
-                )
-                * self.iscale
-            )
-            if self.tensor:
-                self.parm_T = nn.Parameter(
+                self.parm_M_h_r = nn.Parameter(self.parm_M_h)
+                self.parm_M_v_r = nn.Parameter(self.parm_M_v)
+                self.parm_v_r = nn.Parameter(self.parm_v)
+                if self.tensor:
+                    self.parm_T_r = nn.Parameter(self.parm_T)
+                
+                self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut)
+                self.parm_M_v = torch.view_as_complex(self.parm_M_v_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut)
+                self.parm_v = torch.view_as_complex(self.parm_v_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut)
+                if self.tensor:
+                    self.parm_T = torch.view_as_complex(self.parm_T_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut, self.dcut)
+        else:
+            if self.dcut_params != None:
+                params = self.dcut_params
+                self.parm_M_h = torch.rand(self.M//2 , self.L , self.hilbert_local , self.dcut , self.dcut ,**self.factory_kwargs_real)* self.iscale/ (self.dcut) ** 0.5
+                self.parm_M_v = torch.rand(self.M//2 , self.L , self.hilbert_local , self.dcut , self.dcut ,**self.factory_kwargs_real)* self.iscale/ (self.dcut) ** 0.5
+                self.parm_v = torch.rand(self.M//2 , self.L , self.hilbert_local , self.dcut ,**self.factory_kwargs_real)* self.iscale
+                if self.tensor:
+                    self.parm_T = torch.rand(self.M , self.L , self.hilbert_local , self.dcut , self.dcut , self.dcut// 2,**self.factory_kwargs_real)* self.iscale/ (self.dcut) ** 0.5
+                self.parm_M_h_r = self.parm_M_h.clone()
+                self.parm_M_h_r[...,:self.dcut_step,:self.dcut_step] = params["module.parm_M_h"].view(self.M // 2, self.L, self.hilbert_local, self.dcut_step, self.dcut_step)
+                self.parm_M_v_r = self.parm_M_v.clone()
+                self.parm_M_v_r[...,:self.dcut_step,:self.dcut_step] = params["module.parm_M_v"].view(self.M // 2, self.L, self.hilbert_local, self.dcut_step, self.dcut_step)
+                self.parm_v_r = self.parm_v.clone()
+                self.parm_v_r[...,:self.dcut_step] = params["module.parm_v"].view(self.M // 2, self.L, self.hilbert_local, self.dcut_step)
+                if self.tensor:
+                    self.parm_T_r = self.parm_T.clone()
+                    self.parm_T_r[...,:self.dcut_step,:self.dcut_step,:self.dcut_step] = params["module.parm_T"].view(self.M // 2, self.L, self.hilbert_local, self.dcut_step, self.dcut_step, self.dcut_step)
+                self.parm_M_h = nn.Parameter(self.parm_M_h_r)
+                self.parm_M_v = nn.Parameter(self.parm_M_v_r)
+                self.parm_v = nn.Parameter(self.parm_v_r)
+                if self.tensor:
+                    self.parm_T_r = nn.Parameter(self.parm_T_r)
+
+            else:
+                self.parm_M_h = nn.Parameter(
                     torch.randn(
                         self.M // 2,
                         self.L,
                         self.hilbert_local,
-                        self.dcut,
                         self.dcut,
                         self.dcut,
                         **self.factory_kwargs,
@@ -481,6 +489,39 @@ class MPS_RNN_2D(nn.Module):
                     * self.iscale
                     / (self.dcut) ** 0.5
                 )
+                self.parm_M_v = nn.Parameter(
+                    torch.randn(
+                        self.M // 2,
+                        self.L,
+                        self.hilbert_local,
+                        self.dcut,
+                        self.dcut,
+                        **self.factory_kwargs,
+                    )
+                    * self.iscale
+                    / (self.dcut) ** 0.5
+                )
+
+                self.parm_v = nn.Parameter(
+                    torch.randn(
+                        self.M // 2, self.L, self.hilbert_local, self.dcut, **self.factory_kwargs
+                    )
+                    * self.iscale
+                )
+                if self.tensor:
+                    self.parm_T = nn.Parameter(
+                        torch.randn(
+                            self.M // 2,
+                            self.L,
+                            self.hilbert_local,
+                            self.dcut,
+                            self.dcut,
+                            self.dcut,
+                            **self.factory_kwargs,
+                        )
+                        * self.iscale
+                        / (self.dcut) ** 0.5
+                    )
         if self.dcut_params != None:
             self.parm_w_r = torch.rand((self.M * self.L * self.dcut // 2, 2), **self.factory_kwargs_real)* self.iscale
             self.parm_eta_r = torch.rand((self.M * self.L * self.dcut * self.dcut // 2, 2), **self.factory_kwargs_real) * self.iscale
@@ -496,33 +537,23 @@ class MPS_RNN_2D(nn.Module):
             # self.parm_c = torch.view_as_complex(params["module.parm_c_r"]).view(self.M // 2, self.L)
             self.parm_eta[...,:self.dcut_step,:self.dcut_step] = torch.view_as_complex(params["module.parm_eta_r"]).view(self.M // 2, self.L, self.dcut_step, self.dcut_step)
             
-            self.parm_M_h = torch.view_as_real(self.parm_M_h).view(-1,2)
-            self.parm_M_v = torch.view_as_real(self.parm_M_v).view(-1,2)
-            self.parm_v = torch.view_as_real(self.parm_v).view(-1,2)
-            if self.tensor:
-                self.parm_T = torch.view_as_real(self.parm_T).view(-1,2)
+            
             self.parm_w = torch.view_as_real(self.parm_w).view(-1,2)
             self.parm_c = torch.view_as_real(self.parm_c).view(-1,2)
             self.parm_eta = torch.view_as_real(self.parm_eta).view(-1,2)
         
-            self.parm_M_h_r = nn.Parameter(self.parm_M_h)
-            self.parm_M_v_r = nn.Parameter(self.parm_M_v)
-            self.parm_v_r = nn.Parameter(self.parm_v)
+            
             self.parm_w_r = nn.Parameter(self.parm_w)
             self.parm_c_r = nn.Parameter(self.parm_c)
             self.parm_eta_r = nn.Parameter(self.parm_eta)
-            if self.tensor:
-                self.parm_T_r = nn.Parameter(self.parm_T)
+            
             # breakpoint()
 
-            self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut)
-            self.parm_M_v = torch.view_as_complex(self.parm_M_v_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut)
-            self.parm_v = torch.view_as_complex(self.parm_v_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut)
+            
             self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.M // 2, self.L, self.dcut)
             self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.M // 2, self.L)
             self.parm_eta =torch.view_as_complex(self.parm_eta_r).view(self.M // 2, self.L, self.dcut, self.dcut)
-            if self.tensor:
-                self.parm_T = torch.view_as_complex(self.parm_T_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut, self.dcut)
+            
         else:
             self.parm_w_r = nn.Parameter(
                 torch.randn(self.M * self.L * self.dcut // 2, 2, **self.factory_kwargs_real)
