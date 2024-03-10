@@ -377,6 +377,24 @@ class MPS_RNN_2D(nn.Module):
                         self.M // 2, self.L, self.hilbert_local, self.dcut_step, self.dcut_step, self.dcut_step
                     )
                 
+                self.parm_M_h = torch.view_as_real(self.parm_M_h).view(-1,2)
+                self.parm_M_v = torch.view_as_real(self.parm_M_v).view(-1,2)
+                self.parm_v = torch.view_as_real(self.parm_v).view(-1,2)
+                if self.tensor:
+                    self.parm_T = torch.view_as_real(self.parm_T).view(-1,2)
+
+                self.parm_M_h_r = nn.Parameter(self.parm_M_h)
+                self.parm_M_v_r = nn.Parameter(self.parm_M_v)
+                self.parm_v_r = nn.Parameter(self.parm_v)
+                if self.tensor:
+                    self.parm_T_r = nn.Parameter(self.parm_T)
+                
+                self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut)
+                self.parm_M_v = torch.view_as_complex(self.parm_M_v_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut)
+                self.parm_v = torch.view_as_complex(self.parm_v_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut)
+                if self.tensor:
+                    self.parm_T = torch.view_as_complex(self.parm_T_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut, self.dcut)
+                
             else:
                 self.parm_M_h_r = nn.Parameter(
                     torch.randn(
@@ -436,23 +454,7 @@ class MPS_RNN_2D(nn.Module):
                     )
                     self.parm_T = nn.Parameter(self.parm_T)
                 
-                self.parm_M_h = torch.view_as_real(self.parm_M_h).view(-1,2)
-                self.parm_M_v = torch.view_as_real(self.parm_M_v).view(-1,2)
-                self.parm_v = torch.view_as_real(self.parm_v).view(-1,2)
-                if self.tensor:
-                    self.parm_T = torch.view_as_real(self.parm_T).view(-1,2)
-
-                self.parm_M_h_r = nn.Parameter(self.parm_M_h)
-                self.parm_M_v_r = nn.Parameter(self.parm_M_v)
-                self.parm_v_r = nn.Parameter(self.parm_v)
-                if self.tensor:
-                    self.parm_T_r = nn.Parameter(self.parm_T)
                 
-                self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut)
-                self.parm_M_v = torch.view_as_complex(self.parm_M_v_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut)
-                self.parm_v = torch.view_as_complex(self.parm_v_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut)
-                if self.tensor:
-                    self.parm_T = torch.view_as_complex(self.parm_T_r).view(self.M // 2, self.L, self.hilbert_local, self.dcut, self.dcut, self.dcut)
         else:
             if self.dcut_params != None:
                 params = self.dcut_params
