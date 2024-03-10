@@ -1,3 +1,4 @@
+from __future__ import annotations
 import gc
 import random
 import sys
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv, wavefunction_lut
+from .onv import ONV
 from .distributed import get_rank
 
 
@@ -295,6 +297,18 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor, Tensor, T
     assert torch.all(idx1 < state1.shape[0])
     assert torch.all(idx2 < state2.shape[0])
     return common, idx1, idx2
+
+def sign_IaIb2ONV(space: np.ndarray | Tensor, sorb: int) -> np.ndarray:
+    """
+    convert IaIb -> ONV
+    """
+    assert space.shape[1] == sorb
+    num_det = space.shape[0]
+    sign = np.ones(num_det, dtype=np.double)
+    for i in range(num_det):
+        sign[i] = ONV(onv=space[i]).phase()
+
+    return sign
 
 
 def torch_unique_index(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tensor, Tensor, Tensor]:

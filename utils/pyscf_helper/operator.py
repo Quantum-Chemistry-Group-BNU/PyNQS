@@ -57,6 +57,8 @@ def spin_raising(sbas: int, c1: float = 1.0, compress: bool = True) -> tuple[Ten
         ie = 2 * i
         io = 2 * i + 1
         sp[ie, io] = 1.0
+        # sp[ie, ie] = 1.0  # <Na>
+        # sp[io, io] = 1.0  # <Nb>
     sz = np.zeros((sbas, sbas))
     for i in range(nbas):
         ie = 2 * i
@@ -65,6 +67,7 @@ def spin_raising(sbas: int, c1: float = 1.0, compress: bool = True) -> tuple[Ten
         sz[io, io] = -0.5
 
     if abs(c1) > 1.0e-14:
+        # h1e = c1 * sp
         h1e = c1 * np.dot(sp.T, sp)
     #
     # v[prqs]*p^+r^+sq = 1/2(v[prqs]-v[prsq])*prsq = -2*vA[p<r,s<q]*a(p<r)(s<q)
