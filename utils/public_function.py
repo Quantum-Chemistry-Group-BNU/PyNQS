@@ -569,6 +569,7 @@ def multinomial_tensor(counts_all: Tensor, probs: Tensor, eps: float = 1e-14) ->
     count_others = torch.zeros(nbatch, dtype=torch.int64, device=probs.device)
     for i in range(length - 1, 0, -1):
         x = Binomial(counts_all - count_others, probs_re[..., i])
+        # XXX:(zbwu-24-03-11) add random seed,Why????
         count_i = x.sample().to(torch.int64)
         count_others.add_(count_i)
         counts[..., i] = count_i

@@ -57,6 +57,8 @@ def jacobian_simple(module: nn.Module, states: Tensor) -> Tensor:
         [states.size(0), sum(map(torch.numel, params))], dtype=params[0].dtype
     )
     for i in range(states.size(0)):
+        # XXX:(zbwu-24-03-11, how to implement loss??)
+        raise NotImplementedError(f"module Real/Imag part")
         dws = torch.autograd.grad([module(states[[i]]).log()], params)
         torch.cat([dw.flatten() for dw in dws], out=out[i])
     return out

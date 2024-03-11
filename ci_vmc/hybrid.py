@@ -154,7 +154,6 @@ class NqsCi(BaseVMCOptimizer):
         # logger.info(f"numel: {numel}, numel1: {numel1}")
 
         # E0_mean: K-step E0 mean
-        use_KNN_E0 = True
         self.use_KNN_E0 = use_KNN_E0
         self.k_step = K_step
         self.E0_mean: float = 0.0
@@ -169,16 +168,16 @@ class NqsCi(BaseVMCOptimizer):
             else:
                 pre_memory += self.ci_nqs_value.numel() * 8 / 2**30
             s = "CI-NQS:(\n"
-            s += f"CI-NQS, det-num: {self.ci_num}, "
-            s += f"Matrix shape: ({dim}, {dim}), "
-            s += f"min cNqs^2: {cNqs_pow_min:.4E}\n"
-            s += f"start_iter: {self.start_iter}, "
-            s += f"use-sample-space: {self.use_sample_space}\n"
-            s += f"pre-allocated memory: {pre_memory:.5f}GiB\n"
-            s += f"Grad-strategy: {self.grad_strategy}, "
-            s += f"MAX_FP_DIM: {self.MAX_FP_DIM}\n"
-            s += f"USE KNN E0-mean: {self.use_KNN_E0}, "
-            s += f"K-step: {self.k_step}"
+            s += f"    det-num: {self.ci_num}\n"
+            s += f"    Matrix shape: ({dim}, {dim})\n"
+            s += f"    min cNqs^2: {cNqs_pow_min:.4E}\n"
+            s += f"    start_iter: {self.start_iter}\n"
+            s += f"    use-sample-space: {self.use_sample_space}\n"
+            s += f"    pre-allocated memory: {pre_memory:.5f}GiB\n"
+            s += f"    Grad-strategy: {self.grad_strategy}\n"
+            s += f"    MAX_FP_DIM: {self.MAX_FP_DIM}\n"
+            s += f"    USE KNN E0-mean: {self.use_KNN_E0}\n"
+            s += f"    K-step: {self.k_step}"
             s += "\n)"
             logger.info(s, master=True)
 
@@ -192,7 +191,7 @@ class NqsCi(BaseVMCOptimizer):
         self.Ham_matrix[: self.ci_num, : self.ci_num] = hij
 
     @torch.no_grad()
-    def init_ci_nqs(self) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    def init_ci_nqs(self) -> list[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """
         init <phi_i|H|phi_nqs>
         """
@@ -226,7 +225,7 @@ class NqsCi(BaseVMCOptimizer):
             x1 = torch.zeros(unique_comb.size(0), 0, device=self.device, dtype=torch.double)
 
         info = (hij, x1, onv_x1, inverse_index, det_not_idx)
-        return info
+        return list(info)
 
     @torch.no_grad()
     def _batch_forward(self, x: Tensor, MAX_DIM: int = -1) -> Tensor:
@@ -589,19 +588,39 @@ class NqsCi(BaseVMCOptimizer):
             state, prob, eloc, eloc_mean, E0, ci_coeff, nqs_coeff
         """
 
-        state, prob, eloc, eloc_mean, e_total = self._operator_expected(h1e, h2e)
+        if h1e is None:
+            h1e = self.sampler.h1e
 
-        sample_state = onv_to_tensor(state, self.sorb)
+        if h2e is None:
+            h2e = self.sampler.h2e
+
+        h1e = h1e.to(self.device)
+        h2e = h2e.to(self.device)
+        state, prob, eloc, eloc_mean = self._operator_expected(h1e, h2e)
+
         if self.exact:
             with torch.no_grad():
-                phi_nqs = self.model(sample_state)
+                phi_nqs = self.model(state)  # +1/-1
         else:
             WF_LUT = self.sampler.WF_LUT
             if WF_LUT is None:
                 raise ValueError(f"Use LUT to speed up <phi_nqs|H|phi_nqs>")
-            not_idx, phi_nqs = WF_LUT.lookup(state)[1:]
+            onv = tensor_to_onv(((state + 1) / 2).to(torch.uint8), self.sorb)
+            not_idx, phi_nqs = WF_LUT.lookup(onv)[1:]
             assert not_idx.size(0) == 0
 
+        # New matrix-element using h1e/h2e
+        ci_hij_old = self.Ham_matrix[: self.ci_num, : self.ci_num]
+        ci_hij_new = get_hij_torch(self.ci_det, self.ci_det, h1e, h2e, self.sorb, self.nele)
+
+        ci_nqs_hij_old = self.ci_nqs_info[0]
+        comb_x, _ = get_comb_tensor(
+            self.rank_ci_det, self.sorb, self.nele, self.noa, self.nob, flag_bit=False
+        )
+        ci_nqs_hij_new = get_hij_torch(self.rank_ci_det, comb_x, h1e, h2e, self.sorb, self.nele)
+        self.ci_nqs_info[0] = ci_nqs_hij_new
+
+        self.Ham_matrix[: self.ci_num, : self.ci_num] = ci_hij_new  # <phi_i|H|phi_i>
         self.make_ci_nqs()  # <phi_i|H|phi_nqs>
         self.make_nqs_nqs(phi_nqs, eloc_mean)  # <phi_nqs|H|phi_nqs>
         E0 = self.solve_eigh()  # solve HC = εC, C0({ci},c_N)
@@ -609,4 +628,10 @@ class NqsCi(BaseVMCOptimizer):
         c1 = self.ci_coeff
         c2 = self.nqs_coeff
 
-        return sample_state, prob, eloc, eloc_mean, E0, c1, c2
+        # revise
+        self.Ham_matrix[: self.ci_num, : self.ci_num] = ci_hij_old
+        self.ci_nqs_info[0] = ci_nqs_hij_old
+
+        del comb_x, ci_hij_new, ci_nqs_hij_new
+
+        return state, prob, eloc, eloc_mean, E0, c1, c2
