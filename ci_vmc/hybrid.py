@@ -587,27 +587,37 @@ class NqsCi(BaseVMCOptimizer):
         Returns:
             state, prob, eloc, eloc_mean, E0, ci_coeff, nqs_coeff
         """
+        if self.rank == 0:
+            logger.info(f"{'*' * 30}Begin calculating <O>{'*' * 30}", master=True)
 
-        if h1e is None:
-            h1e = self.sampler.h1e
+        if h1e is not None:
+            h1e_old = self.sampler.h1e
+            assert h1e.shape == h1e_old.shape
+            h1e = h1e.to(self.device)
+            self.sampler.h1e = h1e
+        if h2e is not None:
+            h2e_old = self.sampler.h2e
+            assert h2e.shape == h2e_old.shape
+            h2e = h2e.to(self.device)
+            self.sampler.h2e = h2e
 
-        if h2e is None:
-            h2e = self.sampler.h2e
-
-        h1e = h1e.to(self.device)
-        h2e = h2e.to(self.device)
-        state, prob, eloc, eloc_mean = self._operator_expected(h1e, h2e)
+        # Run sampling
+        initial_state = self.onstate[0].clone().detach()
+        epoch = self.max_iter
+        state, prob, eloc, e_total, stats, eloc_mean = self.sampler.run(initial_state, epoch)
+        sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
+        # state, prob, eloc, eloc_mean = self._operator_expected(h1e, h2e)
 
         if self.exact:
             with torch.no_grad():
-                phi_nqs = self.model(state)  # +1/-1
+                phi_nqs = self.model(sample_state)  # +1/-1
         else:
             WF_LUT = self.sampler.WF_LUT
             if WF_LUT is None:
                 raise ValueError(f"Use LUT to speed up <phi_nqs|H|phi_nqs>")
-            onv = tensor_to_onv(((state + 1) / 2).to(torch.uint8), self.sorb)
-            not_idx, phi_nqs = WF_LUT.lookup(onv)[1:]
-            assert not_idx.size(0) == 0
+            # onv = tensor_to_onv((state + 1) / 2).to(torch.uint8), self.sorb
+            not_idx, phi_nqs = WF_LUT.lookup(state)[1:]
+            assert not_idx.size(0) == 0  # state must be in WaveFunction-LUT
 
         # New matrix-element using h1e/h2e
         ci_hij_old = self.Ham_matrix[: self.ci_num, : self.ci_num]
@@ -628,10 +638,21 @@ class NqsCi(BaseVMCOptimizer):
         c1 = self.ci_coeff
         c2 = self.nqs_coeff
 
+        if self.rank == 0:
+            s = f"<O>: {E0:.10f}, c1: {c1.norm().item():.5f}, c2: {c2.norm().item():.5f}"
+            logger.info(s, master=True)
+
         # revise
         self.Ham_matrix[: self.ci_num, : self.ci_num] = ci_hij_old
         self.ci_nqs_info[0] = ci_nqs_hij_old
+        if h1e is not None:
+            self.sampler.h1e = h1e_old
+        if h2e is not None:
+            self.sampler.h2e = h2e_old
+
+        if self.rank == 0:
+            logger.info(f"{'*'* 30}End <O>{'*' * 30}", master=True)
 
         del comb_x, ci_hij_new, ci_nqs_hij_new
 
-        return state, prob, eloc, eloc_mean, E0, c1, c2
+        return sample_state, prob, eloc, eloc_mean, E0, c1, c2

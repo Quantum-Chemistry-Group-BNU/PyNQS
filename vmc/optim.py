@@ -58,7 +58,7 @@ class BaseVMCOptimizer(ABC):
     the ansatz/model, optimizer, sampling parameters, electronic
     structure information, and other related information.
 
-    you need implement 'run' and 'pre_train' method
+    you need implement 'run', 'pre_train' and 'operator_expected' method
     """
 
     sys_name = platform.node()
@@ -377,39 +377,11 @@ class BaseVMCOptimizer(ABC):
         pre train
         """
 
-
-    def _operator_expected(
-        self,
-        h1e: Tensor = None,
-        h2e: Tensor = None,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    @abstractmethod
+    def operator_expected(self, h1e: Tensor = None, h2e: Tensor = None):
         """
         calculate <O> using different h1e, h2e, e.g. S_S+, H.
-
-        Returns:
-            state, prob, eloc, eloc-mean, e-total
         """
-        if h1e is not None:
-            h1e_old = self.sampler.h1e
-            assert h1e.shape == h1e_old.shape
-            self.sampler.h1e = h1e.to(self.device)
-        if h2e is not None:
-            h2e_old = self.sampler.h2e
-            assert h2e.shape == h2e_old.shape
-            self.sampler.h2e = h2e.to(self.device)
-
-        initial_state = self.onstate[0].clone().detach()
-        epoch = self.max_iter
-        state, prob, eloc, e_total, stats, eloc_mean = self.sampler.run(initial_state, epoch)
-        sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
-
-        # revise
-        if h1e is not None:
-            self.sampler.h1e = h1e_old
-        if h2e is not None:
-            self.sampler.h2e = h2e_old
-
-        return sample_state, prob, eloc, eloc_mean
 
     def summary(
         self,
@@ -697,14 +669,41 @@ class VMCOptimizer(BaseVMCOptimizer):
         self,
         h1e: Tensor = None,
         h2e: Tensor = None,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """
         calculate <O> using different h1e, h2e, e.g. S_S+, H.
 
         Returns:
             state, prob, eloc, eloc-mean
         """
-        return self._operator_expected(h1e, h2e)
+        if self.rank == 0:
+            logger.info(f"{'*' * 30}Begin calculating <O>{'*' * 30}", master=True)
+        if h1e is not None:
+            h1e_old = self.sampler.h1e
+            assert h1e.shape == h1e_old.shape
+            self.sampler.h1e = h1e.to(self.device)
+        if h2e is not None:
+            h2e_old = self.sampler.h2e
+            assert h2e.shape == h2e_old.shape
+            self.sampler.h2e = h2e.to(self.device)
+
+        initial_state = self.onstate[0].clone().detach()
+        epoch = self.max_iter
+        state, prob, eloc, e_total, stats, eloc_mean = self.sampler.run(initial_state, epoch)
+        sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
+
+        if self.rank == 0:
+            logger.info(f"<O>: {e_total:.10f}")
+        # revise
+        if h1e is not None:
+            self.sampler.h1e = h1e_old
+        if h2e is not None:
+            self.sampler.h2e = h2e_old
+
+        if self.rank == 0:
+            logger.info(f"{'*'* 30}End <O>{'*' * 30}", master=True)
+
+        return sample_state, prob, eloc, eloc_mean
 
     def noise_tune(self, noise_lambda: float = None) -> None:
         """
