@@ -409,6 +409,34 @@ class MPS_RNN_2D(nn.Module):
                 if self.tensor:
                     self.parm_T = torch.view_as_complex(self.parm_T_r).view(self.L,self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut)
                 
+                self.parm_w_r = torch.rand((self.M * self.L * self.dcut // 2, 2), **self.factory_kwargs_real)* self.iscale
+                self.parm_eta_r = torch.rand((self.M * self.L * self.dcut  // 2, 2), **self.factory_kwargs_real) * self.iscale
+
+                self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.L, self.M // 2, self.dcut)
+                self.parm_c = (params["module.parm_c_r"].to(self.device)).view(self.L, self.M // 2, 2)
+                self.parm_c = torch.view_as_complex(self.parm_c)
+                self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(self.L, self.M // 2, self.dcut)
+                self.parm_w = self.parm_w.clone()
+                # self.parm_c = self.parm_c.clone()
+                self.parm_eta = self.parm_eta.clone()
+                self.parm_w[...,:self.dcut_step] = torch.view_as_complex(params["module.parm_w_r"]).view(self.L, self.M // 2, self.dcut_step)
+                # self.parm_c = torch.view_as_complex(params["module.parm_c_r"]).view(self.M // 2, self.L)
+                self.parm_eta[...,:self.dcut_step] = torch.view_as_complex(params["module.parm_eta_r"]).view(self.L, self.M // 2, self.dcut_step)
+                
+                
+                self.parm_w = torch.view_as_real(self.parm_w).view(-1,2)
+                self.parm_c = torch.view_as_real(self.parm_c).view(-1,2)
+                self.parm_eta = torch.view_as_real(self.parm_eta).view(-1,2)
+            
+                
+                self.parm_w_r = nn.Parameter(self.parm_w)
+                self.parm_c_r = nn.Parameter(self.parm_c)
+                self.parm_eta_r = nn.Parameter(self.parm_eta)
+
+                self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.L, self.M // 2, self.dcut)
+                self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.L, self.M // 2)
+                self.parm_eta =torch.view_as_complex(self.parm_eta_r).view( self.L, self.M // 2, self.dcut)
+                
             else:
                 self.parm_M_h_r = nn.Parameter(
                     torch.randn(
@@ -504,7 +532,7 @@ class MPS_RNN_2D(nn.Module):
 
                 self.parm_c = (params["module.parm_c"].to(self.device)).view(self.L, self.M // 2)
                 self.parm_w_r = torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real)* self.iscale
-                self.parm_eta_r = torch.randn((self.L, self.M // 2, self.dcut, self.dcut), **self.factory_kwargs_real) * self.iscale
+                self.parm_eta_r = torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real) * self.iscale
 
                 self.parm_w_r = self.parm_w_r.clone()
                 self.parm_eta_r = self.parm_eta_r.clone()
@@ -775,6 +803,7 @@ class MPS_RNN_2D(nn.Module):
         h = h.clone()
         h[a, b] = h_ud  # 更新h
         # 计算概率（振幅部分） 并归一化
+
         P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, torch.abs(self.parm_eta[a, b])).real # -> (local_hilbert_dim, n_batch)
         # print("归一化之前")
         # print(P)
