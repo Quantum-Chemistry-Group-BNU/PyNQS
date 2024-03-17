@@ -120,6 +120,8 @@ class BaseVMCOptimizer(ABC):
         use_clip_grad: bool = False,
         max_grad_norm: float = 0.01,
         start_clip_grad: int = None,
+        use_spin_raising: bool = False,
+        spin_raising_param: float = 1.0,
     ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -161,9 +163,21 @@ class BaseVMCOptimizer(ABC):
         # Sample
         self.sampler_param = sampler_param
         self.exact = self.sampler_param.get("debug_exact", False)
-        self.sampler = Sampler(self.model, electron_info, dtype=self.dtype, **self.sampler_param)
+        self.sampler = Sampler(
+            self.model,
+            electron_info,
+            dtype=self.dtype,
+            use_spin_raising=use_spin_raising,
+            spin_raising_param=spin_raising_param,
+            **self.sampler_param,
+        )
         self.record_sample = self.sampler_param.get("record_sample", False)
         self.only_sample = only_sample
+
+        self.use_spin_raising = use_spin_raising
+        self.spin_raising_param = spin_raising_param
+        self.h1e_spin = self.sampler.h1e_spin
+        self.h2e_spin = self.sampler.h2e_spin
 
         # electronic structure information
         self.read_electron_info(self.sampler.ele_info)
@@ -535,6 +549,8 @@ class VMCOptimizer(BaseVMCOptimizer):
         use_clip_grad: bool = False,
         max_grad_norm: float = 0.01,
         start_clip_grad: int = None,
+        use_spin_raising: bool = False,
+        spin_raising_param: float = 1.0,
     ) -> None:
         super().__init__(
             nqs=nqs,
@@ -561,6 +577,8 @@ class VMCOptimizer(BaseVMCOptimizer):
             use_clip_grad=use_clip_grad,
             max_grad_norm=max_grad_norm,
             start_clip_grad=start_clip_grad,
+            use_spin_raising=use_spin_raising,
+            spin_raising_param=spin_raising_param,
         )
 
         # pre-train CI wavefunction
@@ -588,13 +606,10 @@ class VMCOptimizer(BaseVMCOptimizer):
             else:
                 initial_state = self.onstate[0].clone().detach()
 
-            state, state_prob, eloc, e_total, stats, eloc_mean = self.sampler.run(
+            state, state_prob, (eloc, sloc), (eloc_mean, sloc_mean) = self.sampler.run(
                 initial_state, epoch=epoch
             )
-            if self.rank == 0:
-                s = f"eloc-mean: {eloc_mean.item().real:.5f}{eloc_mean.item().imag:+.5f}j"
-                logger.info(s, master=True)
-
+            exit()
             if self.only_sample:
                 delta = (time.time_ns() - t0) / 1.00e06
                 if self.rank == 0:
@@ -608,10 +623,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             # calculate model grad
             t1 = time.time_ns()
             if self.sr:
-                if self.world_size > 1:
-                    raise NotImplementedError(
-                        f"Stochastic Reconfiguration does not support distributed"
-                    )
+                raise NotImplementedError(f"SR-distributed will be implement in future")
                 psi = sr_grad(
                     self.model,
                     sample_state,
@@ -623,6 +635,9 @@ class VMCOptimizer(BaseVMCOptimizer):
                     self.method_jacobian,
                 )
             else:
+                if self.sampler.use_spin_raising:
+                    eloc.add_(sloc)  # add local <S-S+>
+                    eloc_mean.add_(sloc_mean)
                 psi = energy_grad(
                     self.model,
                     sample_state,
@@ -637,7 +652,7 @@ class VMCOptimizer(BaseVMCOptimizer):
 
             # save the energy grad and clip-grad
             self.clip_grad(epoch=epoch)
-            self.save_grad_energy(e_total)
+            self.save_grad_energy(eloc_mean.real + self.ecore)
 
             t2 = time.time_ns()
             self.update_param(epoch=epoch)

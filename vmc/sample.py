@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import time
 import os
 import random
 import torch
 import torch.distributed as dist
 import tempfile
+import warnings
 import numpy as np
 import pandas as pd
 
@@ -19,6 +22,8 @@ from memory_profiler import profile
 from line_profiler import LineProfiler
 
 from vmc.energy import total_energy
+from vmc.stats import operator_statistics
+
 from libs.C_extension import (
     onv_to_tensor,
     spin_flip_rand,
@@ -39,6 +44,7 @@ from utils.distributed import (
 )
 from utils.public_function import torch_unique_index, WavefunctionLUT
 from utils.det_helper import DetLUT
+from utils.pyscf_helper.operator import spin_raising
 
 print = partial(print, flush=True)
 
@@ -82,6 +88,8 @@ class Sampler:
         min_tree_height: int = None,
         det_lut: DetLUT = None,
         use_dfs_sample: bool = False,
+        use_spin_raising: bool = False,
+        spin_raising_param: float = 1.0,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -183,7 +191,7 @@ class Sampler:
                 self.use_same_tree
             ), f"use-same-tree({self.use_same_tree}) muse be is True, if use min-tree-height"
         self.sample_min_tree_height = min_tree_height
-         # DFS Sample, default BFS
+        # DFS Sample, default BFS
         self.use_dfs_sample = use_dfs_sample
         if self.use_dfs_sample and not self.sampling_batch_rank:
             raise TypeError(f"DFS only be supported in Multi-Rank-Sampling")
@@ -194,6 +202,21 @@ class Sampler:
         if det_lut is not None:
             self.remove_det = True
             self.det_lut = det_lut
+
+        # <S-S+>
+        self.spin_raising_param = spin_raising_param
+        self.use_spin_raising = use_spin_raising
+        self.spin_raising_param: float = 1.0
+        self.use_spin_raising = True
+        self.h1e_spin: Tensor = None
+        self.h2e_spin: Tensor = None
+        if self.spin_raising_param < 1e-5:
+            self.use_spin_raising = False
+            warnings.warn(f"<S-S+> Penalty: {self.spin_raising_param:.5E} too little")
+        if self.use_spin_raising:
+            x = spin_raising(self.sorb, self.spin_raising_param)
+            self.h1e_spin = x[0].to(self.device)
+            self.h2e_spin = x[1].to(self.device)
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -220,7 +243,7 @@ class Sampler:
         initial_state: Tensor,
         epoch: int,
         n_sweep: int = None,
-    ) -> Tuple[Tensor, Tensor, Tensor, Union[complex, float], dict, Tensor]:
+    ) -> tuple[Tensor, Tensor, tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
         """
         run sampling using 'MCMC' or 'AR' algorithm and calculate local energy
 
@@ -234,29 +257,65 @@ class Sampler:
         -------
             sample_unique(Tensor): the unique of sample (Single-Rank)
             sample_prob(Tensor): the probability of sample (Single-Rank)
-            eloc(Tensor): local energy (Single-Rank)
-            e_total(complex|float): e_total = eloc_mean + ecore (All-Rank)
-            stats_dict(dict): 'mean', 'var', 'SD', 'SE' (All-Rank)
-            eloc_mean(Tensor): the average of eloc (All-Rank)
+            (eloc, sloc): local energy, local-spin(S-S+) (Single-Rank)
+            (eloc_mean, sloc_mean): the average of eloc/sloc (All-Rank)
         """
         t0 = time.time_ns()
         check_para(initial_state)
         if self.debug_exact:
-            if self.remove_det:
-                # avoid wf is 0.00, if not found, set to -1
-                array_idx = self.det_lut.lookup(self.ci_space, is_onv=True)[0]
-                ci_space = self.ci_space[~array_idx.gt(-1)]
-            else:
-                ci_space = self.ci_space
-            ci_space_rank = scatter_tensor(ci_space, self.device, torch.uint8, self.world_size)
-            synchronize()
-            e_total, eloc, sample_prob = self.calculate_energy(ci_space_rank)
-            # All-Reduce mean local energy
-            eloc_mean, stats_dict = self.statistics(e_total, eloc, sample_prob)
-            # All-Rank
-            e_total = eloc_mean.item().real + self.ecore
-            return ci_space_rank.detach(), sample_prob, eloc, e_total, stats_dict, eloc_mean
+            func = self.run_exact
+        else:
+            func = self.run_sampling
 
+        result = func(initial_state, epoch, n_sweep)
+        delta = time.time_ns() - t0
+        if self.rank == 0:
+            s = f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s"
+            logger.info(s, master=True)
+
+        if self.is_cuda:
+            torch.cuda.empty_cache()
+        return result
+
+    def run_exact(
+        self,
+        initial_state: Tensor,
+        epoch: int,
+        n_sweep: int = None,
+    ) -> tuple[Tensor, Tensor, tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
+        if self.remove_det:
+            # avoid wf is 0.00, if not found, set to -1
+            array_idx = self.det_lut.lookup(self.ci_space, is_onv=True)[0]
+            ci_space = self.ci_space[~array_idx.gt(-1)]
+        else:
+            ci_space = self.ci_space
+        ci_space_rank = scatter_tensor(ci_space, self.device, torch.uint8, self.world_size)
+        synchronize()
+        eloc, sloc, sample_prob = self.calculate_energy(ci_space_rank)
+        # All-Reduce mean local energy
+
+        stats_eloc = operator_statistics(eloc, sample_prob, float("inf"), "E")
+        eloc_mean = stats_eloc["mean"]
+        # e_total = eloc_mean + self.ecore
+        if self.rank == 0:
+            logger.info(str(stats_eloc), master=True)
+
+        if self.use_spin_raising:
+            stats_sloc = operator_statistics(sloc, sample_prob, float("inf"), "S-S+")
+            sloc_mean = stats_sloc["mean"]
+            if self.rank == 0:
+                logger.info(str(stats_sloc), master=True)
+        else:
+            sloc_mean = torch.tensor(float("inf"), device=self.device)
+
+        return ci_space_rank.detach(), sample_prob, (eloc, sloc), (eloc_mean, sloc_mean)
+
+    def run_sampling(
+        self,
+        initial_state: Tensor,
+        epoch: int,
+        n_sweep: int = None,
+    ) -> tuple[Tensor, Tensor, tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
         # AR or MCMC sampling
         sample_unique, sample_counts, sample_prob = self.sampling(
             initial_state, epoch=epoch, n_sweep=n_sweep
@@ -265,17 +324,30 @@ class Sampler:
             logger.debug(f"rank: {self.rank} Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
         # Single-Rank
-        e_total, eloc, _ = self.calculate_energy(
+        eloc, sloc, _ = self.calculate_energy(
             sample_unique,
             state_prob=sample_prob,
             state_counts=sample_counts,
             WF_LUT=self.WF_LUT,
         )
-        # All-Reduce mean local energy
-        eloc_mean, stats_dict = self.statistics(e_total, eloc, sample_prob)
-        # All-Rank
-        e_total = eloc_mean.item().real + self.ecore
 
+        # All-Reduce mean local energy
+        stats_eloc = operator_statistics(eloc, sample_prob, self.n_sample, "E")
+        eloc_mean = stats_eloc["mean"]
+        if self.rank == 0:
+            # print(stats_eloc)
+            logger.info(str(stats_eloc), master=True)
+
+        if self.use_spin_raising:
+            stats_sloc = operator_statistics(sloc, sample_prob, self.n_sample, "S-S+")
+            sloc_mean = stats_sloc["mean"]
+            if self.rank == 0:
+                logger.info(str(stats_sloc), master=True)
+        else:
+            sloc_mean = torch.zeros(1, device=self.device, dtype=torch.double)
+
+        # Record sampling , only in MCMC.
+        self.time_sample += 1
         if self.record_sample and self.rank == 0:
             # If given space(not full space), this is error.
             counts = sample_counts.to("cpu").numpy()
@@ -287,15 +359,7 @@ class Sampler:
             self.frame_sample = pd.concat([self.frame_sample, new_df], axis=1)
             del full_dict
 
-        self.time_sample += 1
-        delta = time.time_ns() - t0
-        if self.rank == 0:
-            s = f"Completed Sampling and calculating eloc {delta/1.0E09:.3E} s"
-            logger.info(s, master=True)
-
-        if self.is_cuda:
-            torch.cuda.empty_cache()
-        return sample_unique.detach(), sample_prob, eloc, e_total, stats_dict, eloc_mean
+        return sample_unique.detach(), sample_prob, (eloc, sloc), (eloc_mean, sloc_mean)
 
     def sampling(
         self,
@@ -577,11 +641,11 @@ class Sampler:
         state_prob: Tensor = None,
         state_counts: Tensor = None,
         WF_LUT: WavefunctionLUT = None,
-    ) -> Tuple[Union[complex, float], Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor]:
         r"""
         Returns:
         -------
-            e_total(complex|float): total energy(Single-Rank)
+            sloc(Tensor): local spin-raising(Single-Rank)
             eloc(Tensor): local energy(Single-Rank)
             placeholders(Tensor): state prob if exact optimization, else zeros tensor
         """
@@ -598,7 +662,7 @@ class Sampler:
             dtype=self.dtype,
         )
         if not self.only_AD:
-            e_total, eloc, placeholders = total_energy(
+            eloc, sloc, placeholders = total_energy(
                 sample,
                 nbatch,
                 h1e=self.h1e,
@@ -611,6 +675,9 @@ class Sampler:
                 nob=self.nob,
                 state_prob=state_prob,
                 state_counts=state_counts,
+                use_spin_raising=self.use_spin_raising,
+                h1e_spin=self.h1e_spin,
+                h2e_spin=self.h2e_spin,
                 exact=self.debug_exact,
                 WF_LUT=WF_LUT,
                 use_unique=self.use_unique,
@@ -620,10 +687,12 @@ class Sampler:
                 use_sample_space=self.use_sample_space,
             )
         else:
-            e_total = -2.33233
-            eloc = torch.rand(sample.size(0), device=self.device, dtype=self.dtype)
+            # e_total = -2.33233
+            # spin_mean = 0.000
+            eloc = torch.zeros(sample.size(0), device=self.device, dtype=self.dtype)
+            sloc = torch.zeros_like(eloc)
             placeholders = torch.zeros(1, device=self.device, dtype=self.dtype)
-        return e_total, eloc, placeholders
+        return eloc, sloc, placeholders
 
     def __repr__(self) -> str:
         return (
@@ -654,53 +723,6 @@ class Sampler:
             + f"    max_memory: {self.max_memory}\n"
             + ")"
         )
-
-    def statistics(
-        self,
-        e_total: Union[float, complex],
-        eloc: Tensor,
-        prob: Tensor,
-    ) -> Tuple[Tensor, dict]:
-        """
-        Calculate statistical information about local energy and eloc-mean
-        if only_AD, return placeholders
-
-        Returns
-        -------
-            eloc_mean(Tensor): the average of local energy (All-Rank)
-            statistics(dict): 'mean', 'var', 'SD', 'SE'
-        """
-        if self.only_AD:
-            eloc_mean = torch.zeros(1, dtype=torch.double, device=self.device)
-            statistics = {}
-        else:
-            # All_Reduce mean local energy
-            eloc_mean = torch.tensor(e_total - self.ecore, dtype=self.dtype, device=self.device)
-            all_reduce_tensor(eloc_mean, world_size=self.world_size)
-            synchronize()
-            var = ((eloc - eloc_mean) * (eloc - eloc_mean).conj() * prob).sum() * self.world_size
-            all_reduce_tensor(var, world_size=self.world_size)
-            sd = torch.sqrt(var)
-            if self.debug_exact:
-                se = torch.tensor(0.0)  # exact optimization SE is zero
-            else:
-                se = sd / self.n_sample**0.5
-            statistics = {}
-            statistics["mean"] = eloc_mean.item() + self.ecore
-            statistics["var"] = var.item()
-            statistics["SD"] = sd.item()
-            statistics["SE"] = se.item()
-            self.statistics_print(statistics)
-        return eloc_mean, statistics
-
-    def statistics_print(self, data: dict) -> None:
-        if self.rank == 0:
-            if self.only_AD:
-                s = f"**This Auto-grad memory testing**"
-            else:
-                s = f"E_total = {data['mean'].real:.10f} ± {data['SE'].real:.3E} "
-                s += f"[σ² = {data['var'].real:.3E}]"
-            logger.info(s, master=True)
 
     def change_n_sample(self, epoch: int) -> None:
         """
