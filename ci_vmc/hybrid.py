@@ -434,7 +434,7 @@ class NqsCi(BaseVMCOptimizer):
             x = torch.view_as_complex(value.view(-1, 2)).div(phi_nqs)
             if self.use_spin_raising:
                 value[0::2] = torch.matmul(hij_spin, ci.real)
-                value[1::2] = torch.matmul(hij, ci.imag)
+                value[1::2] = torch.matmul(hij_spin, ci.imag)
                 x1 = torch.view_as_complex(value.view(-1, 2)).div(phi_nqs)
             else:
                 x1 = torch.zeros_like(x)
@@ -626,7 +626,7 @@ class NqsCi(BaseVMCOptimizer):
 
             # save the energy grad and clip-grad
             self.clip_grad(epoch=epoch)
-            self.save_grad_energy(E0 + self.ecore)
+            self.save_grad_energy(E0 + self.ecore + e_spin)
 
             # update param
             t4 = time.time_ns()
