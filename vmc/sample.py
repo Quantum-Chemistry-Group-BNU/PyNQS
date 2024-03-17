@@ -206,8 +206,6 @@ class Sampler:
         # <S-S+>
         self.spin_raising_param = spin_raising_param
         self.use_spin_raising = use_spin_raising
-        self.spin_raising_param: float = 1.0
-        self.use_spin_raising = True
         self.h1e_spin: Tensor = None
         self.h2e_spin: Tensor = None
         if self.spin_raising_param < 1e-5:
@@ -691,7 +689,7 @@ class Sampler:
             # spin_mean = 0.000
             eloc = torch.zeros(sample.size(0), device=self.device, dtype=self.dtype)
             sloc = torch.zeros_like(eloc)
-            placeholders = torch.zeros(1, device=self.device, dtype=self.dtype)
+            placeholders = torch.ones(sample.size(0), device=self.device, dtype=torch.double)/sample.size(0)
         return eloc, sloc, placeholders
 
     def __repr__(self) -> str:

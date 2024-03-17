@@ -51,7 +51,7 @@ class operator_statistics:
 
     def __repr__(self) -> str:
         return (
-            f"<{self.operator}> ={self['mean'].real:10f} "
+            f"<{self.operator}> = {self['mean'].real:.9f} "
             + f"± {self['se'].real:.3E} "
             + f"[σ² = {self['var'].real:.3E}]"
         )

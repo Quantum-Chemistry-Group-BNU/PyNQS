@@ -163,6 +163,8 @@ class BaseVMCOptimizer(ABC):
         # Sample
         self.sampler_param = sampler_param
         self.exact = self.sampler_param.get("debug_exact", False)
+        spin_raising_param: float = 1.0
+        use_spin_raising = True
         self.sampler = Sampler(
             self.model,
             electron_info,
@@ -203,6 +205,8 @@ class BaseVMCOptimizer(ABC):
             if self.use_clip_grad:
                 s += f"Clip-grad: g0: {self.max_grad_norm} "
                 s += f"after {self.start_clip_grad}-th iteration\n"
+            if self.use_spin_raising:
+                s+= f"penalty <S-S+> param: {self.spin_raising_param:.5f}\n"
             s += f"Sampler:\n{self.sampler}\n"
             s += f"Grad method: {self.method_grad}\n"
             s += f"Jacobian method: {self.method_jacobian}"
@@ -224,7 +228,7 @@ class BaseVMCOptimizer(ABC):
 
     def read_electron_info(self, info: ElectronInfo) -> None:
         if self.rank == 0:
-            logger.info(info)
+            logger.info(str(info), master=True)
         self.sorb = info.sorb
         self.nele = info.nele
         self.no = info.nele
@@ -609,7 +613,6 @@ class VMCOptimizer(BaseVMCOptimizer):
             state, state_prob, (eloc, sloc), (eloc_mean, sloc_mean) = self.sampler.run(
                 initial_state, epoch=epoch
             )
-            exit()
             if self.only_sample:
                 delta = (time.time_ns() - t0) / 1.00e06
                 if self.rank == 0:
@@ -652,7 +655,7 @@ class VMCOptimizer(BaseVMCOptimizer):
 
             # save the energy grad and clip-grad
             self.clip_grad(epoch=epoch)
-            self.save_grad_energy(eloc_mean.real + self.ecore)
+            self.save_grad_energy(eloc_mean.item().real + self.ecore)
 
             t2 = time.time_ns()
             self.update_param(epoch=epoch)
