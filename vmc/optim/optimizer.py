@@ -181,7 +181,8 @@ class VMCOptimizer(BaseVMCOptimizer):
 
             # save the energy grad and clip-grad
             self.clip_grad(epoch=epoch)
-            self.save_grad_energy(eloc_mean.item().real + self.ecore)
+            e_total = (eloc_mean + sloc_mean).real.item() + self.ecore
+            self.save_grad_energy(e_total)
 
             t2 = time.time_ns()
             self.update_param(epoch=epoch)
