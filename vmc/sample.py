@@ -89,7 +89,7 @@ class Sampler:
         det_lut: DetLUT = None,
         use_dfs_sample: bool = False,
         use_spin_raising: bool = False,
-        spin_raising_param: float = 1.0,
+        spin_raising_coeff: float = 1.0,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -204,12 +204,12 @@ class Sampler:
             self.det_lut = det_lut
 
         # <S-S+>
-        self.spin_raising_param = spin_raising_param
+        self.spin_raising_param = spin_raising_coeff
         self.use_spin_raising = use_spin_raising
         self.h1e_spin: Tensor = None
         self.h2e_spin: Tensor = None
         if self.spin_raising_param < 1e-5:
-            self.use_spin_raising = False
+            # self.use_spin_raising = False
             warnings.warn(f"<S-S+> Penalty: {self.spin_raising_param:.5E} too little")
         if self.use_spin_raising:
             x = spin_raising(self.sorb, self.spin_raising_param)
@@ -660,6 +660,9 @@ class Sampler:
             dtype=self.dtype,
         )
         if not self.only_AD:
+            use_spin_raising = self.use_spin_raising
+            if self.h1e_spin is None and self.h2e_spin is None:
+                use_spin_raising = False
             eloc, sloc, placeholders = total_energy(
                 sample,
                 nbatch,
@@ -673,7 +676,7 @@ class Sampler:
                 nob=self.nob,
                 state_prob=state_prob,
                 state_counts=state_counts,
-                use_spin_raising=self.use_spin_raising,
+                use_spin_raising=use_spin_raising,
                 h1e_spin=self.h1e_spin,
                 h2e_spin=self.h2e_spin,
                 exact=self.debug_exact,
