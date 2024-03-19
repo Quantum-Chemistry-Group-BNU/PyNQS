@@ -164,6 +164,8 @@ class VMCOptimizer(BaseVMCOptimizer):
                     self.method_jacobian,
                 )
             else:
+                sloc = sloc * self.spin_raising_coeff
+                sloc_mean = sloc_mean * self.spin_raising_coeff
                 if self.only_output_spin_raising:
                     sloc = torch.zeros_like(eloc)
                     sloc_mean = torch.zeros_like(eloc_mean)

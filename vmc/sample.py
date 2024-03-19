@@ -212,7 +212,7 @@ class Sampler:
             # self.use_spin_raising = False
             warnings.warn(f"<S-S+> Penalty: {self.spin_raising_param:.5E} too little")
         if self.use_spin_raising:
-            x = spin_raising(self.sorb, self.spin_raising_param)
+            x = spin_raising(self.sorb, c1=1.0)
             self.h1e_spin = x[0].to(self.device)
             self.h2e_spin = x[1].to(self.device)
 
@@ -342,7 +342,7 @@ class Sampler:
             if self.rank == 0:
                 logger.info(str(stats_sloc), master=True)
         else:
-            sloc_mean = torch.zeros(1, device=self.device, dtype=torch.double)
+            sloc_mean = torch.zeros_like(eloc_mean)
 
         # Record sampling , only in MCMC.
         self.time_sample += 1
@@ -643,8 +643,8 @@ class Sampler:
         r"""
         Returns:
         -------
-            sloc(Tensor): local spin-raising(Single-Rank)
             eloc(Tensor): local energy(Single-Rank)
+            sloc(Tensor): local spin-raising (Single-Rank)
             placeholders(Tensor): state prob if exact optimization, else zeros tensor
         """
         # this is applied when pre-train

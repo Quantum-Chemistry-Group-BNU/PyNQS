@@ -333,23 +333,7 @@ class CITrain:
             # notice, the shape of model_CI maybe not equal of self.pre_ci if using "sample"
             if (epoch == 0) or (epoch == self.pre_max_iter):
                 if flag_energy:
-                    if self.loss_type == "onstate":
-                        # avoid OOM
-                        # e_total = get_energy(model_coeff, onstate)
-                        e_total = self.sampler.run(initial_state=self.onstate[0], epoch=0)[3]
-                    elif self.loss_type == "sample":
-                        # single-Rank
-                        e_rank = self.sampler.calculate_energy(
-                            sample_unique, state_prob, sample_counts
-                        )[0]
-                        e_rank = torch.tensor(e_rank, dtype=self.dtype, device=self.device)
-                        all_reduce_tensor(e_rank, world_size=self.world_size)
-                        synchronize()
-                        e_total = e_rank.item().real
-                        # logger.info(f"e-total: {e_total:.10f}")
-                    elif self.loss_type in ("lsm-phase", "lsm"):
-                        # calculate total-energy use VMC
-                        e_total = self.sampler.run(initial_state=self.onstate[0], epoch=0)[3]
+                    e_total = self.sampler.run(self.onstate[0], 0)[3][0] + self.sampler.ecore
                     if epoch == 0:
                         eCI_begin = e_total
                     else:

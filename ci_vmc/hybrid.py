@@ -360,8 +360,9 @@ class NqsCi(BaseVMCOptimizer):
             e_spin(<S-S+> )
         """
 
-        if self.use_spin_raising:
-            Ham_matrix = self.Ham_matrix + self.Ham_matrix_spin
+        c1 = self.spin_raising_coeff
+        if self.use_spin_raising and not self.only_output_spin_raising:
+            Ham_matrix = self.Ham_matrix + c1 * self.Ham_matrix_spin
         else:
             Ham_matrix = self.Ham_matrix
 
@@ -391,12 +392,16 @@ class NqsCi(BaseVMCOptimizer):
 
         if self.use_spin_raising:
             e_spin = torch.einsum(
-                "i, ij, j ->", self.total_coeff.conj(), self.Ham_matrix_spin, self.total_coeff
+                "i, ij, j ->", self.total_coeff.conj(), c1 * self.Ham_matrix_spin, self.total_coeff
             ).real.item()
         else:
             e_spin = 0.00
 
-        E0 = E_all.item() - e_spin
+        if self.use_spin_raising and not self.only_output_spin_raising:
+            E0 = E_all.item() - e_spin
+        else:
+            E0 = E_all.item()
+
         # E0 = torch.einsum("i, ij, j ->", self.total_coeff.conj(), self.Ham_matrix, self.total_coeff)
         # logger.info(f"delta: {E0.real.item() - (E_all.item() - e_spin):.10f}")
         return E0, e_spin
@@ -586,7 +591,7 @@ class NqsCi(BaseVMCOptimizer):
                 self.coeff_lst.append(self.total_coeff.to("cpu").numpy())
                 c1 = self.ci_coeff.norm().item()
                 c2 = self.nqs_coeff.norm().item()
-                s = f"Hybrid energy: {E0:.9f}, spin-raising: {e_spin:.5E}, "
+                s = f"Hybrid energy: {E0:.9f}, spin-raising: {e_spin/self.spin_raising_coeff:.5E}, "
                 s += f"Coeff: {c1:.6E} {c2:6E}"
                 logger.info(s, master=True)
 
@@ -606,6 +611,8 @@ class NqsCi(BaseVMCOptimizer):
 
             # backward
             t3 = time.time_ns()
+            sloc = sloc * self.spin_raising_coeff
+            sloc_mean = sloc_mean * self.spin_raising_coeff
             if self.only_output_spin_raising:
                 sloc = torch.zeros_like(eloc)
                 sloc_mean = torch.zeros_like(sloc_mean)
@@ -675,7 +682,7 @@ class NqsCi(BaseVMCOptimizer):
         if self.rank == 0:
             logger.info(f"{'*' * 30}Begin calculating <O>{'*' * 30}", master=True)
 
-        if len(self.e_lst) == 0: # not CI-NQS iteration
+        if len(self.e_lst) == 0:  # not CI-NQS iteration
             # calculate the before ci/cNqs coeff
             if self.rank == 0:
                 logger.info(f"{'=' * 20}Calculate before ci/cNqs coeff{'=' * 20}", master=True)
@@ -699,7 +706,6 @@ class NqsCi(BaseVMCOptimizer):
             E0, e_spin = self.solve_eigh()  # solve HC = εC, C0({ci},c_N)
             if self.rank == 0:
                 logger.info(f"{'=' * 25}Finish calculation{'=' * 25}", master=True)
-
 
         h1e_old = self.sampler.h1e
         assert h1e.shape == h1e_old.shape

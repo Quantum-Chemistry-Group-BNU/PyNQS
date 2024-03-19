@@ -201,8 +201,9 @@ class BaseVMCOptimizer(ABC):
                 s += f"Clip-grad: g0: {self.max_grad_norm} "
                 s += f"after {self.start_clip_grad}-th iteration\n"
             if self.use_spin_raising:
-                s += f"penalty S-S+ coeff: {self.spin_raising_coeff:.5f} "
-                s += f"only output: {self.only_output_spin_raising}\n"
+                s += f"penalty S-S+ coeff: {self.spin_raising_coeff:.5f}, "
+                s += f"only output: {self.only_output_spin_raising}, "
+                s += f"Notice: print 'S-S+' not 'c1 * S-S+'\n"
             s += f"Sampler:\n{self.sampler}\n"
             s += f"Grad method: {self.method_grad}\n"
             s += f"Jacobian method: {self.method_jacobian}"
