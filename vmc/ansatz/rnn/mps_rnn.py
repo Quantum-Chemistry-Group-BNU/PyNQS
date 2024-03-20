@@ -11,7 +11,7 @@ sys.path.append("./")
 
 from vmc.ansatz.utils import joint_next_samples
 from vmc.ansatz.symmetry import symmetry_mask
-from libs.C_extension import onv_to_tensor
+from libs.C_extension import onv_to_tensor, permute_sgn 
 from utils.public_function import (
     get_fock_space,
     get_special_space,
@@ -141,6 +141,7 @@ class MPS_RNN_2D(nn.Module):
         phase_batch_norm: bool = False,
         phase_norm_momentum=0.1,
         n_out_phase: int = 1,
+        sample_order = None,
     ) -> None:
         super(MPS_RNN_2D, self).__init__()
         # 模型输入参数
@@ -156,6 +157,7 @@ class MPS_RNN_2D(nn.Module):
         self.dcut_params = dcut_params
         self.dcut_step = dcut_step
         self.graph_type = graph_type
+        self.sample_order = sample_order
 
         # 是否使用tensor-RNN
         self.tensor = tensor
@@ -295,6 +297,10 @@ class MPS_RNN_2D(nn.Module):
         if self.phase_type == "regular":
             psi_phase = torch.exp(phi*1j)
         psi = psi_amp * psi_phase
+        breakpoint()
+        # if self.sample_order != None:
+        extra_phase = permute_sgn(torch.range(0,self.nqubits).to(torch.long),target.to(torch.long),self.nqubits)
+        psi = psi * extra_phase
         return psi
 
     def param_init_one_site(self):
@@ -1044,6 +1050,7 @@ class MPS_RNN_1D(nn.Module):
         use_symmetry: bool = True,
         alpha_nele: int = None,
         beta_nele: int = None,
+        sample_order = None,
     ) -> None:
         super(MPS_RNN_1D, self).__init__()
         # 模型输入参数
@@ -1054,6 +1061,7 @@ class MPS_RNN_1D(nn.Module):
         self.dcut = dcut
         self.hilbert_local = hilbert_local
         self.param_dtype = param_dtype
+        self.sample_order = sample_order
 
         # 对称性
         self.use_symmetry = use_symmetry
@@ -1183,6 +1191,8 @@ class MPS_RNN_1D(nn.Module):
         # 相位部分
         psi_phase = torch.exp(1j * phi)
         psi = psi_amp * psi_phase
+        extra_phase = permute_sgn(torch.range(0,self.nqubits).to(torch.long),target.to(torch.long),self.nqubits)
+        psi = psi * extra_phase
         return psi
     
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
@@ -1389,22 +1399,31 @@ if __name__ == "__main__":
     )
     dim = fci_space.size(0)
     print(fock_space)
-    model = MPS_RNN_2D(
+    model = MPS_RNN_1D(
         use_symmetry=True,
-        param_dtype=torch.complex128,
-        hilbert_local=4,
         nqubits=sorb,
         nele=nele,
         device=device,
-        dcut=6,
+        dcut=8,
+        # param_dtype = torch.complex128
         # tensor=False,
-        M=6,
-        graph_type="snake",
-        phase_type="MLP",
-        phase_batch_norm=False,
-        phase_hidden_size=[128, 128],
-        n_out_phase=1,
     )
+    # model = MPS_RNN_2D(
+    #     use_symmetry=True,
+    #     param_dtype=torch.complex128,
+    #     hilbert_local=4,
+    #     nqubits=sorb,
+    #     nele=nele,
+    #     device=device,
+    #     dcut=6,
+    #     # tensor=False,
+    #     M=6,
+    #     graph_type="snake",
+    #     phase_type="MLP",
+    #     phase_batch_norm=False,
+    #     phase_hidden_size=[128, 128],
+    #     n_out_phase=1,
+    # )
     # MPS_RNN_1D = MPS_RNN_2D(
     #     nqubits=sorb,
     #     nele=nele,
