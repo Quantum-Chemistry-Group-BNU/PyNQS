@@ -203,7 +203,7 @@ tuple_tensor_2d mps_vbatch_tensor(const Tensor &mps_data,
                             .reshape({n, nphysical});
   return std::make_tuple(result, std::move(flops_tensor.to(mps_data.device())));
 }
-#endif // MAGMA
+#endif  // MAGMA
 
 Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
                                const int sorb) {
@@ -328,7 +328,8 @@ Tensor wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
   // bra_key: (length, bra_len * 8)
   // onv: (nbatch, bra_len * 8)
   // little_endian: the order of the bra_key, default is little-endian
-  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
+  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 +
+  // 13
   const int64_t bra_len = (sorb - 1) / 64 + 1;
   const int64_t nbatch = onv.size(0);
   int64_t length = bra_key.size(0);

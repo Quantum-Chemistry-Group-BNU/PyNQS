@@ -62,8 +62,8 @@ def get_comb_tensor(
         bra(Tensor): the occupied number vector(onv), dtype: torch.uint8
         sorb(Tensor): the number of spin orbital
         nele(int): the number of electron
-        noA(int): the number of alpha spin orbital
-        noB(int): the number of beta spin orbital
+        noA(int): the number of alpha electron 
+        noB(int): the number of beta electron
         flag_bit(bool): Whether to convert onv to states, see 'onv_to_tensor'
 
     Returns:

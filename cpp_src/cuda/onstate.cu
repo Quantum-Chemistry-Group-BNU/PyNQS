@@ -28,8 +28,9 @@ __device__ int parity_cuda(const unsigned long *bra, const int sorb) {
   return -2 * p + 1;
 }
 
-__device__ void diff_orb_cuda(const unsigned long *bra, const unsigned long *ket,
-                         const int _len, int *cre, int *ann) {
+__device__ void diff_orb_cuda(const unsigned long *bra,
+                              const unsigned long *ket, const int _len,
+                              int *cre, int *ann) {
   int idx_cre = 0;
   int idx_ann = 0;
   for (int i = _len - 1; i >= 0; i--) {
@@ -68,7 +69,7 @@ __device__ void get_olst_cuda(const unsigned long *bra, int *olst,
 }
 
 __device__ void get_olst_ab_cuda(const unsigned long *bra, int *olst,
-                            const int _len) {
+                                 const int _len) {
   // abab
   unsigned long tmp;
   int idx = 0;
@@ -92,8 +93,8 @@ __device__ void get_olst_ab_cuda(const unsigned long *bra, int *olst,
   }
 }
 
-__device__ void get_vlst_cuda(const unsigned long *bra, int *vlst, const int sorb,
-                              const int _len) {
+__device__ void get_vlst_cuda(const unsigned long *bra, int *vlst,
+                              const int sorb, const int _len) {
   int ic = 0;
   unsigned long tmp;
   for (int i = 0; i < _len; i++) {
@@ -110,7 +111,7 @@ __device__ void get_vlst_cuda(const unsigned long *bra, int *vlst, const int sor
 
 __device__ void get_vlst_ab_cuda(const unsigned long *bra, int *vlst,
                                  const int sorb, const int _len) {
-  //abab
+  // abab
   int ic = 0;
   int idb = 0;
   int ida = 0;
@@ -136,8 +137,49 @@ __device__ void get_vlst_ab_cuda(const unsigned long *bra, int *vlst,
 __device__ void get_ovlst_cuda(const unsigned long *bra, int *merged,
                                const int sorb, const int nele,
                                const int bra_len) {
-  get_olst_ab_cuda(bra, merged, bra_len);
-  get_vlst_ab_cuda(bra, merged + nele, sorb, bra_len);
+  // get_olst_ab_cuda(bra, merged, bra_len);
+  // get_vlst_ab_cuda(bra, merged + nele, sorb, bra_len);
+  // occupied orbital(abab) -> virtual orbital(abab), notice: alpha != beta
+  // e.g. 0b00011100 -> 23410567
+  unsigned long tmp;
+  int idx = 0;
+  int ida = 0;
+  int idb = 0;
+  // occupied orbital
+  for (int i = 0; i < bra_len; i++) {
+    tmp = bra[i];
+    while (tmp != 0) {
+      int j = __ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1) {
+        idb++;
+        idx = 2 * idb - 1;
+      } else {
+        ida++;
+        idx = 2 * (ida - 1);
+      }
+      merged[idx] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+  // virtual orbital
+  for (int i = 0; i < bra_len; i++) {
+    tmp =
+        (i != bra_len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cuda(sorb % 64));
+    while (tmp != 0) {
+      int j = __ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1) {
+        idb++;
+        idx = 2 * idb - 1;
+      } else {
+        ida++;
+        idx = 2 * (ida - 1);
+      }
+      merged[idx] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
 }
 
 __device__ void get_zvec_cuda(const unsigned long *bra, double *lst,
@@ -216,7 +258,7 @@ __device__ void sites_sym_index(const int64_t *onstate, const int nphysical,
                                 const int64_t *qrow_qcol_index,
                                 const int64_t *qrow_qcol_shape,
                                 const int64_t *ista, const int64_t *ista_index,
-                                const int64_t *image2, const int64_t nbatch, 
+                                const int64_t *image2, const int64_t nbatch,
                                 int64_t *data_info, bool *sym_array) {
   int64_t qsym_out[2] = {0, 0};
   int64_t qsym_in[2] = {0, 0};
@@ -228,25 +270,25 @@ __device__ void sites_sym_index(const int64_t *onstate, const int nphysical,
   int64_t end = 0;
   int64_t length = 0;
   int64_t result[2] = {0, 0};
-  for (int i = nphysical - 1; i >= 0; i--){
+  for (int i = nphysical - 1; i >= 0; i--) {
     const int64_t na = onstate[image2[2 * i]];
     const int64_t nb = onstate[image2[2 * i + 1]];
 
     int64_t idx = 0;
-    if (na == 0 and nb == 0) {  // 00
+    if (na == 0 and nb == 0) { // 00
       idx = 0;
       qsym_n[0] = 0;
       qsym_n[1] = 0;
-    } else if (na == 1 and nb == 1) {  // 11
+    } else if (na == 1 and nb == 1) { // 11
       idx = 1;
       qsym_n[0] = 2;
       qsym_n[1] = 0;
-    } else if (na == 1 and nb == 0) {  // a
+    } else if (na == 1 and nb == 0) { // a
       idx = 2;
       qsym_n[0] = 1;
       qsym_n[1] = 1;
 
-    } else if (na == 0 and nb == 1) {  // b
+    } else if (na == 0 and nb == 1) { // b
       idx = 3;
       qsym_n[0] = 1;
       qsym_n[1] = -1;
@@ -288,7 +330,7 @@ __device__ void sites_sym_index(const int64_t *onstate, const int nphysical,
     // [qi, qj], shape: (qrow, qcol)
     int64_t offset = qi * qrow_qcol_shape[i + 1] + qj;
     // ista[qi, qj]
-    int ista_value = ista[ista_index[i * 4 + idx] + offset]; 
+    int ista_value = ista[ista_index[i * 4 + idx] + offset];
     if (qi == -1 or qj == -1 or ista_value == -1) {
       qsym_break = true;
       break;

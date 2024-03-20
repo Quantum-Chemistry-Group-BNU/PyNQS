@@ -1,7 +1,7 @@
 #include "onstate.h"
 #include <algorithm>
+#include <bitset>
 #include <cstdint>
-
 // #include "utils.h"
 
 namespace squant {
@@ -125,6 +125,52 @@ void get_vlst_ab_cpu(const unsigned long *bra, int *vlst, const int sorb,
         ic = 2 * (ida - 1);
       }
       vlst[ic] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
+void get_olst_vlst_ab_cpu(const unsigned long *bra, int *lst, const int sorb,
+                          const int _len) {
+  // std::bitset<sorb> bitset(bra[0]);
+  // std::cout << "bra " << bitset << std::endl;
+  // occupied orbital(abab) -> virtual orbital(abab), notice: alpha != beta
+  // e.g. 0b00011100 -> 23410567
+  unsigned long tmp;
+  int idx = 0;
+  int ida = 0;
+  int idb = 0;
+  // occupied orbital
+  for (int i = 0; i < _len; i++) {
+    tmp = bra[i];
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1) {
+        idb++;
+        idx = 2 * idb - 1;
+      } else {
+        ida++;
+        idx = 2 * (ida - 1);
+      }
+      lst[idx] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+  // virtual orbital
+  for (int i = 0; i < _len; i++) {
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64));
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1) {
+        idb++;
+        idx = 2 * idb - 1;
+      } else {
+        ida++;
+        idx = 2 * (ida - 1);
+      }
+      lst[idx] = s;
       tmp &= ~(1ULL << j);
     }
   }

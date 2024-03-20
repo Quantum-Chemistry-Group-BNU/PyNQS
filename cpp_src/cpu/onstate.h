@@ -35,9 +35,12 @@ void get_vlst_ab_cpu(const unsigned long *bra, int *vlst, const int sorb,
 // olst: abab
 void get_olst_ab_cpu(const unsigned long *bra, int *olst, const int _len);
 
+void get_olst_vlst_ab_cpu(const unsigned long *bra, int *lst, const int sorb,
+                          const int _len);
+
 void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
                   const int bra_len);
 
 int64_t permute_sgn_cpu(const int64_t *image2, const int64_t *onstate,
-                         const int size);
+                        const int size);
 }  // namespace squant

@@ -82,8 +82,7 @@ tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
 
-  squant::get_olst_ab_cpu(bra_ptr, merged, bra_len);
-  squant::get_vlst_ab_cpu(bra_ptr, merged + nele, sorb, bra_len);
+  squant::get_olst_vlst_ab_cpu(bra_ptr, merged, sorb, bra_len);
   const int ncomb = squant::get_Num_SinglesDoubles(sorb, noA, noB);
   static std::mt19937 rng(seed);
   static std::uniform_int_distribution<int> u0(0, ncomb - 1);
@@ -101,6 +100,8 @@ tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
 Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
                              const int noA, const int noB) {
   // bra: (nbatch, bra_len * 8)
+  // occupied orbital(abab) -> virtual orbital(abab)
+  // e.g. 0b00011100 ->  23410567
   const int nbatch = bra.size(0);
   const int bra_len = (sorb - 1) / 64 + 1;
   auto options = torch::TensorOptions()
@@ -113,10 +114,8 @@ Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
   for (int i = 0; i < nbatch; i++) {
-    squant::get_olst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb],
-                            bra_len);
-    squant::get_vlst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb + nele],
-                            sorb, bra_len);
+    squant::get_olst_vlst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb],
+                                 sorb, bra_len);
   }
   return merged;
 }
@@ -156,7 +155,6 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
 
   // merged: (nbatch, ncomb)
   Tensor merged = get_merged_tensor_cpu(bra_tensor, nele, sorb, noA, noB);
-  // std::cout <<"merged: \n" << merged << std::endl;
   int *merged_ptr = merged.data_ptr<int32_t>();
   for (int i = 0; i < nbatch; i++) {
     for (int j = 1; j < ncomb; j++) {
@@ -537,7 +535,8 @@ Tensor wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
   // bra_key: (length, bra_len * 8)
   // onv: (nbatch, bra_len * 8)
   // little_endian: the order of the bra_key, default is little-endian
-  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
+  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 +
+  // 13
   const int64_t bra_len = (sorb - 1) / 64 + 1;
   const int64_t nbatch = onv.size(0);
   int64_t length = bra_key.size(0);
