@@ -275,7 +275,7 @@ if __name__ == "__main__":
             "sampler_param": sampler_param,
             "only_sample": False,
             "electron_info": electron_info,
-            "max_iter": 2000,
+            "max_iter": 20,
             "interval": 1,
             "MAX_AD_DIM": 5000,
             "pre_CI": ucisd_wf,
