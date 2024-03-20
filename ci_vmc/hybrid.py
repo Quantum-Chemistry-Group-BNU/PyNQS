@@ -47,6 +47,9 @@ class NqsCi(BaseVMCOptimizer):
     Ham_matrix: Tensor = None
     """the Hamiltonian matrix, (m +1, m + 1)"""
 
+    Ham_matrix_spin: Tensor = None
+    """the <S-S+> matrix, (m + 1, m +1)"""
+
     total_coeff: Tensor = None
     """total coeff, (m + 1)"""
 
@@ -102,6 +105,9 @@ class NqsCi(BaseVMCOptimizer):
         self.det_lut = self.sampler.det_lut
         dim = self.ci_num + 1
         self.Ham_matrix = torch.zeros((dim, dim), **self.factory_kwargs)
+        if self.use_spin_raising:
+            self.Ham_matrix_spin = torch.zeros_like(self.Ham_matrix)
+
         self.make_ci_hij()
 
         # init total-coeff
@@ -141,8 +147,8 @@ class NqsCi(BaseVMCOptimizer):
         # hij, x1, inverse_index, onv_not_idx
         self.n_sd = self.sampler.n_SinglesDoubles
         self.ci_nqs_info = self.init_ci_nqs()
-        # hij: (rank_ci_num, rank_ci_num * n_sd)
-        numel = self.ci_nqs_info[0].numel()
+        # hij: (2/1, rank_ci_num, rank_ci_num * n_sd)
+        numel = self.ci_nqs_info[0][0].numel()
         # psi: (ci_num * n_sd), <ci|H|nqs>: (ci_num)
         numel1 = self.ci_nqs_info[1].size(0)  # (unique, sorb)
         self.ci_nqs_value = torch.zeros(
@@ -190,6 +196,14 @@ class NqsCi(BaseVMCOptimizer):
         hij = get_hij_torch(self.ci_det, self.ci_det, h1e, h2e, self.sorb, self.nele)
         self.Ham_matrix[: self.ci_num, : self.ci_num] = hij
 
+        if self.use_spin_raising:
+            h1e_spin = self.sampler.h1e_spin
+            h2e_spin = self.sampler.h2e_spin
+            hij_spin = get_hij_torch(
+                self.ci_det, self.ci_det, h1e_spin, h2e_spin, self.sorb, self.nele
+            )
+            self.Ham_matrix_spin[: self.ci_num, : self.ci_num] = hij_spin
+
     @torch.no_grad()
     def init_ci_nqs(self) -> list[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """
@@ -202,9 +216,19 @@ class NqsCi(BaseVMCOptimizer):
         assert nbatch == self.rank_ci_num
         assert self.n_sd + 1 == n_sd
 
-        hij = get_hij_torch(
+        if self.use_spin_raising:
+            hij_all = torch.empty(2, self.rank_ci_num, n_sd, device=self.device, dtype=torch.double)
+        else:
+            hij_all = torch.empty(1, self.rank_ci_num, n_sd, device=self.device, dtype=torch.double)
+
+        hij_all[0] = get_hij_torch(
             self.rank_ci_det, comb_x, self.h1e, self.h2e, self.sorb, self.nele
         )  # (rank_ci_num, n_sd)
+
+        if self.use_spin_raising:
+            hij_all[1] = get_hij_torch(
+                self.rank_ci_det, comb_x, self.h1e_spin, self.h2e_spin, self.sorb, self.nele
+            )
 
         # Binary Search x1 in CI-Det/Nqs
         comb_x = comb_x.reshape(-1, bra_len)  # (n_sd * rank_ci_num, bra_len)
@@ -224,7 +248,7 @@ class NqsCi(BaseVMCOptimizer):
             # x1: [n_unique, 0], placeholders
             x1 = torch.zeros(unique_comb.size(0), 0, device=self.device, dtype=torch.double)
 
-        info = (hij, x1, onv_x1, inverse_index, det_not_idx)
+        info = (hij_all, x1, onv_x1, inverse_index, det_not_idx)
         return list(info)
 
     @torch.no_grad()
@@ -259,7 +283,7 @@ class NqsCi(BaseVMCOptimizer):
         \sum_j <phi_i|H|phi_j><phi_j|phi_nqs>
         """
         # onv_x1: uint8, x1 not in Det
-        hij, x1, onv_x1, inverse_index, det_not_idx = self.ci_nqs_info
+        hij_all, x1, onv_x1, inverse_index, det_not_idx = self.ci_nqs_info
         offset0 = x1.size(0)
 
         # psi_x1: (unique-rank)
@@ -292,16 +316,23 @@ class NqsCi(BaseVMCOptimizer):
         assert all_value.size(0) == self.ci_num
 
         # value = torch.einsum("ij, ij ->i", hij, psi.reshape(self.rank_ci_num, -1))
-        rank_value = (psi.reshape(self.rank_ci_num, -1) * hij).sum(-1)
+        rank_value = (psi.reshape(self.rank_ci_num, -1) * hij_all[0]).sum(-1)
         torch.cat(all_gather_tensor(rank_value, self.device, self.world_size), out=all_value)
-
         self.Ham_matrix[: self.ci_num, -1] = all_value
         self.Ham_matrix[-1, : self.ci_num] = all_value.conj()
+
+        if self.use_spin_raising:
+            rank_value_spin = (psi.reshape(self.rank_ci_num, -1) * hij_all[1]).sum(-1)
+            torch.cat(
+                all_gather_tensor(rank_value_spin, self.device, self.world_size), out=all_value
+            )
+            self.Ham_matrix_spin[: self.ci_num, -1] = all_value
+            self.Ham_matrix_spin[-1, : self.ci_num] = all_value.conj()
 
         self.ci_nqs_value.zero_()
 
     @torch.no_grad()
-    def make_nqs_nqs(self, phi_nqs: Tensor, eloc_mean: Tensor) -> None:
+    def make_nqs_nqs(self, phi_nqs: Tensor, eloc_mean: Tensor, sloc_mean: Tensor) -> None:
         """
         <phi_NQS|H|phi_NQS> = sum(prob * eloc)
         """
@@ -315,27 +346,38 @@ class NqsCi(BaseVMCOptimizer):
 
         self.Ham_matrix[-1, -1] = eloc_mean.real
 
-    def solve_eigh(self) -> float:
+        if self.use_spin_raising:
+            self.Ham_matrix_spin[-1, -1] = sloc_mean.real
+
+    def solve_eigh(self) -> tuple[float, float]:
         # TODO:(zbwu-23-12-27) davsion or scipy.sparse.linalg.eigsh
         """
         HC = εC;
         H is Hermitian matrix
         return
         ------
-            ε0(ground energy)
+            E0(ground energy)
+            e_spin(<S-S+> )
         """
+
+        c1 = self.spin_raising_coeff
+        if self.use_spin_raising and not self.only_output_spin_raising:
+            Ham_matrix = self.Ham_matrix + c1 * self.Ham_matrix_spin
+        else:
+            Ham_matrix = self.Ham_matrix
+
         if USE_SCIPY:
             # use scipy.linalg.eigh in CPU
-            result = scipy.linalg.eigh(self.Ham_matrix.cpu().numpy())
-            E0 = result[0][0]
+            result = scipy.linalg.eigh(Ham_matrix.cpu().numpy())
+            E_all = result[0][0]
             coeff = torch.from_numpy(result[1][:, 0])
         else:
             # use torch.linalg.eigh in CPU or CUDA
             if USE_CPU:
-                result = torch.linalg.eigh(self.Ham_matrix.cpu())
+                result = torch.linalg.eigh(Ham_matrix.cpu())
             else:
-                result = torch.linalg.eigh(self.Ham_matrix)
-            E0 = result[0][0]
+                result = torch.linalg.eigh(Ham_matrix)
+            E_all = result[0][0]
             coeff = result[1][:, 0]
 
         # assert (self.Ham_matrix - self.Ham_matrix.T.conj()).norm() < 1e-6
@@ -347,7 +389,22 @@ class NqsCi(BaseVMCOptimizer):
         begin = self.rank_idx_lst[self.rank]
         end = self.rank_idx_lst[self.rank + 1]
         self.rank_ci_coeff = self.ci_coeff[begin:end]
-        return E0.item()
+
+        if self.use_spin_raising:
+            e_spin = torch.einsum(
+                "i, ij, j ->", self.total_coeff.conj(), c1 * self.Ham_matrix_spin, self.total_coeff
+            ).real.item()
+        else:
+            e_spin = 0.00
+
+        if self.use_spin_raising and not self.only_output_spin_raising:
+            E0 = E_all.item() - e_spin
+        else:
+            E0 = E_all.item()
+
+        # E0 = torch.einsum("i, ij, j ->", self.total_coeff.conj(), self.Ham_matrix, self.total_coeff)
+        # logger.info(f"delta: {E0.real.item() - (E_all.item() - e_spin):.10f}")
+        return E0, e_spin
 
     @torch.no_grad()
     def calculate_new_term(
@@ -355,7 +412,7 @@ class NqsCi(BaseVMCOptimizer):
         state: Tensor,
         phi_nqs: Tensor,
         cNqs: Tensor,
-    ) -> Tensor:
+    ) -> tuple[Tensor, Tensor]:
         """
         calculate new-term (<n|H|phi_i> * c_i) / <n|phi_nqs>
         """
@@ -367,7 +424,12 @@ class NqsCi(BaseVMCOptimizer):
         # Single-Rank
         bra = tensor_to_onv(((state + 1) / 2).to(torch.uint8), self.sorb)
         ket = self.ci_det  # ci-det, not rank-ci-det
+
+        # TODO: check
         hij = get_hij_torch(bra, ket, self.h1e, self.h2e, self.sorb, self.nele)
+
+        if self.use_spin_raising:
+            hij_spin = get_hij_torch(bra, ket, self.h1e_spin, self.h2e_spin, self.sorb, self.nele)
 
         ci = self.ci_coeff
         # Single-Rank
@@ -377,19 +439,30 @@ class NqsCi(BaseVMCOptimizer):
             value[0::2] = torch.matmul(hij, ci.real)  # Real-part
             value[1::2] = torch.matmul(hij, ci.imag)  # imag-part
             x = torch.view_as_complex(value.view(-1, 2)).div(phi_nqs)
+            if self.use_spin_raising:
+                value[0::2] = torch.matmul(hij_spin, ci.real)
+                value[1::2] = torch.matmul(hij_spin, ci.imag)
+                x1 = torch.view_as_complex(value.view(-1, 2)).div(phi_nqs)
+            else:
+                x1 = torch.zeros_like(x)
+
         elif self.dtype == torch.double:
             x = torch.matmul(hij, ci).div(phi_nqs)
+            if self.use_spin_raising:
+                x1 = torch.matmul(hij_spin, ci).div(phi_nqs)
+            else:
+                x1 = torch.zeros_like(x)
         else:
             raise NotImplementedError(f"Single/Complex-Single dose not been supported")
-        return x
+        return x, x1
 
     def new_nqs_grad(
         self,
         nqs: DDP,
         state: Tensor,
         state_prob: Tensor,
-        eloc: Tensor,
-        eloc_mean: Tensor,
+        loc: Tensor,
+        loc_mean: Tensor,
         new_term: Tensor,
         cNqs: Tensor,
         E0: float,
@@ -443,14 +516,14 @@ class NqsCi(BaseVMCOptimizer):
                 raise ValueError(f"negative numbers in the log-psi")
 
             state_prob_batch = state_prob[begin:end]
-            eloc_batch = eloc[begin:end]
+            eloc_batch = loc[begin:end]
             new_term_batch = new_term[begin:end]
             if self.grad_strategy == 0:
                 corr = eloc_batch + new_term_batch / cNqs - E0
             elif self.grad_strategy == 1:
                 corr = eloc_batch * cNqs + new_term_batch - E0 * cNqs
             elif self.grad_strategy == 2:
-                corr = eloc_batch - eloc_mean
+                corr = eloc_batch - loc_mean
             loss = (
                 2 * (c0 * scale * (torch.sum(state_prob_batch * log_psi_batch.conj() * corr))).real
             )
@@ -490,7 +563,7 @@ class NqsCi(BaseVMCOptimizer):
         for epoch in range(self.max_iter):
             t0 = time.time_ns()
             initial_state = self.onstate[0].clone().detach()
-            state, state_prob, eloc, e_total, stats, eloc_mean = self.sampler.run(
+            state, state_prob, (eloc, sloc), (eloc_mean, sloc_mean) = self.sampler.run(
                 initial_state, epoch=epoch
             )
             sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
@@ -508,8 +581,8 @@ class NqsCi(BaseVMCOptimizer):
                 assert not_idx.size(0) == 0
 
             self.make_ci_nqs()  # <phi_i|H|phi_nqs>
-            self.make_nqs_nqs(phi_nqs, eloc_mean)  # <phi_nqs|H|phi_nqs>
-            E0 = self.solve_eigh()  # solve HC = εC, C0({ci},c_N)
+            self.make_nqs_nqs(phi_nqs, eloc_mean, sloc_mean)  # <phi_nqs|H|phi_nqs>
+            E0, e_spin = self.solve_eigh()  # solve HC = εC, C0({ci},c_N)
 
             delta_Hmat = (time.time_ns() - t1) / 1.0e09
 
@@ -518,23 +591,42 @@ class NqsCi(BaseVMCOptimizer):
                 self.coeff_lst.append(self.total_coeff.to("cpu").numpy())
                 c1 = self.ci_coeff.norm().item()
                 c2 = self.nqs_coeff.norm().item()
-                logger.info(f"E0: {E0}, Coeff: {c1:.6E} {c2:6E}", master=True)
+                s = f"Hybrid energy: {E0:.9f}, spin-raising: {e_spin/self.spin_raising_coeff:.5E}, "
+                s += f"Coeff: {c1:.6E} {c2:6E}"
+                logger.info(s, master=True)
 
             t2 = time.time_ns()
-            new_term = self.calculate_new_term(sample_state, phi_nqs, self.nqs_coeff)
+
+            if self.only_sample:
+                delta = (time.time_ns() - t0) / 1.00e06
+                if self.rank == 0:
+                    s = f"{epoch}-th only Sampling finished, cost time {delta:.3f} ms\n"
+                    s += "=" * 100
+                    logger.info(s, master=True)
+                continue
+
+            # TODO: check
+            new_term, new_term1 = self.calculate_new_term(sample_state, phi_nqs, self.nqs_coeff)
             delta_new_term = (time.time_ns() - t2) / 1.00e09
 
             # backward
             t3 = time.time_ns()
+            sloc = sloc * self.spin_raising_coeff
+            sloc_mean = sloc_mean * self.spin_raising_coeff
+            if self.only_output_spin_raising:
+                sloc = torch.zeros_like(eloc)
+                sloc_mean = torch.zeros_like(sloc_mean)
+                e_spin = 0.0
+
             self.new_nqs_grad(
                 nqs=self.model,
                 state=sample_state,
                 state_prob=state_prob,
-                eloc=eloc,
-                eloc_mean=eloc_mean,
-                new_term=new_term,
+                loc=eloc + sloc,
+                loc_mean=eloc_mean + sloc_mean,
+                new_term=new_term + new_term1,
                 cNqs=self.nqs_coeff,
-                E0=E0,
+                E0=E0 + e_spin,
                 epoch=epoch,
                 MAX_AD_DIM=self.MAX_AD_DIM,
             )
@@ -548,7 +640,7 @@ class NqsCi(BaseVMCOptimizer):
 
             # save the energy grad and clip-grad
             self.clip_grad(epoch=epoch)
-            self.save_grad_energy(E0 + self.ecore)
+            self.save_grad_energy(E0 + self.ecore + e_spin)
 
             # update param
             t4 = time.time_ns()
@@ -578,8 +670,8 @@ class NqsCi(BaseVMCOptimizer):
 
     def operator_expected(
         self,
-        h1e: Tensor = None,
-        h2e: Tensor = None,
+        h1e: Tensor,
+        h2e: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor]:
         """
         calculate <O> using different h1e, h2e, e.g. S_S+, H.
@@ -590,21 +682,52 @@ class NqsCi(BaseVMCOptimizer):
         if self.rank == 0:
             logger.info(f"{'*' * 30}Begin calculating <O>{'*' * 30}", master=True)
 
-        if h1e is not None:
-            h1e_old = self.sampler.h1e
-            assert h1e.shape == h1e_old.shape
-            h1e = h1e.to(self.device)
-            self.sampler.h1e = h1e
-        if h2e is not None:
-            h2e_old = self.sampler.h2e
-            assert h2e.shape == h2e_old.shape
-            h2e = h2e.to(self.device)
-            self.sampler.h2e = h2e
+        if len(self.e_lst) == 0:  # not CI-NQS iteration
+            # calculate the before ci/cNqs coeff
+            if self.rank == 0:
+                logger.info(f"{'=' * 20}Calculate before ci/cNqs coeff{'=' * 20}", master=True)
+            initial_state = self.onstate[0].clone().detach()
+            state, state_prob, (eloc, sloc), (eloc_mean, sloc_mean) = self.sampler.run(
+                initial_state, epoch=self.max_iter
+            )
+            sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
+            if self.exact:
+                with torch.no_grad():
+                    phi_nqs = self.model(sample_state)
+            else:
+                WF_LUT = self.sampler.WF_LUT
+                if WF_LUT is None:
+                    raise ValueError(f"Use LUT to speed up <phi_nqs|H|phi_nqs>")
+                not_idx, phi_nqs = WF_LUT.lookup(state)[1:]
+                assert not_idx.size(0) == 0
+
+            self.make_ci_nqs()  # <phi_i|H|phi_nqs>
+            self.make_nqs_nqs(phi_nqs, eloc_mean, sloc_mean)  # <phi_nqs|H|phi_nqs>
+            E0, e_spin = self.solve_eigh()  # solve HC = εC, C0({ci},c_N)
+            if self.rank == 0:
+                logger.info(f"{'=' * 25}Finish calculation{'=' * 25}", master=True)
+
+        h1e_old = self.sampler.h1e
+        assert h1e.shape == h1e_old.shape
+        self.sampler.h1e = h1e.to(self.device)
+
+        h2e_old = self.sampler.h2e
+        assert h2e.shape == h2e_old.shape
+        self.sampler.h2e = h2e.to(self.device)
+
+        # not add <S-S+>
+        h1e_spin_old = self.sampler.h1e_spin
+        h2e_spin_old = self.sampler.h2e_spin
+        use_spin_raising = self.sampler.use_spin_raising
+        self.sampler.h1e_spin = None
+        self.sampler.h2e_spin = None
+        self.sampler.use_spin_raising = False
 
         # Run sampling
         initial_state = self.onstate[0].clone().detach()
-        epoch = self.max_iter
-        state, prob, eloc, e_total, stats, eloc_mean = self.sampler.run(initial_state, epoch)
+        state, state_prob, (eloc, sloc), (eloc_mean, sloc_mean) = self.sampler.run(
+            initial_state, self.max_iter
+        )
         sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
         # state, prob, eloc, eloc_mean = self._operator_expected(h1e, h2e)
 
@@ -619,7 +742,9 @@ class NqsCi(BaseVMCOptimizer):
             not_idx, phi_nqs = WF_LUT.lookup(state)[1:]
             assert not_idx.size(0) == 0  # state must be in WaveFunction-LUT
 
-        # New matrix-element using h1e/h2e
+        # New matrix-element using new h1e/h2e
+        h1e = self.sampler.h1e
+        h2e = self.sampler.h2e
         ci_hij_old = self.Ham_matrix[: self.ci_num, : self.ci_num]
         ci_hij_new = get_hij_torch(self.ci_det, self.ci_det, h1e, h2e, self.sorb, self.nele)
 
@@ -632,27 +757,29 @@ class NqsCi(BaseVMCOptimizer):
 
         self.Ham_matrix[: self.ci_num, : self.ci_num] = ci_hij_new  # <phi_i|H|phi_i>
         self.make_ci_nqs()  # <phi_i|H|phi_nqs>
-        self.make_nqs_nqs(phi_nqs, eloc_mean)  # <phi_nqs|H|phi_nqs>
-        E0 = self.solve_eigh()  # solve HC = εC, C0({ci},c_N)
+        self.make_nqs_nqs(phi_nqs, eloc_mean, sloc_mean)  # <phi_nqs|H|phi_nqs>
 
-        c1 = self.ci_coeff
-        c2 = self.nqs_coeff
+        # Using before coeff:
+        e0 = torch.einsum("i, ij, j", self.total_coeff.conj(), self.Ham_matrix, self.total_coeff)
 
         if self.rank == 0:
-            s = f"<O>: {E0:.10f}, c1: {c1.norm().item():.5f}, c2: {c2.norm().item():.5f}"
+            c1 = self.ci_coeff.norm().item()
+            c2 = self.nqs_coeff.norm().item()
+            s = f"<O>: {e0.item().real:.10f}, c1: {c1:.5E}, c2: {c2:.5E}"
             logger.info(s, master=True)
 
         # revise
         self.Ham_matrix[: self.ci_num, : self.ci_num] = ci_hij_old
         self.ci_nqs_info[0] = ci_nqs_hij_old
-        if h1e is not None:
-            self.sampler.h1e = h1e_old
-        if h2e is not None:
-            self.sampler.h2e = h2e_old
+        self.sampler.h1e = h1e_old
+        self.sampler.h2e = h2e_old
+        self.sampler.h1e_spin = h1e_spin_old
+        self.sampler.h2e_spin = h2e_spin_old
+        self.sampler.use_spin_raising = use_spin_raising
 
         if self.rank == 0:
             logger.info(f"{'*'* 30}End <O>{'*' * 30}", master=True)
 
         del comb_x, ci_hij_new, ci_nqs_hij_new
 
-        return sample_state, prob, eloc, eloc_mean, E0, c1, c2
+        return sample_state, state_prob, eloc, eloc_mean, e0

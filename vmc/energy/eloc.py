@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 import torch
 from functools import partial
@@ -20,18 +22,21 @@ def local_energy(
     x: Tensor,
     h1e: Tensor,
     h2e: Tensor,
-    ansatz: Union[nn.Module, Callable],
+    ansatz: nn.Module | Callable[[Tensor], Tensor],
     sorb: int,
     nele: int,
     noa: int,
     nob: int,
     dtype=torch.double,
+    use_spin_raising: bool = False,
+    h1e_spin: Tensor = None,
+    h2e_spin: Tensor = None,
     WF_LUT: WavefunctionLUT = None,
     use_unique: bool = True,
     reduce_psi: bool = False,
     eps: float = 1e-12,
     use_sample_space: bool = False,
-) -> Tuple[Tensor, Tensor, Tuple[float, float, float]]:
+) -> tuple[Tensor, Tensor, tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
@@ -68,14 +73,30 @@ def local_energy(
                 func = _reduce_psi
             else:
                 func = _simple
-        # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], 
+        # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         #              record_shapes=True, profile_memory=True) as prof:
         #     value = func(x, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype, WF_LUT, use_unique, eps)
         # print(prof.key_averages(group_by_input_shape=True).table(sort_by="cuda_time_total", row_limit=20))
         # print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=20))
         # return value
 
-        return func(x, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype, WF_LUT, use_unique, eps)
+        return func(
+            x,
+            h1e,
+            h2e,
+            ansatz,
+            sorb,
+            nele,
+            noa,
+            nob,
+            dtype,
+            use_spin_raising,
+            h1e_spin,
+            h2e_spin,
+            WF_LUT,
+            use_unique,
+            eps,
+        )
 
 
 # TODO: how to save unique x eloc energy
@@ -83,16 +104,19 @@ def _simple(
     x: Tensor,
     h1e: Tensor,
     h2e: Tensor,
-    ansatz: Union[nn.Module, Callable],
+    ansatz: nn.Module | Callable[[Tensor], Tensor],
     sorb: int,
     nele: int,
     noa: int,
     nob: int,
     dtype=torch.double,
+    use_spin_raising: bool = False,
+    h1e_spin: Tensor = None,
+    h2e_spin: Tensor = None,
     WF_LUT: WavefunctionLUT = None,
     use_unique: bool = True,
     eps: float = 1.0e-12,
-) -> Tuple[Tensor, Tensor, Tuple[float, float, float]]:
+) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
 
     dim: int = x.dim()
@@ -114,6 +138,9 @@ def _simple(
 
     # calculate matrix <x|H|x'>
     t1 = time.time_ns()
+
+    if use_spin_raising:
+        hij_spin = get_hij_torch(x, comb_x, h1e_spin, h2e_spin, sorb, nele)
     comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)  # shape (1, comb)/(batch, comb)
 
     t2 = time.time_ns()
@@ -156,8 +183,12 @@ def _simple(
     t3 = time.time_ns()
 
     if batch == 1:
+        if use_spin_raising:
+            sloc = torch.sum(hij_spin * psi_x1 / psi_x1[..., 0])  # scalar
         eloc = torch.sum(comb_hij * psi_x1 / psi_x1[..., 0])  # scalar
     else:
+        if use_spin_raising:
+            sloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * hij_spin, -1)
         eloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * comb_hij, -1)  # (batch)
 
     delta0 = (t1 - t0) / 1.0e06
@@ -171,27 +202,36 @@ def _simple(
 
     # if x.is_cuda:
     #     torch.cuda.empty_cache()
-    return eloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
+
+    if not use_spin_raising:
+        sloc = torch.zeros_like(eloc)
+
+    return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
 
 
 def _reduce_psi(
     x: Tensor,
     h1e: Tensor,
     h2e: Tensor,
-    ansatz: Union[nn.Module, Callable],
+    ansatz: nn.Module | Callable[[Tensor], Tensor],
     sorb: int,
     nele: int,
     noa: int,
     nob: int,
     dtype=torch.double,
+    use_spin_raising: bool = False,
+    h1e_spin: Tensor = None,
+    h2e_spin: Tensor = None,
     WF_LUT: WavefunctionLUT = None,
     use_unique: bool = True,
     eps: float = 1.0e-12,
-) -> Tuple[Tensor, Tensor, Tuple[float, float, float]]:
+) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
     ignore x' when <x|H|x'>/psi(x) < 1e-12
     """
+    hij_spin: Tensor = None
+
     check_para(x)
     dim: int = x.dim()
     assert dim == 2
@@ -210,6 +250,9 @@ def _reduce_psi(
 
     # calculate matrix <x|H|x'>
     t1 = time.time_ns()
+
+    if use_spin_raising:
+        hij_spin = get_hij_torch(x, comb_x, h1e_spin, h2e_spin, sorb, nele)
     comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
 
     t2 = time.time_ns()
@@ -263,8 +306,12 @@ def _reduce_psi(
         psi_x1 = torch.zeros(batch, n_comb, device=device, dtype=dtype)
 
     if batch == 1:
+        if use_spin_raising:
+            sloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * hij_spin, -1)
         eloc = torch.sum(comb_hij * psi_x1 / psi_x1[..., 0])  # scalar
     else:
+        if use_spin_raising:
+            sloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * hij_spin, -1)  # (batch)
         eloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * comb_hij, -1)  # (batch)
 
     t3 = time.time_ns()
@@ -283,25 +330,34 @@ def _reduce_psi(
     if use_unique:
         del unique_comb, inverse
 
+    if use_spin_raising:
+        del hij_spin
+
     # if x.is_cuda:
     #     torch.cuda.empty_cache()
-    return eloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
+    if not use_spin_raising:
+        sloc = torch.zeros_like(eloc)
+
+    return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
 
 
 def _only_sample_space(
     x: Tensor,
     h1e: Tensor,
     h2e: Tensor,
-    ansatz: Union[nn.Module, Callable],
+    ansatz: nn.Module | Callable[[Tensor], Tensor],
     sorb: int,
     nele: int,
     noa: int,
     nob: int,
     dtype=torch.double,
+    use_spin_raising: bool = False,
+    h1e_spin: Tensor = None,
+    h2e_spin: Tensor = None,
     WF_LUT: WavefunctionLUT = None,
     use_unique: bool = True,
     eps: float = 1.0e-12,
-) -> tuple[Tensor, Tensor, tuple[float, float, float]]:
+) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
 
     device = x.device
@@ -327,6 +383,9 @@ def _only_sample_space(
 
     t1 = time.time_ns()
     # (batch, n_comb_sd) or (batch, n_sample)
+
+    if use_spin_raising:
+        hij_spin = get_hij_torch(x, comb_x, h1e_spin, h2e_spin, sorb, nele)
     comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
 
     t2 = time.time_ns()
@@ -345,7 +404,11 @@ def _only_sample_space(
         # T2 = time.time_ns()
 
         psi_x = psi_x1[..., 0].view(-1).clone()
-        eloc = psi_x1.mul_(comb_hij).sum(-1).divide_(psi_x) # (nbatch)
+
+        if use_spin_raising:
+            sloc = psi_x1.mul(hij_spin).sum(-1).divide(psi_x)
+        eloc = psi_x1.mul_(comb_hij).sum(-1).divide_(psi_x)  # (nbatch)
+
         # torch.cuda.synchronize()
         # T3 = time.time_ns()
         # print(f"{(T2-T1)/1.0e6:.5f} ms, {(T3-T2)/1.0e6:.5f} ms")
@@ -363,9 +426,19 @@ def _only_sample_space(
             value[0::2] = torch.matmul(comb_hij, sample_value.real)  # Real-part
             value[1::2] = torch.matmul(comb_hij, sample_value.imag)  # Imag-part
             eloc = torch.view_as_complex(value.view(-1, 2)).div(psi_x)
+
+            if use_spin_raising:
+                value_spin = torch.empty(batch * 2, device=device, dtype=torch.double)
+                value_spin[0::2] = torch.matmul(hij_spin, sample_value.real)  # Real-part
+                value_spin[1::2] = torch.matmul(hij_spin, sample_value.imag)  # Imag-part
+                sloc = torch.view_as_complex(value_spin.view(-1, 2)).div(psi_x)
+
         elif WF_LUT.dtype == torch.double:
             eloc = torch.matmul(comb_hij, sample_value).div(psi_x)
             # eloc = torch.einsum("ij, j, i ->i", comb_hij, sample_value, 1 / psi_x)
+
+            if use_spin_raising:
+                sloc = torch.matmul(hij_spin, sample_value).div(psi_x)
         else:
             raise NotImplementedError(f"Single/Complex-Single does not been supported")
 
@@ -379,4 +452,11 @@ def _only_sample_space(
     )
 
     del comb_hij
-    return eloc.to(dtype), psi_x, (delta0, delta1, delta2)
+
+    if use_spin_raising:
+        del hij_spin
+
+    if not use_spin_raising:
+        sloc = torch.zeros_like(eloc)
+
+    return eloc.to(dtype), sloc.to(dtype), psi_x, (delta0, delta1, delta2)

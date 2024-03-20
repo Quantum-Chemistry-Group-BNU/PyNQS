@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 import torch
 import numpy as np
@@ -28,26 +30,31 @@ def total_energy(
     WF_LUT: WavefunctionLUT = None,
     use_unique: bool = True,
     dtype=torch.double,
+    use_spin_raising: bool = False,
+    h1e_spin: Tensor = None,
+    h2e_spin: Tensor = None,
     reduce_psi: bool = False,
     eps: float = 1.0e-12,
     use_sample_space: bool = False,
-) -> Tuple[Union[complex, float], Tensor, Tensor, dict]:
+) -> tuple[Tensor, Tensor, Tensor]:
     r"""
 
-    Calculate total-energy, local-energy and state-prob
-    
+    Calculate total-energy, <S-S+>, local-energy and state-prob
+
     Return
     ------
-        e_total: Total energy (Single-Rank)
-        eloc_lst: local energy (Single-Rank)
+        eloc: local energy (Single-Rank)
+        sloc : spin-raising<S-S+> (Single-Rank)
         state_prob: if exact: the state-prob would be calculated again,
                     else zeros-tensor. (Single-Rank)
     """
     t0 = time.time_ns()
     dim: int = x.shape[0]
     device = x.device
-    eloc_lst = torch.zeros(dim, device=device).to(dtype)
-    psi_lst = torch.zeros_like(eloc_lst)
+    eloc = torch.zeros(dim, device=device).to(dtype)
+    psi = torch.zeros_like(eloc)
+    sloc = torch.zeros_like(eloc)
+
     time_lst = []
     idx_lst = torch.empty(int(np.ceil(dim / nbatch)), dtype=torch.int64).fill_(nbatch)
     idx_lst[-1] = dim - (idx_lst.size(0) - 1) * nbatch
@@ -64,7 +71,7 @@ def total_energy(
         for i in range(len(idx_lst)):
             end = idx_lst[i]
             ons = x[begin:end]
-            eloc, psi, x_time = local_energy(
+            _eloc, _sloc, _psi, x_time = local_energy(
                 ons,
                 h1e,
                 h2e,
@@ -75,33 +82,38 @@ def total_energy(
                 nob,
                 dtype=dtype,
                 WF_LUT=WF_LUT,
+                use_spin_raising=use_spin_raising,
+                h1e_spin=h1e_spin,
+                h2e_spin=h2e_spin,
                 use_unique=use_unique,
                 reduce_psi=reduce_psi,
                 eps=eps,
-                use_sample_space=use_sample_space
+                use_sample_space=use_sample_space,
             )
-            eloc_lst[begin:end] = eloc
-            psi_lst[begin:end] = psi
+            eloc[begin:end] = _eloc
+            psi[begin:end] = _psi
+            sloc[begin:end] = _sloc
+
             time_lst.append(x_time)
             begin = end
         # track.manually_clean_cache((eloc, psi))
 
     # check local energy
-    if torch.any(torch.isnan(eloc_lst)):
+    if torch.any(torch.isnan(eloc)):
         raise ValueError(f"The Local energy exists nan")
 
     if exact:
         t_exact0 = time.time_ns()
         world_size = get_world_size()
         # gather psi_lst from all rank
-        psi_lst_all = gather_tensor(psi_lst, device, world_size, master_rank=0)
-        eloc_lst_all = gather_tensor(eloc_lst, device, world_size, master_rank=0)
+        psi_all = gather_tensor(psi, device, world_size, master_rank=0)
+        # eloc_all = gather_tensor(eloc, device, world_size, master_rank=0)
         synchronize()
         t_exact1 = time.time_ns()
         if rank == 0:
-            psi_lst_all = torch.cat(psi_lst_all)
-            eloc_lst_all = torch.cat(eloc_lst_all)
-            state_prob_all = (psi_lst_all * psi_lst_all.conj()).real / psi_lst_all.norm() ** 2
+            psi_all = torch.cat(psi_all)
+            # eloc_all = torch.cat(eloc_all)
+            state_prob_all = (psi_all * psi_all.conj()).real / psi_all.norm() ** 2
             state_prob_all = state_prob_all.to(dtype)
         else:
             state_prob_all = None
@@ -124,14 +136,18 @@ def total_energy(
 
         # assure length is true.
         assert state_prob.shape[0] == dim
-        del psi_lst_all, state_prob_all
+        del psi_all, state_prob_all
     else:
         if state_prob is None:
             state_prob = torch.ones(dim, dtype=dtype, device=device) / dim
 
-    state_prob = state_prob.to(dtype)
-    eloc_mean = torch.einsum("i, i ->", eloc_lst, state_prob)
-    e_total = eloc_mean + ecore
+    # eloc_mean = torch.einsum("i, i ->", eloc, state_prob)
+    # e_total = eloc_mean + ecore
+
+    # if use_spin_raising:
+    #     spin_mean = torch.dot(loc_spin, state_prob).real.item()
+    # else:
+    #     spin_mean = 0.0
 
     t1 = time.time_ns()
     time_lst = np.stack(time_lst, axis=0)
@@ -143,12 +159,12 @@ def total_energy(
         + f"Detail time: {delta0:.3E} ms {delta1:.3E} ms {delta2:.3E} ms"
     )
 
-    del psi_lst, idx_lst
+    del psi, idx_lst
     if x.is_cuda:
         torch.cuda.empty_cache()
 
     if exact:
-        return e_total.item(), eloc_lst, state_prob
+        return eloc, sloc, state_prob.real
     else:
         placeholders = torch.zeros(1, device=device, dtype=dtype)
-        return e_total.item(), eloc_lst, placeholders
+        return eloc, sloc, placeholders
