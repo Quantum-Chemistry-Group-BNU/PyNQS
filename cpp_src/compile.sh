@@ -8,8 +8,10 @@ import glob
 import os
 import platform
 import os.path as osp
+import socket
 
-sys_name = "myarch"
+# sys_name = "myarch"
+sys_name = socket.gethostname()
 print(f"sys_name: {sys_name}")
 use_magma: bool = True # use "magma" cuda math-library
 
