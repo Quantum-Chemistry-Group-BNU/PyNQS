@@ -3,15 +3,13 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 from functools import partial
 torch.set_printoptions(precision=8)
-from typing import Any, Tuple
-
-
+from typing import Tuple, List, Union, Callable, Any
 import sys
 # import flax
 
 sys.path.append("./")
 
-from vmc.ansatz.utils import joint_next_samples, joint_next_samples
+from vmc.ansatz.utils import joint_next_samples
 from vmc.ansatz.symmetry import symmetry_mask
 from libs.C_extension import onv_to_tensor
 from utils.public_function import (
@@ -20,6 +18,7 @@ from utils.public_function import (
     setup_seed,
     multinomial_tensor,
 )
+from vmc.ansatz.utils import OrbitalBlock
 
 
 def get_order(order_type, dim_graph, L, M, site=1):
@@ -31,7 +30,7 @@ def get_order(order_type, dim_graph, L, M, site=1):
         M = M // 2
 
     if order_type == "none":
-        a = torch.arange(L * M)
+        a = torch.arange(L * M).reshape((L, M))
     elif order_type == "snake":
         a = torch.arange(L * M).reshape((L, M))  # 编号
         a[1::2] = torch.flip(a[1::2], dims=[1])  # reorder： 排成蛇形
@@ -127,11 +126,21 @@ class MPS_RNN_2D(nn.Module):
         M: int = 2,
         dcut_params = None,
         dcut_step: int = 2,
+        graph_type = "snake",
         # 功能参数
         use_symmetry: bool = False,
         alpha_nele: int = None,
         beta_nele: int = None,
         tensor: bool = True,
+        # MLP版本相位参数
+        phase_type = "regular",
+        phase_hidden_size: List[int] = [32, 32],
+        phase_use_embedding: bool = False,
+        phase_hidden_activation: Union[nn.Module, Callable] = nn.ReLU,
+        phase_bias: bool = True,
+        phase_batch_norm: bool = False,
+        phase_norm_momentum=0.1,
+        n_out_phase: int = 1,
     ) -> None:
         super(MPS_RNN_2D, self).__init__()
         # 模型输入参数
@@ -146,9 +155,37 @@ class MPS_RNN_2D(nn.Module):
         self.param_dtype = param_dtype
         self.dcut_params = dcut_params
         self.dcut_step = dcut_step
+        self.graph_type = graph_type
 
         # 是否使用tensor-RNN
         self.tensor = tensor
+
+        # 使用MLP作为相位系列
+        self.phase_type = phase_type
+        if self.phase_type == "MLP":
+            self.n_out_phase = n_out_phase
+            self.phase_hidden_size = phase_hidden_size
+            self.phase_hidden_activation = phase_hidden_activation
+            self.phase_use_embedding = phase_use_embedding
+            self.phase_bias = phase_bias
+            self.phase_batch_norm = phase_batch_norm
+            self.phase_norm_momentum = phase_norm_momentum
+            self.phase_layers: List[OrbitalBlock] = []
+            
+            phase_i = OrbitalBlock(
+                num_in=self.nqubits,
+                n_hid=self.phase_hidden_size,
+                num_out=self.n_out_phase,
+                hidden_activation=self.phase_hidden_activation,
+                use_embedding=self.phase_use_embedding,
+                bias=self.phase_bias,
+                batch_norm=self.phase_batch_norm,
+                batch_norm_momentum=self.phase_norm_momentum,
+                device=self.device,
+                out_activation=None,
+            )
+            self.phase_layers.append(phase_i.to(self.device))
+            self.phase_layers = nn.ModuleList(self.phase_layers)
 
         # 边界条件
         self.left_boundary = torch.ones(
@@ -174,9 +211,9 @@ class MPS_RNN_2D(nn.Module):
                 dtype=self.param_dtype,
             )
         if self.hilbert_local == 2:
-            self.order = get_order("snake", dim_graph=2, L=self.L, M=self.M, site=1)
+            self.order = get_order(self.graph_type, dim_graph=2, L=self.L, M=self.M, site=1)
         else:
-            self.order = get_order("snake", dim_graph=2, L=self.L, M=self.M, site=2)
+            self.order = get_order(self.graph_type, dim_graph=2, L=self.L, M=self.M, site=2)
         # 初始化部分
         self.factory_kwargs = {"device": self.device, "dtype": self.param_dtype}
         self.factory_kwargs_complex = {"device": self.device, "dtype": torch.complex128}
@@ -194,7 +231,7 @@ class MPS_RNN_2D(nn.Module):
         else:
             self.alpha_nele = alpha_nele
         self.beta_nele = self.nele - self.alpha_nele
-
+        assert self.alpha_nele + self.beta_nele == self.nele
         self.min_n_sorb = min(
             [
                 self.nqubits - 2 * self.alpha_nele,
@@ -228,7 +265,7 @@ class MPS_RNN_2D(nn.Module):
         定义输入 x
         如何算出一个数出来（或者说算出一个矢量）
         """
-        target = (x + 1) // 2
+        target = (x + 1) / 2
         n_batch = x.shape[0]
         h = self.h_boundary
         h = (torch.unsqueeze(h, -1)).repeat(
@@ -247,7 +284,16 @@ class MPS_RNN_2D(nn.Module):
                 amp, phi, h = self.caculate_two_site(h, target, n_batch, i, num_up, num_down, amp, phi)
         psi_amp = amp
         # 相位部分
-        psi_phase = torch.exp(phi*1j)
+        if self.phase_type == "MLP":
+                phase_input = (
+                    target.masked_fill(target == 0, -1).double().squeeze(1)
+                )  # (nbatch, 2)
+                phase_i = self.phase_layers[0](phase_input)
+                if self.n_out_phase == 1:
+                    phi = phase_i.view(-1)
+                psi_phase = torch.complex(torch.zeros_like(phi), phi).exp()
+        if self.phase_type == "regular":
+            psi_phase = torch.exp(phi*1j)
         psi = psi_amp * psi_phase
         return psi
 
@@ -409,33 +455,33 @@ class MPS_RNN_2D(nn.Module):
                 if self.tensor:
                     self.parm_T = torch.view_as_complex(self.parm_T_r).view(self.L,self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut)
                 
-                self.parm_w_r = torch.rand((self.M * self.L * self.dcut // 2, 2), **self.factory_kwargs_real)* self.iscale
+                
                 self.parm_eta_r = torch.rand((self.M * self.L * self.dcut  // 2, 2), **self.factory_kwargs_real) * self.iscale
-
-                self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.L, self.M // 2, self.dcut)
-                self.parm_c = (params["module.parm_c_r"].to(self.device)).view(self.L, self.M // 2, 2)
-                self.parm_c = torch.view_as_complex(self.parm_c)
                 self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(self.L, self.M // 2, self.dcut)
-                self.parm_w = self.parm_w.clone()
-                # self.parm_c = self.parm_c.clone()
                 self.parm_eta = self.parm_eta.clone()
-                self.parm_w[...,:self.dcut_step] = torch.view_as_complex(params["module.parm_w_r"]).view(self.L, self.M // 2, self.dcut_step)
-                # self.parm_c = torch.view_as_complex(params["module.parm_c_r"]).view(self.M // 2, self.L)
                 self.parm_eta[...,:self.dcut_step] = torch.view_as_complex(params["module.parm_eta_r"]).view(self.L, self.M // 2, self.dcut_step)
-                
-                
-                self.parm_w = torch.view_as_real(self.parm_w).view(-1,2)
-                self.parm_c = torch.view_as_real(self.parm_c).view(-1,2)
                 self.parm_eta = torch.view_as_real(self.parm_eta).view(-1,2)
-            
-                
-                self.parm_w_r = nn.Parameter(self.parm_w)
-                self.parm_c_r = nn.Parameter(self.parm_c)
                 self.parm_eta_r = nn.Parameter(self.parm_eta)
-
-                self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.L, self.M // 2, self.dcut)
-                self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.L, self.M // 2)
                 self.parm_eta =torch.view_as_complex(self.parm_eta_r).view( self.L, self.M // 2, self.dcut)
+
+                
+                if self.phase_type == "regular":
+                    self.parm_w_r = torch.rand((self.M * self.L * self.dcut // 2, 2), **self.factory_kwargs_real)* self.iscale
+                    self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.L, self.M // 2, self.dcut)
+                    self.parm_c = (params["module.parm_c_r"].to(self.device)).view(self.L, self.M // 2, 2)
+                    self.parm_c = torch.view_as_complex(self.parm_c)
+                    self.parm_w = self.parm_w.clone()                
+                    self.parm_w[...,:self.dcut_step] = torch.view_as_complex(params["module.parm_w_r"]).view(self.L, self.M // 2, self.dcut_step)
+                
+                    self.parm_w = torch.view_as_real(self.parm_w).view(-1,2)
+                    self.parm_c = torch.view_as_real(self.parm_c).view(-1,2)
+                    
+                    self.parm_w_r = nn.Parameter(self.parm_w)
+                    self.parm_c_r = nn.Parameter(self.parm_c)
+
+                    self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.L, self.M // 2, self.dcut)
+                    self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.L, self.M // 2)
+                
                 
             else:
                 self.parm_M_h_r = nn.Parameter(
@@ -492,19 +538,21 @@ class MPS_RNN_2D(nn.Module):
                     self.parm_T = torch.view_as_complex(self.parm_T_r).view(
                         self.L,self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut
                     )
-                self.parm_w_r = nn.Parameter(
-                    torch.randn(self.M * self.L * self.dcut // 2, 2, **self.factory_kwargs_real)
-                    * self.iscale
-                )
-                self.parm_c_r = nn.Parameter(
-                    torch.zeros(self.M * self.L // 2, 2, device=self.device) * self.iscale
-                )
+                if self.phase_type == "regular":
+                    self.parm_w_r = nn.Parameter(
+                        torch.randn(self.M * self.L * self.dcut // 2, 2, **self.factory_kwargs_real)
+                        * self.iscale
+                    )
+                    self.parm_c_r = nn.Parameter(
+                        torch.zeros(self.M * self.L // 2, 2, device=self.device) * self.iscale
+                    )
+                    self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.L,self.M // 2, self.dcut)
+                    self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.L, self.M // 2)
+
                 self.parm_eta_r = nn.Parameter(
                     torch.randn(self.M * self.L * self.dcut  // 2, 2, **self.factory_kwargs_real)
                 )
 
-                self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.L,self.M // 2, self.dcut)
-                self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.L, self.M // 2)
                 self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(self.L, self.M // 2, self.dcut)
                     
         else:
@@ -529,20 +577,21 @@ class MPS_RNN_2D(nn.Module):
                 self.parm_v = nn.Parameter(self.parm_v_r)
                 if self.tensor:
                     self.parm_T = nn.Parameter(self.parm_T_r)
-
-                self.parm_c = (params["module.parm_c"].to(self.device)).view(self.L, self.M // 2)
-                self.parm_w_r = torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real)* self.iscale
                 self.parm_eta_r = torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real) * self.iscale
-
-                self.parm_w_r = self.parm_w_r.clone()
                 self.parm_eta_r = self.parm_eta_r.clone()
-
-                self.parm_w_r[...,:self.dcut_step] = params["module.parm_w"]
                 self.parm_eta_r[...,:self.dcut_step] = params["module.parm_eta"]
-                
-                self.parm_w = nn.Parameter(self.parm_w_r)
-                self.parm_c = nn.Parameter(self.parm_c_r)
                 self.parm_eta = nn.Parameter(self.parm_eta_r)
+
+                if self.param_dtype == "regular":
+                    self.parm_c = (params["module.parm_c"].to(self.device)).view(self.L, self.M // 2)
+                    self.parm_w_r = torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real)* self.iscale
+                    
+                    self.parm_w_r = self.parm_w_r.clone()
+                    self.parm_w_r[...,:self.dcut_step] = params["module.parm_w"]
+                    
+                    self.parm_w = nn.Parameter(self.parm_w_r)
+                    self.parm_c = nn.Parameter(self.parm_c_r)
+                
 
             else:
                 self.parm_M_h = nn.Parameter(
@@ -588,14 +637,14 @@ class MPS_RNN_2D(nn.Module):
                         * self.iscale
                         
                     )
-            
-                self.parm_w = nn.Parameter(
-                    torch.randn(self.L ,self.M//2 , self.dcut , **self.factory_kwargs_real)
-                    * self.iscale
-                )
-                self.parm_c = nn.Parameter(
-                    torch.zeros(self.L ,self.M//2, device=self.device) * self.iscale
-                )
+                if self.param_dtype == "regular":
+                    self.parm_w = nn.Parameter(
+                        torch.randn(self.L ,self.M//2 , self.dcut , **self.factory_kwargs_real)
+                        * self.iscale
+                    )
+                    self.parm_c = nn.Parameter(
+                        torch.zeros(self.L ,self.M//2, device=self.device) * self.iscale
+                    )
                 self.parm_eta = nn.Parameter(
                     torch.randn(self.L ,self.M//2 , self.dcut , **self.factory_kwargs_real)
                 )
@@ -642,36 +691,51 @@ class MPS_RNN_2D(nn.Module):
             idx = torch.nonzero(self.order == i)
             b = idx[0, 1]  # 第 b 列
             a = idx[0, 0]  # 第 a 行
-            if a % 2 == 0:  # 偶数行，左->右
-                if a == 0:
-                    if b == 0:
-                        h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
-                            1, 1, n_batch
-                        )  # (hilbert_local, dcut ,n_batch) 
-                        h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
-                            1, 1, n_batch
-                        )  # (hilbert_local, dcut ,n_batch)
-                    else:
-                        h_h = h[a, b-1, ...]
-                        h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
-                            1, 1, n_batch
-                        )  # (hilbert_local, dcut ,n_batch)
-                else:
-                    if b == 0:
-                        h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
+            if self.graph_type == "snake":
+                if a % 2 == 0:  # 偶数行，左->右
+                    if a == 0:
+                        if b == 0:
+                            h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
                                 1, 1, n_batch
                             )  # (hilbert_local, dcut ,n_batch) 
-                        h_v = h[a-1,b,...]
+                            h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
+                                1, 1, n_batch
+                            )  # (hilbert_local, dcut ,n_batch)
+                        else:
+                            h_h = h[a, b-1, ...]
+                            h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
+                                1, 1, n_batch
+                            )  # (hilbert_local, dcut ,n_batch)
                     else:
-                        h_h = h[a, b-1, ...]
-                        h_v = h[a-1, b,...]
-            else:  # 奇数行，右->左
-                if b == self.M - 1:
-                    h_h = (torch.unsqueeze(self.boundary, -1)).repeat(1, 1, n_batch)
-                    h_v = h[a-1, b, ...]
+                        if b == 0:
+                            h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
+                                    1, 1, n_batch
+                                )  # (hilbert_local, dcut ,n_batch) 
+                            h_v = h[a-1,b,...]
+                        else:
+                            h_h = h[a, b-1, ...]
+                            h_v = h[a-1, b,...]
+                else:  # 奇数行，右->左
+                    if b == self.M - 1:
+                        h_h = (torch.unsqueeze(self.boundary, -1)).repeat(1, 1, n_batch)
+                        h_v = h[a-1, b, ...]
+                    else:
+                        h_h = h[a, b+1, ...]  # (hilbert_local, dcut ,n_batch)
+                        h_v = h[a-1, b, ...]
+            if self.graph_type == "none":
+                if b == 0:
+                    h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
+                        1, 1, n_batch
+                    )
                 else:
-                    h_h = h[a, b+1, ...]  # (hilbert_local, dcut ,n_batch)
-                    h_v = h[a-1, b, ...]
+                    h_h = h[a,b-1,...]
+                if a == 0:
+                    h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
+                        1, 1, n_batch
+                    )
+                else:
+                    h_v = h[a-1,b,...]
+                    
             #取上一个设置的条件
             if i > 0:
                 k = k - 1
@@ -706,7 +770,7 @@ class MPS_RNN_2D(nn.Module):
             h = h.clone()
             h[a, b] = h_ud  # 更新h
             # 计算概率（振幅部分） 并归一化
-            P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, torch.abs(self.parm_eta[a, b])) # -> (local_hilbert_dim, n_batch)
+            P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, (torch.abs(self.parm_eta[a, b])**2)+0*1j) # -> (local_hilbert_dim, n_batch)
             P = P / torch.sum(P,dim=0)
             # print(P)
             P = torch.sqrt(P)
@@ -731,37 +795,50 @@ class MPS_RNN_2D(nn.Module):
         idx = torch.nonzero(self.order == i)
         b = idx[0, 1]  # 第 b 列
         a = idx[0, 0]  # 第 a 行
-        if a % 2 == 0:  # 偶数行，左->右
-            if a == 0:
-                if b == 0:
-                    h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
-                        1, 1, n_batch
-                    )  # (hilbert_local, dcut ,n_batch) 
-                    h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
-                        1, 1, n_batch
-                    )  # (hilbert_local, dcut ,n_batch)
-                else:
-                    h_h = h[a, b-1, ...]
-                    h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
-                        1, 1, n_batch
-                    )  # (hilbert_local, dcut ,n_batch)
-            else:
-                if b == 0:
-                    h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
+        if self.graph_type == "snake":
+            if a % 2 == 0:  # 偶数行，左->右
+                if a == 0:
+                    if b == 0:
+                        h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
                             1, 1, n_batch
                         )  # (hilbert_local, dcut ,n_batch) 
-                    h_v = h[a-1,b,...]
+                        h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
+                            1, 1, n_batch
+                        )  # (hilbert_local, dcut ,n_batch)
+                    else:
+                        h_h = h[a, b-1, ...]
+                        h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
+                            1, 1, n_batch
+                        )  # (hilbert_local, dcut ,n_batch)
                 else:
-                    h_h = h[a, b-1, ...]
-                    h_v = h[a-1, b,...]
-        else:  # 奇数行，右->左
-            if b == self.M//2 - 1:
-                h_h = (torch.unsqueeze(self.boundary, -1)).repeat(1, 1, n_batch)
-                h_v = h[a-1, b, ...]
-            else:
-                h_h = h[a, b+1, ...]  # (hilbert_local, dcut ,n_batch)
-                h_v = h[a-1, b, ...]
-
+                    if b == 0:
+                        h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
+                                1, 1, n_batch
+                            )  # (hilbert_local, dcut ,n_batch) 
+                        h_v = h[a-1,b,...]
+                    else:
+                        h_h = h[a, b-1, ...]
+                        h_v = h[a-1, b,...]
+            else:  # 奇数行，右->左
+                if b == self.M//2 - 1:
+                    h_h = (torch.unsqueeze(self.boundary, -1)).repeat(1, 1, n_batch)
+                    h_v = h[a-1, b, ...]
+                else:
+                    h_h = h[a, b+1, ...]  # (hilbert_local, dcut ,n_batch)
+                    h_v = h[a-1, b, ...]
+        if self.graph_type == "none":
+                if b == 0:
+                    h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(
+                        1, 1, n_batch
+                    )
+                else:
+                    h_h = h[a,b-1,...]
+                if a == 0:
+                    h_v = (torch.unsqueeze(self.bottom_boundary, -1)).repeat(
+                        1, 1, n_batch
+                    )
+                else:
+                    h_v = h[a-1,b,...]
         if i > 0:
             k = k - 1
         q_k = self.state_to_int(target[:, 2*k:2*k+2], sites=2)  # 第i-1个site的具体sigma (n_batch)
@@ -769,11 +846,11 @@ class MPS_RNN_2D(nn.Module):
         # q_k = (torch.unsqueeze(q_k.view(-1,n_batch),0)).repeat(1, self.dcut, 1) 
         q_k = (q_k.view(1, 1, -1)).repeat(1, self.dcut, 1)
         
-        if i > self.M-1:
+        if i > self.M//2-1:
             if a % 2 == 0:
                 l = k
             else:
-                l = b + (a-1) * self.M
+                l = b + (a-1) * self.M//2
         else:
             l = 0
         q_l = self.state_to_int(target[:, 2*l:2*l+2], sites=2)  # 第i-1个site的具体sigma (n_batch)
@@ -803,8 +880,8 @@ class MPS_RNN_2D(nn.Module):
         h = h.clone()
         h[a, b] = h_ud  # 更新h
         # 计算概率（振幅部分） 并归一化
-
-        P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, torch.abs(self.parm_eta[a, b])).real # -> (local_hilbert_dim, n_batch)
+        # breakpoint()
+        P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, (torch.abs(self.parm_eta[a, b])**2)+0*1j).real # -> (local_hilbert_dim, n_batch)
         # print("归一化之前")
         # print(P)
         # print(torch.exp(self.parm_eta[a, b]))
@@ -831,8 +908,10 @@ class MPS_RNN_2D(nn.Module):
             if self.param_dtype == torch.complex128:
                 h_i = h_i.to(torch.complex128)
             # 计算相位
-            phi_i = self.parm_w[a, b] @ h_i + self.parm_c[a, b] # (dcut) (dcut, n_batch)  -> (n_batch)
-            phi = phi + torch.angle(phi_i)
+            if self.phase_type == "regular":
+                phi_i = self.parm_w[a, b] @ h_i + self.parm_c[a, b] # (dcut) (dcut, n_batch)  -> (n_batch)
+                phi = phi + torch.angle(phi_i)
+            # breakpoint()
             return amp, phi, h
 
     def extra_repr(self) -> str:
@@ -846,8 +925,13 @@ class MPS_RNN_2D(nn.Module):
             s += f"The number included in amp Tensor Term is {(self.parm_T.numel())}.\n"
         s += f"The number included in amp Matrix Term (M_h and M_v) is {(self.parm_M_h.numel())} + {(self.parm_M_v.numel())}.\n"
         s += f"The number included in amp vector Term is {(self.parm_v.numel())}.\n"
-        s += f"The number included in phase Matrix Term is {(self.parm_w.numel())}.\n"
-        s += f"The number included in phase vector Term is {(self.parm_c.numel())}.\n"
+        if self.phase_type == "regular":
+            s += f"The number included in phase Matrix Term is {(self.parm_w.numel())}.\n"
+            s += f"The number included in phase vector Term is {(self.parm_c.numel())}.\n"
+        # if self.phase_type == "MLP":
+        #     impl = self.phase_layers[0]
+        #     phase_num = impl.numel()
+        #     s += f"phase: {phase_num}"
         s += f"The number included in eta is {(self.parm_eta.numel())}.\n"
         s += f"The bond dim in MPS part is{self.dcut}, the local dim of Hilbert space is {self.hilbert_local}."
         return s
@@ -1315,6 +1399,11 @@ if __name__ == "__main__":
         dcut=6,
         # tensor=False,
         M=6,
+        graph_type="snake",
+        phase_type="MLP",
+        phase_batch_norm=False,
+        phase_hidden_size=[128, 128],
+        n_out_phase=1,
     )
     # MPS_RNN_1D = MPS_RNN_2D(
     #     nqubits=sorb,
