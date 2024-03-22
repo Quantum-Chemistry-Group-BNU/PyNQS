@@ -7,6 +7,7 @@ from .comm import (
     get_rank,
     synchronize,
     broadcast_tensor,
+    all_to_all_tensor,
 )
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "get_world_size",
     "get_rank",
     "synchronize",
-    "broadcast_tensor"
+    "broadcast_tensor",
+    "all_to_all_tensor",
 ]

@@ -146,7 +146,7 @@ def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int =
 def broadcast_tensor(tensor: Union[Tensor, None], device, dtype, master_rank: int = 0) -> Tensor:
     """
     Broadcast tensor, support complex-tensor(complex128, complex64)
-    
+
     Returns
     -------
         tensor: Tensor, convert to dtype
@@ -299,6 +299,63 @@ def all_gather_tensor(tensor: Tensor, device, world_size: int) -> List[Tensor]:
     for tensor, size in zip(all_tensor_padded, all_batch):
         all_tensor.append(tensor[:size])
     return all_tensor
+
+
+def all_to_all_tensor(tensor: Tensor, world_size: int) -> List[Tensor]:
+    """
+    All-to-All tensor(1D), support length % world_size != 0:
+
+    NOTICE, if backend='nccl', tensor must be in different device.
+
+    e.g:
+        GPU0: 0 1 2 3 4 5 6 7 8
+        GPU1: 0 2 4 6 8 10 12 14 16
+         all-to-all:
+        GPU0: 0 1 2 3 4 | 0 2 4 6 8
+        GPU1: 4 5 6 7 8 | 10 12 14 16
+
+    Parameters
+    ----------
+        tensor : Tensor
+        word_size: world size, default: 1
+        same_device : all-tensor in same gpu device, default: False
+
+    Returns
+    -------
+        out_tensor : list of all-to-all tensor arrays from all the gpus
+
+    """
+    if get_world_size() == 1:
+        return [tensor]
+    assert tensor.size(0) > world_size and tensor.dim() == 1
+    backend = dist.get_backend()
+    length = tensor.size(0)
+    res = length % world_size
+    tensor_list = list(tensor.chunk(world_size))
+    size_diff = world_size - res
+    rank = get_rank()
+    if res != 0:
+        padding = torch.zeros(size_diff, device=tensor.device, dtype=tensor.dtype)
+        tensor_list[-1] = torch.cat((tensor_list[-1], padding))
+
+    out_tensor = torch.empty(length + size_diff, device=tensor.device, dtype=tensor.dtype)
+    out_tensor = list(out_tensor.chunk(world_size))
+
+    if backend == "nccl" or backend == "mpi":
+        # NCCL in different GPU
+        dist.all_to_all(out_tensor, tensor_list)
+    elif backend == "gloo":
+        for i in range(world_size):
+            dist.scatter(out_tensor[i], tensor_list if i == rank else None, src=i)
+    else:
+        raise NotImplementedError()
+
+    if res != 0:
+        if rank == world_size - 1:
+            for i in range(world_size):
+                out_tensor[i] = out_tensor[i][:-size_diff]
+
+    return out_tensor
 
 
 class SyncFunction(torch.autograd.Function):
