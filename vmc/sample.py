@@ -304,7 +304,7 @@ class Sampler:
             if self.rank == 0:
                 logger.info(str(stats_sloc), master=True)
         else:
-            sloc_mean = torch.tensor(float("inf"), device=self.device)
+            sloc_mean = torch.tensor(0.0, device=self.device)
 
         return ci_space_rank.detach(), sample_prob, (eloc, sloc), (eloc_mean, sloc_mean)
 
