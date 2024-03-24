@@ -150,7 +150,7 @@ class Iface:
 
 
 def interface(
-    atom: str,
+    atom: str = None,
     basis="sto-3g",
     integral_file: str = "integral.info",
     fci_coeff: bool = False,
@@ -211,6 +211,7 @@ def interface(
         sorb = nbas * 2
         mol, mf, info = get_hubbard_model(*hubbard_info)
         e_hf = mf.energy_tot()
+        mo_coeff = mf.mo_coeff
 
     # staticmethod
     Iface.dump(info, fname=integral_file)
