@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.distributed as dist
 
@@ -303,7 +304,7 @@ def all_gather_tensor(tensor: Tensor, device, world_size: int) -> List[Tensor]:
 
 def all_to_all_tensor(tensor: Tensor, world_size: int) -> List[Tensor]:
     """
-    All-to-All tensor(1D), support length % world_size != 0:
+    All-to-All tensor(1D, 2D), support length % world_size != 0:
 
     NOTICE, if backend='nccl', tensor must be in different device.
 
@@ -327,19 +328,34 @@ def all_to_all_tensor(tensor: Tensor, world_size: int) -> List[Tensor]:
     """
     if get_world_size() == 1:
         return [tensor]
-    assert tensor.size(0) > world_size and tensor.dim() == 1
-    backend = dist.get_backend()
-    length = tensor.size(0)
-    res = length % world_size
-    tensor_list = list(tensor.chunk(world_size))
-    size_diff = world_size - res
-    rank = get_rank()
-    if res != 0:
-        padding = torch.zeros(size_diff, device=tensor.device, dtype=tensor.dtype)
-        tensor_list[-1] = torch.cat((tensor_list[-1], padding))
 
-    out_tensor = torch.empty(length + size_diff, device=tensor.device, dtype=tensor.dtype)
-    out_tensor = list(out_tensor.chunk(world_size))
+    if tensor.dim() == 1:
+        tensor = tensor.reshape(1, -1)
+    assert tensor.size(1) > world_size and tensor.dim() == 2
+    backend = dist.get_backend()
+    length = tensor.size(1)
+    res = length % world_size
+    min_batch = math.ceil(length / world_size)
+    size_diff = min_batch * world_size - length
+    rank = get_rank()
+
+    device = tensor.device
+    dtype = tensor.dtype
+
+    tensor_list = list(tensor.chunk(world_size, dim=1))
+
+    if res != 0:
+        padding = torch.zeros(tensor.size(0), size_diff, device=device, dtype=dtype)
+        tensor_list[-1] = torch.cat((tensor_list[-1], padding), dim=1)
+
+    # memory must be contiguous
+    for i in range(len(tensor_list)):
+        tensor_list[i] = tensor_list[i].contiguous()
+
+    N_single = torch.tensor([tensor.size(0)], device=device, dtype=torch.int64)
+    N_all = torch.cat(all_gather_tensor(N_single, world_size=world_size, device=device))
+    out_tensor = torch.empty(N_all.sum().item(), min_batch, device=device, dtype=dtype)
+    out_tensor = list(out_tensor.split(list(N_all.cpu())))
 
     if backend == "nccl" or backend == "mpi":
         # NCCL in different GPU
@@ -353,7 +369,7 @@ def all_to_all_tensor(tensor: Tensor, world_size: int) -> List[Tensor]:
     if res != 0:
         if rank == world_size - 1:
             for i in range(world_size):
-                out_tensor[i] = out_tensor[i][:-size_diff]
+                out_tensor[i] = out_tensor[i][:, : min_batch - size_diff]
 
     return out_tensor
 
