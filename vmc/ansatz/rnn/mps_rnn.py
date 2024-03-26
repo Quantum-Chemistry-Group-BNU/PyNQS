@@ -19,7 +19,8 @@ from utils.public_function import (
     multinomial_tensor,
 )
 from vmc.ansatz.utils import OrbitalBlock
-
+from utils.det_helper import DetLUT
+from vmc.ansatz.symmetry import symmetry_mask, orthonormal_mask
 
 def get_order(order_type, dim_graph, L, M, site=1):
     """
@@ -142,6 +143,7 @@ class MPS_RNN_2D(nn.Module):
         phase_norm_momentum=0.1,
         n_out_phase: int = 1,
         sample_order = None,
+        det_lut: DetLUT = None,
     ) -> None:
         super(MPS_RNN_2D, self).__init__()
         # 模型输入参数
@@ -251,6 +253,20 @@ class MPS_RNN_2D(nn.Module):
             min_k=self.min_n_sorb,
             sites=2,
         )
+
+        # DET
+        # remove det
+        self.remove_det = False
+        self.det_lut: DetLUT = None
+        if det_lut is not None:
+            self.remove_det = True
+            self.det_lut = det_lut
+    
+    def orth_mask(self, states: Tensor, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
+        if self.remove_det:
+            return orthonormal_mask(states, self.det_lut)
+        else:
+            return torch.ones(num_up.size(0), 4, device=self.device, dtype=torch.bool)
 
     def update_h(self, i, j, h_h, h_v):
         """
@@ -1056,6 +1072,7 @@ class MPS_RNN_1D(nn.Module):
         alpha_nele: int = None,
         beta_nele: int = None,
         sample_order = None,
+        det_lut: DetLUT = None,
     ) -> None:
         super(MPS_RNN_1D, self).__init__()
         # 模型输入参数
@@ -1176,6 +1193,19 @@ class MPS_RNN_1D(nn.Module):
                 torch.randn(self.nqubits // 2 , self.dcut , **self.factory_kwargs_real)
                 * self.iscale
             )
+        # DET
+        # remove det
+        self.remove_det = False
+        self.det_lut: DetLUT = None
+        if det_lut is not None:
+            self.remove_det = True
+            self.det_lut = det_lut
+    
+    def orth_mask(self, states: Tensor, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
+        if self.remove_det:
+            return orthonormal_mask(states, self.det_lut)
+        else:
+            return torch.ones(num_up.size(0), 4, device=self.device, dtype=torch.bool)
 
     def forward(self, x: Tensor):
         """
