@@ -297,7 +297,6 @@ class MPS_RNN_2D(nn.Module):
         if self.phase_type == "regular":
             psi_phase = torch.exp(phi*1j)
         psi = psi_amp * psi_phase
-        breakpoint()
         # if self.sample_order != None:
         extra_phase = permute_sgn(torch.range(0,self.nqubits).to(torch.long),target.to(torch.long),self.nqubits)
         psi = psi * extra_phase
@@ -776,7 +775,10 @@ class MPS_RNN_2D(nn.Module):
             h = h.clone()
             h[a, b] = h_ud  # 更新h
             # 计算概率（振幅部分） 并归一化
-            P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, (torch.abs(self.parm_eta[a, b])**2)+0*1j) # -> (local_hilbert_dim, n_batch)
+            eta = (torch.abs(self.parm_eta[a, b])**2)
+            if self.param_dtype == torch.complex128:
+                eta = eta+0*1j
+            P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, eta) # -> (local_hilbert_dim, n_batch)
             P = P / torch.sum(P,dim=0)
             # print(P)
             P = torch.sqrt(P)
@@ -887,7 +889,10 @@ class MPS_RNN_2D(nn.Module):
         h[a, b] = h_ud  # 更新h
         # 计算概率（振幅部分） 并归一化
         # breakpoint()
-        P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, (torch.abs(self.parm_eta[a, b])**2)+0*1j).real # -> (local_hilbert_dim, n_batch)
+        eta = (torch.abs(self.parm_eta[a, b])**2)
+        if self.param_dtype == torch.complex128:
+            eta = eta+0*1j
+        P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, eta).real # -> (local_hilbert_dim, n_batch)
         # print("归一化之前")
         # print(P)
         # print(torch.exp(self.parm_eta[a, b]))
@@ -1263,7 +1268,11 @@ class MPS_RNN_1D(nn.Module):
         # lam, U = torch.linalg.eigh(gamma) # -> 技术性问题对角化 gamma是一个dcut**2的矩阵
         # gamma = U.T @ torch.diag(self.parm_eta[i]) @ U
         # 计算概率（振幅部分） # -> (local_hilbert_dim, n_batch)
-        P = torch.einsum("iac,iac,a->ic", h.conj(), h, torch.abs(self.parm_eta[i])).real
+        eta = (torch.abs(self.parm_eta[i])**2)
+        if self.param_dtype == torch.complex128:
+            eta = eta+0*1j
+        P = torch.einsum("iac,iac,a->ic", h.conj(), h, eta).real
+        print(P)
         P = torch.sqrt(P)
         P = P / ((torch.max(P, dim=0)[0]).view(1, -1)).repeat(
             self.hilbert_local, 1
