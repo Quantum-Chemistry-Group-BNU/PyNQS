@@ -59,22 +59,31 @@ def get_Hubbard_t2D(nbas: int, t: float =1, pbc=False, M:int =None) -> ndarray[n
                 get_thop(int(M*a+b),int(M*a+M-1))
     return thop
 
-def get_Hubbard_t2D(nbas: int, t: float =1) -> ndarray[np.float64]:
+def get_Hubbard_t2D(nbas: int, t: float =1, pbc=False, M:int =None) -> ndarray[np.float64]:
     thop = np.zeros((nbas, nbas))
-    L = np.sqrt(nbas)
+    L = nbas // M
     def get_thop(k: int,l: int):
         thop[k, l] = -1*t
         thop[l, k] = -1*t
     for i in range(nbas):
-        a, b = divmod(i, L) # 第a行第b列的site
+        a, b = divmod(i, M) # 第a行第b列的site
         if a != L-1:
-            get_thop(int(L*a+b),int(L*(a+1)+b))
+            get_thop(int(M*a+b),int(M*(a+1)+b))
         if a != 0:
-            get_thop(int(L*a+b),int(L*(a-1)+b))
-        if b != L-1:
-            get_thop(int(L*a+b),int(L*a+b+1))
+            get_thop(int(M*a+b),int(M*(a-1)+b))
+        if b != M-1:
+            get_thop(int(M*a+b),int(M*a+b+1))
         if b != 0:
-            get_thop(int(L*a+b),int(L*a+b-1))
+            get_thop(int(M*a+b),int(M*a+b-1))
+        if pbc:
+            if a == L-1:
+                get_thop(int(M*a+b),int(b))
+            if a == 0:
+                get_thop(int(M*a+b),int(M*(L-1)+b))
+            if b == M-1:
+                get_thop(int(M*a+b),int(M*a))
+            if b == 0:
+                get_thop(int(M*a+b),int(M*a+M-1))
     return thop
 
 

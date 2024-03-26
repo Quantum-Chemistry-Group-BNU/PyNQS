@@ -23,10 +23,13 @@ from utils.distributed import get_rank
 from utils.loggings import dist_print
 from vmc.ansatz import RBMWavefunction, RNNWavefunction, RBMSites, DecoderWaveFunction, MPS_RNN_1D, MPS_RNN_2D
 from vmc.optim import VMCOptimizer, GD
-from ci import unpack_ucisd, ucisd_to_fci, fci_revise
 from libs.C_extension import onv_to_tensor
 from torchinfo import summary
 from tmp.support import make_prefix
+from ci_vmc.hybrid import NqsCi
+from ci import unpack_ucisd, ucisd_to_fci, fci_revise, CIWavefunction
+from libs.C_extension import onv_to_tensor, tensor_to_onv
+from torchinfo import summary
 
 # from qubic import MPS_c, mps_CIcoeff, mps_sample, RunQubic
 # from qubic.qmatrix import convert_mps
@@ -53,23 +56,46 @@ if __name__ == "__main__":
     rank = get_rank()
     # electronic structure information
     # if dist.get_rank() == 0:
-    #     atom: str = ""
-    #     bond = 1.10
-    #     # for k in range(2):
-    #     #     atom += f"N, 0.00, 0.00, {k * bond:.3f} ;"
-    #     for i in range(2):
-    #         for j in range(3):
-    #             x = i * 1.5
-    #             y = j * 1.5
-    #             atom += f"H, {x:.2f}, {y:.2f}, 0.00 ;\n"
+    #     # atom: str = ""
+    #     # bond = 1.10
+    #     # # for k in range(2):
+    #     # #     atom += f"N, 0.00, 0.00, {k * bond:.3f} ;"
+    #     # for i in range(2):
+    #     #     for j in range(3):
+    #     #         x = i * 1.5
+    #     #         y = j * 1.5
+    #     #         atom += f"H, {x:.2f}, {y:.2f}, 0.00 ;\n"
+
+    #     # integral_file = tempfile.mkstemp()[1]
+    #     # sorb, nele, e_lst, fci_amp, ucisd_amp, mf = interface(
+    #     #     atom, integral_file=integral_file, cisd_coeff=True,
+    #     #     basis="sto-3g",
+    #     #     # localized_orb=False,
+    #     #     # localized_method="lowdin",
+    #     # )
 
     #     integral_file = tempfile.mkstemp()[1]
+
+    #     hubbard_nbas = 8
+    #     hubbard_nelec = 8
+    #     hubbard_U = 1.0
+    #     hubbard_dim = 2
+    #     hubbard_M = 4
+    #     hubbard_pbc = False
+    #     hubbard_info = [hubbard_nbas, hubbard_nelec, hubbard_U, hubbard_dim, hubbard_pbc, hubbard_M]
+    #     # breakpoint()
     #     sorb, nele, e_lst, fci_amp, ucisd_amp, mf = interface(
-    #         atom, integral_file=integral_file, cisd_coeff=True,
+    #         integral_file=integral_file, cisd_coeff=True,
     #         basis="sto-3g",
+    #         model_type = "Hubbard",
+    #         hubbard_info = hubbard_info,
     #         # localized_orb=False,
     #         # localized_method="lowdin",
     #     )
+        
+    #     # from utils.pyscf_helper.interface_pyscf import interface
+    #     # integral_file = tempfile.mkstemp()[1]
+    #     # sorb, nele, e_lst, coeff, amp, mf = interface("H", integral_file=integral_file, cisd_coeff=True, basis="sto-3g",)
     #     logger.info(e_lst)
     #     h1e, h2e, ci_space, ecore, sorb = read_integral(
     #         integral_file,
@@ -94,10 +120,10 @@ if __name__ == "__main__":
     #             "ucisd_amp": ucisd_amp,
     #             "fci_amp": fci_amp,
     #         },
-    #         "./molecule/H6-1.50-square.pth",
+    #         "./molecule/Hubbard_obc_2d_i2j4.pth",
     #     )
     # breakpoint()
-    e_name = "H6-1.50-square"
+    e_name = "Hubbard_obc_2d_22"
     e = torch.load("./molecule/"+e_name+".pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
@@ -107,6 +133,7 @@ if __name__ == "__main__":
     ci_space = e["ci_space"]
     ecore = e["ecore"]
     nele = e["nele"]
+    # breakpoint()
     info_dict = {
         "h1e": h1e,
         "h2e": h2e,
@@ -140,9 +167,9 @@ if __name__ == "__main__":
         common_linear=False,
         combine_amp_phase=False,
         phase_batch_norm=False,
-        phase_hidden_size=[64, 64],
+        phase_hidden_size=[128, 128],
         n_out_phase=1,
-        nn_type="RNN",
+        nn_type="GRU",
     ).to(device=device)
     
     # rbm = RBMWavefunction(sorb, alpha=2, device=device, rbm_type="cos")
@@ -160,57 +187,64 @@ if __name__ == "__main__":
     # ansatz = ar_rbm
     d_model = 16
     n_warmup = 2000
-    # transformer = DecoderWaveFunction(
-    #     sorb=sorb,
-    #     nele=nele,
-    #     alpha=noa,
-    #     beta=nob,
-    #     device=device,
-    #     d_model=d_model,
-    #     n_heads=4,
-    #     phase_hidden_size=[512, 521],
-    #     n_out_phase=4,
-    #     use_kv_cache=True,
-    #     norm_method=0,
-    # )
+    transformer = DecoderWaveFunction(
+        sorb=sorb,
+        nele=nele,
+        alpha_nele=nele // 2,
+        beta_nele=nele // 2,
+        use_symmetry=True,
+        wf_type="complex",
+        n_layers=2,
+        device=device,
+        d_model=d_model,
+        n_heads=8,
+        phase_hidden_size=[128,128],
+        n_out_phase=1,
+        use_kv_cache=True,
+        norm_method=0,
+        # det_lut=det_lut, # use det-LUT in CI-VMC
+    )
 
     # ansatz = transformer
-    dcut = 8
+    dcut = 6
+    # breakpoint()
     MPS_RNN_1D = MPS_RNN_1D(
         use_symmetry=True,
         nqubits=sorb,
         nele=nele,
         device=device,
         dcut=dcut,
-        # param_dtype = torch.complex128
+        param_dtype = torch.complex128
         # tensor=False,
     )
     # print(sorb)
     # breakpoint()
     # params = None
     # for i in range(0,10,2):
-    #     print(f"现在是第{i/2}次训练，训练的参数为{dcut+2*(i-2)}\n")
-    #     print(f"现在的dcut为{dcut+i}，上一次为{dcut+i-2}\n")
-    #     # breakpoint()
-    #     MPS_RNN_2D_ = MPS_RNN_2D(
-    #         use_symmetry=True,
-    #         nqubits=sorb,
-    #         nele=nele,
-    #         device=device,
-    #         dcut=(dcut+i),
-    #         param_dtype = torch.complex128,
-    #         tensor=False,
-    #         # 这两个是规定二维计算的长宽的。
-    #         M=6,
-    #         hilbert_local=4,
-    #         dcut_params=params,
-    #         dcut_step=dcut+i-2,
-    #     )
-        
+        # print(f"现在是第{i/2}次训练，训练的参数为{dcut+2*(i-2)}\n")
+        # print(f"现在的dcut为{dcut+i}，上一次为{dcut+i-2}\n")
+        # breakpoint()
+    MPS_RNN_2D = MPS_RNN_2D(
+        use_symmetry=False,
+        nqubits=sorb,
+        nele=nele,
+        device=device,
+        dcut=dcut,
+        param_dtype = torch.complex128,
+        tensor=False,
+        # 这两个是规定二维计算的长宽的。
+        M=4,
+        hilbert_local=4,
+        # dcut_params=params,
+        # dcut_step=dcut+i-2,
+    )
+    
     ansatz = rnn
     modelname = "RNN"
-    # ansatz = MPS_RNN_1D
-    # modelname = "MPS_RNN_1D"
+    # ansatz = transformer
+    # modelname = "Transformer"
+    ansatz = MPS_RNN_1D
+    modelname = "MPS_RNN_1D"
 
     if rank == 0:
         net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
@@ -225,7 +259,7 @@ if __name__ == "__main__":
 
     sampler_param = {
         "n_sample": int(1.0e8),
-        "debug_exact": False,  # exact optimization
+        "debug_exact": True,  # exact optimization
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
@@ -275,8 +309,8 @@ if __name__ == "__main__":
         "sampler_param": sampler_param,
         "only_sample": False,
         "electron_info": electron_info,
-        "max_iter": 10000,
-        "interval": 1,
+        "max_iter": 5000,
+        "interval": 100,
         "MAX_AD_DIM": 5000,
         "pre_CI": ucisd_wf,
         "pre_train_info": pre_train_info,
@@ -292,8 +326,8 @@ if __name__ == "__main__":
     e_ref = e_lst[0]
     opt_vmc = VMCOptimizer(**vmc_opt_params)
     opt_vmc.run()
-    params = model.state_dict()
-    torch.save(params, 'params.pth') 
+    # params = model.state_dict()
+    # torch.save(params, 'params.pth') 
     # breakpoint()
 
     opt_vmc.summary(e_ref, e_lst, prefix=prefix)

@@ -1272,7 +1272,6 @@ class MPS_RNN_1D(nn.Module):
         if self.param_dtype == torch.complex128:
             eta = eta+0*1j
         P = torch.einsum("iac,iac,a->ic", h.conj(), h, eta).real
-        print(P)
         P = torch.sqrt(P)
         P = P / ((torch.max(P, dim=0)[0]).view(1, -1)).repeat(
             self.hilbert_local, 1
