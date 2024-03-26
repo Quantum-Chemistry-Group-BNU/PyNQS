@@ -86,6 +86,8 @@ def get_hubbard_model(nbas: int, nelec: int, U: float = 1.0, dim: int = 1, pbc: 
     nbas(int): the number of spatial orbital
     nelec(int): the number of the electron
     U(float): default 1.0
+    pbc(bool): Whether to use periodic boundary conditions, default use obc
+    M(int): 2d-Hubbard model's columns 
     """
     if dim == 1:
         thop = get_Hubbard_t1D(nbas, 1, pbc)
