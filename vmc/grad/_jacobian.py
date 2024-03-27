@@ -27,6 +27,8 @@ def jacobian_vector(module: nn.Module, states: Tensor) -> Tensor:
     in a batch of data.
     refer: https://pytorch.org/tutorials/intermediate/per_sample_grads.html
     """
+    # vmap dost not support cpp/cuda extension and avoid using in-place
+    # ref: https://github.com/pytorch/pytorch/issues/122706
     params = {k: v.detach() for k, v in module.named_parameters()}
     buffers = {k: v.detach() for k, v in module.named_buffers()}
 
@@ -47,6 +49,18 @@ def jacobian_vector(module: nn.Module, states: Tensor) -> Tensor:
     return torch.cat(tuple(out), dim=1)
 
 
+def complex_model(model: nn.Module, states: Tensor) -> Tensor:
+    """
+    return 'amp + phase'
+    """
+    # wf: \sqrt(amp) * exp(1i * phase)
+    # amp:  (2 * log(wf).real).exp()
+    # phase: log(wf).imag
+    wf = model(states).log()
+    amp = (2 * wf.real).exp()
+    phase = wf.imag
+    return amp + phase
+
 def jacobian_simple(module: nn.Module, states: Tensor) -> Tensor:
     """
     Trivial implementation of ``jacobian``. It is used to assess
@@ -56,10 +70,15 @@ def jacobian_simple(module: nn.Module, states: Tensor) -> Tensor:
     out = states.new_empty(
         [states.size(0), sum(map(torch.numel, params))], dtype=params[0].dtype
     )
+
+    wf = module(states).log()
     for i in range(states.size(0)):
         # XXX:(zbwu-24-03-11, how to implement loss??)
-        raise NotImplementedError(f"module Real/Imag part")
-        dws = torch.autograd.grad([module(states[[i]]).log()], params)
+        # raise NotImplementedError(f"module Real/Imag part")
+        # dws = torch.autograd.grad([module(states[[i]]).log()], params)
+        amp = (2 * wf[i].real).exp()
+        # dws = torch.autograd.grad(complex_model(module, states[i]), params)
+        dws = torch.autograd.grad(amp, params, retain_graph=True)
         torch.cat([dw.flatten() for dw in dws], out=out[i])
     return out
 
