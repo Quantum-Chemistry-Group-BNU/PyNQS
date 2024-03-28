@@ -194,7 +194,7 @@ def permute_sgn(image2: Tensor, onstate: Tensor, sorb: int) -> Tensor:
         sorb(int):
 
     Returns:
-        (Tensor)
+        (Tensor), shape: (nbatch)
     """
 
 def convert_sites(
