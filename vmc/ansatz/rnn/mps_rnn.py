@@ -814,6 +814,8 @@ class MPS_RNN_2D(nn.Module):
     def caculate_two_site(self, h, target, n_batch, i, num_up, num_down, amp, phi=None):
         # symm.
         psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
+        psi_orth_mask = self.orth_mask(states=target[..., :2 * i], k=2 * i, num_up=num_up, num_down=num_down)
+        psi_mask = psi_mask * psi_orth_mask
         k = i
         # 横向传播并纵向计算概率
         idx = torch.nonzero(self.order == i)
@@ -1004,6 +1006,8 @@ class MPS_RNN_2D(nn.Module):
             else:
                 raise NotImplementedError(f"Please use the 2-sites mode")
             psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
+            psi_orth_mask = self.orth_mask(states=x0[..., :2 * i], k=2 * i, num_up=num_up, num_down=num_down)
+            psi_mask = psi_mask * psi_orth_mask
             psi_amp_k = self.mask_input(psi_amp_k.T, psi_mask, 0.0)
             psi_amp_k = psi_amp_k / (torch.max(psi_amp_k, dim=1)[0]).view(-1, 1)
             psi_amp_k = F.normalize(psi_amp_k, dim=1, eps=1e-14)
@@ -1258,7 +1262,8 @@ class MPS_RNN_1D(nn.Module):
     def forward_1D(self, target, h, i, n_batch, num_up, num_down, amp, phi=None): # phi=None代表在采样
         # symm.
         psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
-        
+        psi_orth_mask = self.orth_mask(states=target[..., :2 * i], k=2 * i, num_up=num_up, num_down=num_down)
+        psi_mask = psi_mask * psi_orth_mask
         k = i
         if i > 0:
             k = k - 1
@@ -1382,6 +1387,8 @@ class MPS_RNN_1D(nn.Module):
 
             psi_amp_k, h = self.forward_1D(x0, h, i, n_batch, num_up, num_down, amp, phi=None)
             psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
+            psi_orth_mask = self.orth_mask(states=x0[..., :2 * i], k=2 * i, num_up=num_up, num_down=num_down)
+            psi_mask = psi_mask * psi_orth_mask
             psi_amp_k = self.mask_input(psi_amp_k.T, psi_mask, 0.0)
             psi_amp_k = psi_amp_k / (torch.max(psi_amp_k, dim=1)[0]).view(-1, 1)
             psi_amp_k = F.normalize(psi_amp_k, dim=1, eps=1e-14)
