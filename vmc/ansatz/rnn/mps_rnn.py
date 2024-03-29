@@ -1,29 +1,34 @@
+from __future__ import annotations
+
 import torch
-from torch import nn, Tensor
-import torch.nn.functional as F
-from functools import partial
-
-torch.set_printoptions(precision=8)
-from typing import Tuple, List, Union, Callable, Any
 import sys
+import torch.nn.functional as F
+from torch import nn, Tensor
+from functools import partial
+from typing import Tuple, List, Union, Callable, Any
 
-sys.path.append("./")
-
-from vmc.ansatz.utils import joint_next_samples
-from vmc.ansatz.symmetry import symmetry_mask
+from vmc.ansatz.symmetry import symmetry_mask, orthonormal_mask
+from vmc.ansatz.utils import joint_next_samples, OrbitalBlock
 from libs.C_extension import onv_to_tensor, permute_sgn
+
+from utils.det_helper import DetLUT
 from utils.public_function import (
     get_fock_space,
     get_special_space,
     setup_seed,
     multinomial_tensor,
 )
-from vmc.ansatz.utils import OrbitalBlock
-from utils.det_helper import DetLUT
-from vmc.ansatz.symmetry import symmetry_mask, orthonormal_mask
+
+sys.path.append("./")
 
 
-def get_order(order_type, dim_graph, L, M, site=1):
+def get_order(
+    order_type: str,
+    dim_graph: int,
+    L: int,
+    M: int,
+    site: int = 1,
+):
     """
     This is used to assign an order to the graph, snake stands for serpentine.
     For example, the orbitals is represented by [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
@@ -32,14 +37,14 @@ def get_order(order_type, dim_graph, L, M, site=1):
     [ 8,  9, 10, 11],
     [ 7,  6,  5,  4],
     [ 0,  1,  2,  3]]
-    "none"
+    "sheaf"
     [[12, 13, 14, 15],
     [ 8,  9, 10, 11],
     [ 4,  5,  6,  7],
     [ 0,  1,  2,  3]]
 
     input:
-    order_type: str = "snake" or "none"
+    order_type: str = "snake" or "sheaf"
     dim_graph: int = 2
     L: int = #rows
     M: int = #columns
@@ -49,7 +54,7 @@ def get_order(order_type, dim_graph, L, M, site=1):
     if site == 2:
         M = M // 2
 
-    if order_type == "none":
+    if order_type == "sheaf":
         a = torch.arange(L * M).reshape((L, M))
     elif order_type == "snake":
         a = torch.arange(L * M).reshape((L, M))  # 编号
@@ -58,7 +63,7 @@ def get_order(order_type, dim_graph, L, M, site=1):
     return a
 
 
-def caculate_p(h, gamma):
+def caculate_p(h: Tensor, gamma: Tensor):
     """
     The function to caculate the prob. per site
     (local_hilbert_dim, dcut, n_batch) (local_hilbert_dim, dcut, n_batch) (dcut,dcut) -> (local_hilbert_dim, n_batch)
@@ -87,6 +92,9 @@ class MPS_RNN_2D(nn.Module):
     det_lut: det_lut input
     """
 
+    GRAPH_TYPE = ("snake", "sheaf")
+    PHASE_TYPE = ("regular", "mlp")
+
     def __init__(
         self,
         iscale=1,
@@ -99,22 +107,22 @@ class MPS_RNN_2D(nn.Module):
         M: int = 2,
         dcut_params=None,
         dcut_step: int = 2,
-        graph_type="snake",
+        graph_type: str = "snake",
         # 功能参数
         use_symmetry: bool = False,
         alpha_nele: int = None,
         beta_nele: int = None,
-        tensor: bool = True,
-        # MLP版本相位参数
-        phase_type="regular",
+        use_tensor: bool = True,
+        # mlp版本相位参数
+        phase_type: str = "regular",
         phase_hidden_size: List[int] = [32, 32],
         phase_use_embedding: bool = False,
-        phase_hidden_activation: Union[nn.Module, Callable] = nn.ReLU,
+        phase_hidden_activation: nn.Module | Callable = nn.ReLU,
         phase_bias: bool = True,
         phase_batch_norm: bool = False,
         phase_norm_momentum=0.1,
         n_out_phase: int = 1,
-        sample_order=None,
+        sample_order: Tensor | list[int] = None,
         det_lut: DetLUT = None,
     ) -> None:
         super(MPS_RNN_2D, self).__init__()
@@ -134,11 +142,12 @@ class MPS_RNN_2D(nn.Module):
         self.sample_order = sample_order
 
         # 是否使用tensor-RNN
-        self.tensor = tensor
+        self.use_tensor = use_tensor  # add xxx
 
-        # 使用MLP作为相位系列
-        self.phase_type = phase_type
-        if self.phase_type == "MLP":
+        # 使用mlp作为相位系列
+        self.phase_type = phase_type.lower()
+
+        if self.phase_type == "mlp":
             self.n_out_phase = n_out_phase
             self.phase_hidden_size = phase_hidden_size
             self.phase_hidden_activation = phase_hidden_activation
@@ -162,6 +171,11 @@ class MPS_RNN_2D(nn.Module):
             )
             self.phase_layers.append(phase_i.to(self.device))
             self.phase_layers = nn.ModuleList(self.phase_layers)
+
+        if self.phase_type not in self.PHASE_TYPE:
+            raise TypeError(f"MPS-RNN only support 'regular' and 'mlp' ")
+        if self.graph_type not in self.GRAPH_TYPE:
+            raise TypeError(f"MPS-RNN only support 'snake' and 'sheaf' ")
 
         # 边界条件
         self.left_boundary = torch.ones(
@@ -226,7 +240,6 @@ class MPS_RNN_2D(nn.Module):
             sites=2,
         )
 
-        # DET
         # remove det
         self.remove_det = False
         self.det_lut: DetLUT = None
@@ -239,16 +252,6 @@ class MPS_RNN_2D(nn.Module):
             return orthonormal_mask(states, self.det_lut)
         else:
             return torch.ones(num_up.size(0), 4, device=self.device, dtype=torch.bool)
-
-    def update_h(self, i, j, h_h, h_v):
-        """
-        x: 输入的编码，是一个长条矩阵 (n_batch, n_qubits) -1/+1
-        """
-        # 更新纵向 (M,L,hilbert_local,dcut,dcut) (dcut,n_batch)
-        h_v = h_v + torch.einsum("abc,bd->acd", self.parm_M_v[i, j, ...], h_v)
-        # 更新横向
-        h_h = h_h + torch.einsum("abc,bd->acd", self.parm_M_h[i, j, ...], h_h)
-        return h_h, h_v
 
     def forward(self, x: Tensor):
         """
@@ -276,7 +279,7 @@ class MPS_RNN_2D(nn.Module):
                 )
         psi_amp = amp
         # 相位部分
-        if self.phase_type == "MLP":
+        if self.phase_type == "mlp":
             phase_input = target.masked_fill(target == 0, -1).double().squeeze(1)  # (nbatch, 2)
             phase_i = self.phase_layers[0](phase_input)
             if self.n_out_phase == 1:
@@ -285,7 +288,6 @@ class MPS_RNN_2D(nn.Module):
         if self.phase_type == "regular":
             psi_phase = torch.exp(phi * 1j)
         psi = psi_amp * psi_phase
-        # if self.sample_order != None:
         extra_phase = permute_sgn(
             torch.range(0, self.nqubits).to(torch.long), target.to(torch.long), self.nqubits
         )
@@ -327,7 +329,7 @@ class MPS_RNN_2D(nn.Module):
             self.parm_v = torch.view_as_complex(self.parm_v_r).view(
                 self.L, self.M, self.hilbert_local, self.dcut
             )
-            if self.tensor:
+            if self.use_tensor:
                 self.parm_T_r = nn.Parameter(
                     torch.randn(
                         self.M * self.L * self.hilbert_local * self.dcut * self.dcut * self.dcut,
@@ -378,7 +380,7 @@ class MPS_RNN_2D(nn.Module):
                 torch.randn(self.L, self.M, self.hilbert_local, self.dcut, **self.factory_kwargs)
                 * self.iscale
             )
-            if self.tensor:
+            if self.use_tensor:
                 self.parm_T = nn.Parameter(
                     torch.randn(
                         self.L,
@@ -431,7 +433,7 @@ class MPS_RNN_2D(nn.Module):
                     )
                     * self.iscale
                 )
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T_r = (
                         torch.randn(
                             self.M
@@ -455,7 +457,7 @@ class MPS_RNN_2D(nn.Module):
                 self.parm_v = torch.view_as_complex(self.parm_v_r).view(
                     self.L, self.M // 2, self.hilbert_local, self.dcut
                 )
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T = torch.view_as_complex(self.parm_T_r).view(
                         self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut
                     )
@@ -472,7 +474,7 @@ class MPS_RNN_2D(nn.Module):
                 self.parm_v[..., : self.dcut_step] = torch.view_as_complex(
                     params["module.parm_v_r"]
                 ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_step)
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T = self.parm_T.clone()
                     self.parm_T[
                         ..., : self.dcut_step, : self.dcut_step, : self.dcut_step
@@ -488,13 +490,13 @@ class MPS_RNN_2D(nn.Module):
                 self.parm_M_h = torch.view_as_real(self.parm_M_h).view(-1, 2)
                 self.parm_M_v = torch.view_as_real(self.parm_M_v).view(-1, 2)
                 self.parm_v = torch.view_as_real(self.parm_v).view(-1, 2)
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T = torch.view_as_real(self.parm_T).view(-1, 2)
 
                 self.parm_M_h_r = nn.Parameter(self.parm_M_h)
                 self.parm_M_v_r = nn.Parameter(self.parm_M_v)
                 self.parm_v_r = nn.Parameter(self.parm_v)
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T_r = nn.Parameter(self.parm_T)
 
                 self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(
@@ -506,7 +508,7 @@ class MPS_RNN_2D(nn.Module):
                 self.parm_v = torch.view_as_complex(self.parm_v_r).view(
                     self.L, self.M // 2, self.hilbert_local, self.dcut
                 )
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T = torch.view_as_complex(self.parm_T_r).view(
                         self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut
                     )
@@ -583,7 +585,7 @@ class MPS_RNN_2D(nn.Module):
                     )
                     * self.iscale
                 )
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T_r = nn.Parameter(
                         torch.randn(
                             self.M
@@ -608,7 +610,7 @@ class MPS_RNN_2D(nn.Module):
                 self.parm_v = torch.view_as_complex(self.parm_v_r).view(
                     self.L, self.M // 2, self.hilbert_local, self.dcut
                 )
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T = torch.view_as_complex(self.parm_T_r).view(
                         self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut
                     )
@@ -634,7 +636,7 @@ class MPS_RNN_2D(nn.Module):
                 )
 
         else:
-            if self.dcut_params != None:
+            if self.dcut_params is not None:
                 params = self.dcut_params
                 self.parm_M_h = (
                     torch.randn(
@@ -668,7 +670,7 @@ class MPS_RNN_2D(nn.Module):
                     )
                     * self.iscale
                 )
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T = (
                         torch.randn(
                             self.L,
@@ -693,7 +695,7 @@ class MPS_RNN_2D(nn.Module):
                 self.parm_v_r[..., : self.dcut_step] = params["module.parm_v"].view(
                     self.L, self.M // 2, self.hilbert_local, self.dcut_step
                 )
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T_r = self.parm_T.clone()
                     self.parm_T_r[
                         ..., : self.dcut_step, : self.dcut_step, : self.dcut_step
@@ -708,7 +710,7 @@ class MPS_RNN_2D(nn.Module):
                 self.parm_M_h = nn.Parameter(self.parm_M_h_r)
                 self.parm_M_v = nn.Parameter(self.parm_M_v_r)
                 self.parm_v = nn.Parameter(self.parm_v_r)
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T = nn.Parameter(self.parm_T_r)
                 self.parm_eta_r = (
                     torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real)
@@ -763,7 +765,7 @@ class MPS_RNN_2D(nn.Module):
                     )
                     * self.iscale
                 )
-                if self.tensor:
+                if self.use_tensor:
                     self.parm_T = nn.Parameter(
                         torch.randn(
                             self.L,
@@ -816,14 +818,6 @@ class MPS_RNN_2D(nn.Module):
     def caculate_one_site(self, h, target, n_batch, amp, phi):
         for i in range(0, self.nqubits):
             k = i
-
-            # if a > 0:
-            #     l = (a-1)*self.M + b
-            # else:
-            #     l = 0
-            # q_l = self.state_to_int(target[:, l], sites=1)  # 第i-M个site的具体sigma (n_batch)
-            # q_l = (q_k.view(1, 1, -1)).repeat(1, self.dcut, 1)
-
             # 横向传播并纵向计算概率
             idx = torch.nonzero(self.order == i)
             b = idx[0, 1]  # 第 b 列
@@ -859,7 +853,7 @@ class MPS_RNN_2D(nn.Module):
                     else:
                         h_h = h[a, b + 1, ...]  # (hilbert_local, dcut ,n_batch)
                         h_v = h[a - 1, b, ...]
-            if self.graph_type == "none":
+            if self.graph_type == "sheaf":
                 if b == 0:
                     h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(1, 1, n_batch)
                 else:
@@ -890,7 +884,7 @@ class MPS_RNN_2D(nn.Module):
             h_v = h_v.gather(0, q_l).view(
                 self.dcut, n_batch
             )  # (dcut ,n_batch) 这个要取竖着的附近才行（“二维”附近）
-            if self.tensor:
+            if self.use_tensor:
                 T = torch.einsum("iabc,an,bn->icn", self.parm_T[a, b, ...], h_h, h_v)
 
             M_cat = torch.cat([self.parm_M_h[a, b, ...], self.parm_M_v[a, b, ...]], -1)
@@ -898,7 +892,7 @@ class MPS_RNN_2D(nn.Module):
             h_ud = torch.einsum("acb,bd->acd", M_cat, h_cat) + (
                 torch.unsqueeze(self.parm_v[a, b], -1)
             ).repeat(1, 1, n_batch)
-            if self.tensor:
+            if self.use_tensor:
                 h_ud = h_ud + T
             # 确保数值稳定性的操作
             normal = torch.einsum(
@@ -982,7 +976,7 @@ class MPS_RNN_2D(nn.Module):
                 else:
                     h_h = h[a, b + 1, ...]  # (hilbert_local, dcut ,n_batch)
                     h_v = h[a - 1, b, ...]
-        if self.graph_type == "none":
+        if self.graph_type == "sheaf":
             if b == 0:
                 h_h = (torch.unsqueeze(self.left_boundary, -1)).repeat(1, 1, n_batch)
             else:
@@ -1023,7 +1017,7 @@ class MPS_RNN_2D(nn.Module):
         h_v = h_v.gather(0, q_l).view(
             self.dcut, n_batch
         )  # (dcut ,n_batch) 这个要取竖着的附近才行（“二维”附近）
-        if self.tensor:
+        if self.use_tensor:
             T = torch.einsum("iabc,an,bn->icn", self.parm_T[a, b, ...], h_h, h_v)
         # 更新纵向 (hilbert_local,dcut,dcut) (dcut,n_batch) -> (hilbert_local,dcut,n_batch)
         M_cat = torch.cat([self.parm_M_h[a, b, ...], self.parm_M_v[a, b, ...]], -1)
@@ -1031,7 +1025,7 @@ class MPS_RNN_2D(nn.Module):
         h_ud = torch.einsum("acb,bd->acd", M_cat, h_cat) + (
             torch.unsqueeze(self.parm_v[a, b], -1)
         ).repeat(1, 1, n_batch)
-        if self.tensor:
+        if self.use_tensor:
             h_ud = h_ud + T
         # 确保数值稳定性的操作
         normal = torch.einsum(
@@ -1094,7 +1088,8 @@ class MPS_RNN_2D(nn.Module):
         s += f"The number of params is {sum(p.numel() for p in self.parameters())}.\n"
         if self.param_dtype == torch.complex128:
             s += f"(one complex number is the conbination of two real number).\n"
-        if self.tensor:
+        s += f"Use Tensor-RNN is {self.use_tensor}.\n"
+        if self.use_tensor:
             s += f"The number included in amp Tensor Term is {(self.parm_T.numel())}.\n"
         s += f"The number included in amp Matrix Term (M_h and M_v) is {(self.parm_M_h.numel())} + {(self.parm_M_v.numel())}.\n"
         s += f"The number included in amp vector Term is {(self.parm_v.numel())}.\n"
@@ -1102,7 +1097,7 @@ class MPS_RNN_2D(nn.Module):
             s += f"The number included in phase Matrix Term is {(self.parm_w.numel())}.\n"
             s += f"The number included in phase vector Term is {(self.parm_c.numel())}.\n"
             s += f"The number of phase is {(self.parm_w.numel())+(self.parm_c.numel())}.\n"
-        if self.phase_type == "MLP":
+        if self.phase_type == "mlp":
             phase_num = 0
             net_param_num = lambda net: sum(p.numel() for p in net.parameters())
             for i in range(len(self.phase_layers)):
@@ -1226,7 +1221,7 @@ class MPS_RNN_1D(nn.Module):
         use_symmetry: bool = True,
         alpha_nele: int = None,
         beta_nele: int = None,
-        sample_order=None,
+        sample_order: Tensor = None,
         det_lut: DetLUT = None,
     ) -> None:
         super(MPS_RNN_1D, self).__init__()
@@ -1346,7 +1341,6 @@ class MPS_RNN_1D(nn.Module):
             self.parm_eta = nn.Parameter(
                 torch.randn(self.nqubits // 2, self.dcut, **self.factory_kwargs_real) * self.iscale
             )
-        # DET
         # remove det
         self.remove_det = False
         self.det_lut: DetLUT = None
@@ -1618,7 +1612,7 @@ if __name__ == "__main__":
     #     # tensor=False,
     #     M=6,
     #     graph_type="snake",
-    #     phase_type="MLP",
+    #     phase_type="mlp",
     #     phase_batch_norm=False,
     #     phase_hidden_size=[128, 128],
     #     n_out_phase=1,

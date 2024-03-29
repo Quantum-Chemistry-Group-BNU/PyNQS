@@ -1,7 +1,7 @@
-from .rbm import RBMWavefunction
+from .rbm.rbm import RBMWavefunction
 from .rnn.rnn import RNNWavefunction
-from .rbm_other import ARRBM, IsingRBM
-from .ar_rbm import RBMSites
+from .rbm.rbm_other import ARRBM, IsingRBM
+from .rbm.ar_rbm import RBMSites
 from .transformer.decoder import DecoderWaveFunction
 from .hybrid.hybrid import HybridWaveFunction
 from .hybrid.hqc import HybridQCWaveFunction
