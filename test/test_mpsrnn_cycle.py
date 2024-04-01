@@ -17,6 +17,8 @@ from vmc.optim import VMCOptimizer, GD
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise
 from tmp.support import make_prefix
 
+torch.set_default_dtype(torch.double)
+
 if __name__ == "__main__":
     dist.init_process_group("gloo")
     device = "cpu"
@@ -64,7 +66,7 @@ if __name__ == "__main__":
     dcut_max = int(100)
     dcut_add = int(10)
 
-    params = None
+    params_file: str = None
     for i in range(0,dcut_max,dcut_add):
         # print(f"现在是第{i/10}次训练，训练的参数为{dcut+2*(i-2)}\n")
         # print(f"现在的dcut为{dcut+i}，上一次为{dcut+i-2}\n")
@@ -80,8 +82,8 @@ if __name__ == "__main__":
             # 这两个是规定二维计算的长宽的。
             M=6,
             hilbert_local=4,
-            dcut_params=params,
-            dcut_step=dcut+i-10,
+            params_file=params_file,
+            dcut_before=dcut+i-10,
         )
         
         ansatz = MPS_RNN_2D_
@@ -129,7 +131,8 @@ if __name__ == "__main__":
         lr_sch_params = {"lr_lambda": lr_transformer}
 
         dtype = Dtype(dtype=torch.complex128, device=device)
-        prefix = make_prefix(seed = seed,ansatz=modelname,no="dcut=rease"+"c_",e_name=e_name)
+        # prefix = make_prefix(seed = seed,ansatz=modelname,no="dcut=rease"+"c_",e_name=e_name)
+        prefix = f"./tmp/mps-rnn-add-dcut-{seed}"
         vmc_opt_params = {
             "nqs": model, 
             "opt_type": opt_type,
@@ -161,7 +164,8 @@ if __name__ == "__main__":
         e_ref = e_lst[0]
         opt_vmc = VMCOptimizer(**vmc_opt_params)
         opt_vmc.run()
-        params = model.state_dict()
+        # params = model.state_dict()
+        params_file = prefix + "-checkpoint.pth"
         # torch.save(params, 'params.pth') 
     opt_vmc.summary(e_ref, e_lst, prefix=prefix)
     if rank == 0:
