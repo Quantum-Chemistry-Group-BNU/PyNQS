@@ -606,17 +606,19 @@ class NqsCi(BaseVMCOptimizer):
                 continue
 
             # TODO: check
-            new_term, new_term1 = self.calculate_new_term(sample_state, phi_nqs, self.nqs_coeff)
+            new_term, new_term_spin = self.calculate_new_term(sample_state, phi_nqs, self.nqs_coeff)
             delta_new_term = (time.time_ns() - t2) / 1.00e09
 
             # backward
             t3 = time.time_ns()
             sloc = sloc * self.spin_raising_coeff
             sloc_mean = sloc_mean * self.spin_raising_coeff
+            new_term_spin = new_term_spin * self.spin_raising_coeff
             if self.only_output_spin_raising:
                 sloc = torch.zeros_like(eloc)
-                sloc_mean = torch.zeros_like(sloc_mean)
+                sloc_mean = torch.zeros_like(eloc_mean)
                 e_spin = 0.0
+                new_term_spin = torch.zeros_like(new_term)
 
             self.new_nqs_grad(
                 nqs=self.model,
@@ -624,7 +626,7 @@ class NqsCi(BaseVMCOptimizer):
                 state_prob=state_prob,
                 loc=eloc + sloc,
                 loc_mean=eloc_mean + sloc_mean,
-                new_term=new_term + new_term1,
+                new_term=new_term + new_term_spin,
                 cNqs=self.nqs_coeff,
                 E0=E0 + e_spin,
                 epoch=epoch,

@@ -271,10 +271,10 @@ class MPS_RNN_2D(nn.Module):
         num_up = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
         num_down = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
         if self.hilbert_local == 2:
-            amp, phi = self.caculate_one_site(h, target, n_batch, amp, phi)
+            amp, phi = self.calculate_one_site(h, target, n_batch, amp, phi)
         else:
             for i in range(0, self.nqubits // 2):
-                amp, phi, h = self.caculate_two_site(
+                amp, phi, h = self.calculate_two_site(
                     h, target, n_batch, i, num_up, num_down, amp, phi
                 )
         psi_amp = amp
@@ -289,7 +289,7 @@ class MPS_RNN_2D(nn.Module):
             psi_phase = torch.exp(phi * 1j)
         psi = psi_amp * psi_phase
         extra_phase = permute_sgn(
-            torch.range(0, self.nqubits).to(torch.long), target.to(torch.long), self.nqubits
+            torch.arange(self.nqubits, device=self.device), target.long(), self.nqubits
         )
         psi = psi * extra_phase
         return psi
@@ -815,7 +815,7 @@ class MPS_RNN_2D(nn.Module):
             x_.unsqueeze_(0)
         return x_
 
-    def caculate_one_site(self, h, target, n_batch, amp, phi):
+    def calculate_one_site(self, h, target, n_batch, amp, phi) -> tuple[Tensor, Tensor]:
         for i in range(0, self.nqubits):
             k = i
             # 横向传播并纵向计算概率
@@ -933,7 +933,17 @@ class MPS_RNN_2D(nn.Module):
             phi = phi + torch.angle(phi_i)
         return amp, phi
 
-    def caculate_two_site(self, h, target, n_batch, i, num_up, num_down, amp, phi=None):
+    def calculate_two_site(
+        self,
+        h,
+        target,
+        n_batch,
+        i,
+        num_up,
+        num_down,
+        amp,
+        phi=None,
+    ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
         # symm.
         psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
         psi_orth_mask = self.orth_mask(
@@ -1087,7 +1097,7 @@ class MPS_RNN_2D(nn.Module):
         s += f"And the params dtype(JUST THE W AND v) is {self.param_dtype}.\n"
         s += f"The number of params is {sum(p.numel() for p in self.parameters())}.\n"
         if self.param_dtype == torch.complex128:
-            s += f"(one complex number is the conbination of two real number).\n"
+            s += f"(one complex number is the combination of two real number).\n"
         s += f"Use Tensor-RNN is {self.use_tensor}.\n"
         if self.use_tensor:
             s += f"The number included in amp Tensor Term is {(self.parm_T.numel())}.\n"
@@ -1145,7 +1155,7 @@ class MPS_RNN_2D(nn.Module):
             n_batch = x0.shape[0]
             amp = torch.ones(n_batch, device=self.device)  # (n_batch,)
             if self.hilbert_local == 4:
-                psi_amp_k, h = self.caculate_two_site(
+                psi_amp_k, h = self.calculate_two_site(
                     h, x0, n_batch, i, num_up, num_down, amp, phi=None
                 )
             else:
