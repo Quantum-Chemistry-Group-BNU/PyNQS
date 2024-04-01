@@ -99,14 +99,14 @@ class MPS_RNN_2D(nn.Module):
         self,
         iscale=1,
         device="cpu",
-        param_dtype: Any = torch.double,
+        param_dtype: torch.dtype = torch.double,
         nqubits: int = None,
         nele: int = None,
         dcut: int = 6,
         hilbert_local: int = 2,
         M: int = 2,
-        dcut_params=None,
-        dcut_step: int = 2,
+        params_file: str =None,
+        dcut_before: int = 2,
         graph_type: str = "snake",
         # 功能参数
         use_symmetry: bool = False,
@@ -136,8 +136,8 @@ class MPS_RNN_2D(nn.Module):
         self.L = self.nqubits // self.M
         self.hilbert_local = hilbert_local
         self.param_dtype = param_dtype
-        self.dcut_params = dcut_params
-        self.dcut_step = dcut_step
+        self.params_file = params_file  # checkpoint-file coming from 'BaseVMCOptimizer'
+        self.dcut_before = dcut_before
         self.graph_type = graph_type
         self.sample_order = sample_order
 
@@ -407,8 +407,8 @@ class MPS_RNN_2D(nn.Module):
 
     def param_init_two_site(self):
         if self.param_dtype == torch.complex128:
-            if self.dcut_params != None:
-                params = self.dcut_params
+            if self.params_file is not None:
+                params = torch.load(self.params_file, map_location=self.device)["model"]
                 self.parm_M_h_r = (
                     torch.randn(
                         self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
@@ -463,28 +463,28 @@ class MPS_RNN_2D(nn.Module):
                     )
 
                 self.parm_M_h = self.parm_M_h.clone()
-                self.parm_M_h[..., : self.dcut_step, : self.dcut_step] = torch.view_as_complex(
+                self.parm_M_h[..., : self.dcut_before, : self.dcut_before] = torch.view_as_complex(
                     params["module.parm_M_h_r"]
-                ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_step, self.dcut_step)
+                ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
                 self.parm_M_v = self.parm_M_v.clone()
-                self.parm_M_v[..., : self.dcut_step, : self.dcut_step] = torch.view_as_complex(
+                self.parm_M_v[..., : self.dcut_before, : self.dcut_before] = torch.view_as_complex(
                     params["module.parm_M_v_r"]
-                ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_step, self.dcut_step)
+                ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
                 self.parm_v = self.parm_v.clone()
-                self.parm_v[..., : self.dcut_step] = torch.view_as_complex(
+                self.parm_v[..., : self.dcut_before] = torch.view_as_complex(
                     params["module.parm_v_r"]
-                ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_step)
+                ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before)
                 if self.use_tensor:
                     self.parm_T = self.parm_T.clone()
                     self.parm_T[
-                        ..., : self.dcut_step, : self.dcut_step, : self.dcut_step
+                        ..., : self.dcut_before, : self.dcut_before, : self.dcut_before
                     ] = torch.view_as_complex(params["module.parm_T_r"]).view(
                         self.L,
                         self.M // 2,
                         self.hilbert_local,
-                        self.dcut_step,
-                        self.dcut_step,
-                        self.dcut_step,
+                        self.dcut_before,
+                        self.dcut_before,
+                        self.dcut_before,
                     )
 
                 self.parm_M_h = torch.view_as_real(self.parm_M_h).view(-1, 2)
@@ -521,9 +521,9 @@ class MPS_RNN_2D(nn.Module):
                     self.L, self.M // 2, self.dcut
                 )
                 self.parm_eta = self.parm_eta.clone()
-                self.parm_eta[..., : self.dcut_step] = torch.view_as_complex(
+                self.parm_eta[..., : self.dcut_before] = torch.view_as_complex(
                     params["module.parm_eta_r"]
-                ).view(self.L, self.M // 2, self.dcut_step)
+                ).view(self.L, self.M // 2, self.dcut_before)
                 self.parm_eta = torch.view_as_real(self.parm_eta).view(-1, 2)
                 self.parm_eta_r = nn.Parameter(self.parm_eta)
                 self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(
@@ -545,9 +545,9 @@ class MPS_RNN_2D(nn.Module):
                     )
                     self.parm_c = torch.view_as_complex(self.parm_c)
                     self.parm_w = self.parm_w.clone()
-                    self.parm_w[..., : self.dcut_step] = torch.view_as_complex(
+                    self.parm_w[..., : self.dcut_before] = torch.view_as_complex(
                         params["module.parm_w_r"]
-                    ).view(self.L, self.M // 2, self.dcut_step)
+                    ).view(self.L, self.M // 2, self.dcut_before)
 
                     self.parm_w = torch.view_as_real(self.parm_w).view(-1, 2)
                     self.parm_c = torch.view_as_real(self.parm_c).view(-1, 2)
@@ -636,8 +636,8 @@ class MPS_RNN_2D(nn.Module):
                 )
 
         else:
-            if self.dcut_params is not None:
-                params = self.dcut_params
+            if self.params_file is not None:
+                params = torch.load(self.params_file, map_location=self.device)["model"]
                 self.parm_M_h = (
                     torch.randn(
                         self.L,
@@ -684,28 +684,28 @@ class MPS_RNN_2D(nn.Module):
                         * self.iscale
                     )
                 self.parm_M_h_r = self.parm_M_h.clone()
-                self.parm_M_h_r[..., : self.dcut_step, : self.dcut_step] = params[
+                self.parm_M_h_r[..., : self.dcut_before, : self.dcut_before] = params[
                     "module.parm_M_h"
-                ].view(self.L, self.M // 2, self.hilbert_local, self.dcut_step, self.dcut_step)
+                ].view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
                 self.parm_M_v_r = self.parm_M_v.clone()
-                self.parm_M_v_r[..., : self.dcut_step, : self.dcut_step] = params[
+                self.parm_M_v_r[..., : self.dcut_before, : self.dcut_before] = params[
                     "module.parm_M_v"
-                ].view(self.L, self.M // 2, self.hilbert_local, self.dcut_step, self.dcut_step)
+                ].view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
                 self.parm_v_r = self.parm_v.clone()
-                self.parm_v_r[..., : self.dcut_step] = params["module.parm_v"].view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut_step
+                self.parm_v_r[..., : self.dcut_before] = params["module.parm_v"].view(
+                    self.L, self.M // 2, self.hilbert_local, self.dcut_before
                 )
                 if self.use_tensor:
                     self.parm_T_r = self.parm_T.clone()
                     self.parm_T_r[
-                        ..., : self.dcut_step, : self.dcut_step, : self.dcut_step
+                        ..., : self.dcut_before, : self.dcut_before, : self.dcut_before
                     ] = params["module.parm_T"].view(
                         self.L,
                         self.M // 2,
                         self.hilbert_local,
-                        self.dcut_step,
-                        self.dcut_step,
-                        self.dcut_step,
+                        self.dcut_before,
+                        self.dcut_before,
+                        self.dcut_before,
                     )
                 self.parm_M_h = nn.Parameter(self.parm_M_h_r)
                 self.parm_M_v = nn.Parameter(self.parm_M_v_r)
@@ -717,7 +717,7 @@ class MPS_RNN_2D(nn.Module):
                     * self.iscale
                 )
                 self.parm_eta_r = self.parm_eta_r.clone()
-                self.parm_eta_r[..., : self.dcut_step] = params["module.parm_eta"]
+                self.parm_eta_r[..., : self.dcut_before] = params["module.parm_eta"]
                 self.parm_eta = nn.Parameter(self.parm_eta_r)
 
                 if self.param_dtype == "regular":
@@ -730,7 +730,7 @@ class MPS_RNN_2D(nn.Module):
                     )
 
                     self.parm_w_r = self.parm_w_r.clone()
-                    self.parm_w_r[..., : self.dcut_step] = params["module.parm_w"]
+                    self.parm_w_r[..., : self.dcut_before] = params["module.parm_w"]
 
                     self.parm_w = nn.Parameter(self.parm_w_r)
                     self.parm_c = nn.Parameter(self.parm_c_r)
@@ -1096,6 +1096,8 @@ class MPS_RNN_2D(nn.Module):
         s += f"{torch.flip(self.order, dims=[0])}.\n"
         s += f"And the params dtype(JUST THE W AND v) is {self.param_dtype}.\n"
         s += f"The number of params is {sum(p.numel() for p in self.parameters())}.\n"
+        if self.params_file is not None:
+            s += f"Old-params-files: {self.params_file}, dcut-before: {self.dcut_before}.\n"
         if self.param_dtype == torch.complex128:
             s += f"(one complex number is the combination of two real number).\n"
         s += f"Use Tensor-RNN is {self.use_tensor}.\n"
