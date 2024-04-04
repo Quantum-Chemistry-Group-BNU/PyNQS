@@ -7,6 +7,7 @@ from torch import nn, Tensor
 from functools import partial
 from typing import Tuple, List, Union, Callable, Any
 
+sys.path.append("./")
 from vmc.ansatz.symmetry import symmetry_mask, orthonormal_mask
 from vmc.ansatz.utils import joint_next_samples, OrbitalBlock
 from libs.C_extension import onv_to_tensor, permute_sgn
@@ -18,8 +19,6 @@ from utils.public_function import (
     setup_seed,
     multinomial_tensor,
 )
-
-sys.path.append("./")
 
 
 def get_order(
@@ -63,7 +62,7 @@ def get_order(
     return a
 
 
-def caculate_p(h: Tensor, gamma: Tensor):
+def calculate_p(h: Tensor, gamma: Tensor):
     """
     The function to caculate the prob. per site
     (local_hilbert_dim, dcut, n_batch) (local_hilbert_dim, dcut, n_batch) (dcut,dcut) -> (local_hilbert_dim, n_batch)
@@ -105,14 +104,14 @@ class MPS_RNN_2D(nn.Module):
         dcut: int = 6,
         hilbert_local: int = 2,
         M: int = 2,
-        params_file: str =None,
+        params_file: str = None,
         dcut_before: int = 2,
         graph_type: str = "snake",
         # 功能参数
         use_symmetry: bool = False,
         alpha_nele: int = None,
         beta_nele: int = None,
-        use_tensor: bool = True,
+        use_tensor: bool = False,
         # mlp版本相位参数
         phase_type: str = "regular",
         phase_hidden_size: List[int] = [32, 32],
@@ -258,6 +257,7 @@ class MPS_RNN_2D(nn.Module):
         定义输入 x
         如何算出一个数出来（或者说算出一个矢量）
         """
+        #  x: (+1/-1)
         target = (x + 1) / 2
         n_batch = x.shape[0]
         h = self.h_boundary
@@ -271,6 +271,7 @@ class MPS_RNN_2D(nn.Module):
         num_up = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
         num_down = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
         if self.hilbert_local == 2:
+            # FIXME:(zbwu-24-04-03)
             amp, phi = self.calculate_one_site(h, target, n_batch, amp, phi)
         else:
             for i in range(0, self.nqubits // 2):
@@ -285,7 +286,7 @@ class MPS_RNN_2D(nn.Module):
             if self.n_out_phase == 1:
                 phi = phase_i.view(-1)
             psi_phase = torch.complex(torch.zeros_like(phi), phi).exp()
-        if self.phase_type == "regular":
+        elif self.phase_type == "regular":
             psi_phase = torch.exp(phi * 1j)
         psi = psi_amp * psi_phase
         extra_phase = permute_sgn(
@@ -997,9 +998,8 @@ class MPS_RNN_2D(nn.Module):
                 h_v = h[a - 1, b, ...]
         if i > 0:
             k = k - 1
-        q_k = self.state_to_int(
-            target[:, 2 * k : 2 * k + 2], sites=2
-        )  # 第i-1个site的具体sigma (n_batch)
+        # 第i-1个site的具体sigma (n_batch)
+        q_k = self.state_to_int(target[:, 2 * k : 2 * k + 2], sites=2)
         # breakpoint()
         # q_k = (torch.unsqueeze(q_k.view(-1,n_batch),0)).repeat(1, self.dcut, 1)
         q_k = (q_k.view(1, 1, -1)).repeat(1, self.dcut, 1)
@@ -1011,9 +1011,8 @@ class MPS_RNN_2D(nn.Module):
                 l = b + (a - 1) * self.M // 2
         else:
             l = 0
-        q_l = self.state_to_int(
-            target[:, 2 * l : 2 * l + 2], sites=2
-        )  # 第i-1个site的具体sigma (n_batch)
+        # 第i-1个site的具体sigma (n_batch)
+        q_l = self.state_to_int(target[:, 2 * l : 2 * l + 2], sites=2)
         q_l = (q_l.view(1, 1, -1)).repeat(1, self.dcut, 1)
 
         if phi == None:
@@ -1021,45 +1020,59 @@ class MPS_RNN_2D(nn.Module):
                 q_k = torch.zeros(1, self.dcut, n_batch, device=self.device, dtype=torch.int64)
                 q_l = torch.zeros(1, self.dcut, n_batch, device=self.device, dtype=torch.int64)
         # breakpoint()
-        h_h = h_h.gather(0, q_k).view(
-            self.dcut, n_batch
-        )  # (dcut ,n_batch) 这个直接取“一维”附近，即可
-        h_v = h_v.gather(0, q_l).view(
-            self.dcut, n_batch
-        )  # (dcut ,n_batch) 这个要取竖着的附近才行（“二维”附近）
+        # (dcut ,n_batch) 这个直接取“一维”附近，即可
+        h_h = h_h.gather(0, q_k).view(self.dcut, n_batch)
+        # (dcut ,n_batch) 这个要取竖着的附近才行（“二维”附近）
+        h_v = h_v.gather(0, q_l).view(self.dcut, n_batch)
         if self.use_tensor:
             T = torch.einsum("iabc,an,bn->icn", self.parm_T[a, b, ...], h_h, h_v)
         # 更新纵向 (hilbert_local,dcut,dcut) (dcut,n_batch) -> (hilbert_local,dcut,n_batch)
         M_cat = torch.cat([self.parm_M_h[a, b, ...], self.parm_M_v[a, b, ...]], -1)
         h_cat = torch.cat([h_h, h_v], 0)
-        h_ud = torch.einsum("acb,bd->acd", M_cat, h_cat) + (
-            torch.unsqueeze(self.parm_v[a, b], -1)
-        ).repeat(1, 1, n_batch)
+
+        # FIXME: using broadcast and matmul
+        # torch.allclose(torch.einsum("acb, bd ->acd", M_cat, h_cat), torch.matmul(M_cat, h_cat))
+        h_ud = torch.matmul(M_cat, h_cat) + self.parm_v[a, b].unsqueeze(-1)  # (4, dcut, nbatch)
+        # h_ud = torch.einsum("acb,bd->acd", M_cat, h_cat) + (
+        #     torch.unsqueeze(self.parm_v[a, b], -1)
+        # ).repeat(1, 1, n_batch)
         if self.use_tensor:
             h_ud = h_ud + T
         # 确保数值稳定性的操作
-        normal = torch.einsum(
-            "ijk,ijk->ijk", h_ud.conj(), h_ud
-        ).real  # 分母上sqrt里面 n_banth应该是一样的
-        normal = torch.mean(normal, dim=(0, 1))
-        normal = torch.sqrt(normal)
-        normal = (normal.view(1, 1, -1)).repeat(self.hilbert_local, self.dcut, 1)
-        h_ud = h_ud / normal  # 确保数值稳定性的归一化（是按照(S5)归一化，计算矩阵Frobenius二范数）
+        normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
+        h_ud = h_ud / normal
+        # normal = torch.einsum(
+        #     "ijk,ijk->ijk", h_ud.conj(), h_ud
+        # ).real  # 分母上sqrt里面 n_banth应该是一样的
+        # normal = torch.mean(normal, dim=(0, 1))
+        # normal = torch.sqrt(normal)
+        # breakpoint()
+        # x1 = h_ud / normal
+
+        # # FIXME: using broadcast
+        # normal = (normal.view(1, 1, -1)).repeat(self.hilbert_local, self.dcut, 1)
+        # h_ud = h_ud / normal  # 确保数值稳定性的归一化（是按照(S5)归一化，计算矩阵Frobenius二范数）
+        # avoid auto-backward fail
         h = h.clone()
         h[a, b] = h_ud  # 更新h
         # 计算概率（振幅部分） 并归一化
         # breakpoint()
         eta = torch.abs(self.parm_eta[a, b]) ** 2
-        if self.param_dtype == torch.complex128:
-            eta = eta + 0 * 1j
-        P = torch.einsum(
-            "iac,iac,a->ic", h_ud.conj(), h_ud, eta
-        ).real  # -> (local_hilbert_dim, n_batch)
+        # if self.param_dtype == torch.complex128:
+        #     eta = eta + 0 * 1j
+
+        # "iac, a -> ic"
+        P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
+        # P = torch.einsum(
+        #     "iac,iac,a->ic", h_ud.conj(), h_ud, eta
+        # ).real  # -> (local_hilbert_dim, n_batch)
         # print("归一化之前")
         # print(P)
         # print(torch.exp(self.parm_eta[a, b]))
         P = torch.sqrt(P)
-        P = P / ((torch.max(P, dim=0)[0]).view(1, -1)).repeat(self.hilbert_local, 1)  # 数值稳定性
+        P = P / P.max(dim=0, keepdim=True)[0]
+        # breakpoint()/ei
+        # P = P / ((torch.max(P, dim=0)[0]).view(1, -1)).repeat(self.hilbert_local, 1)  # 数值稳定性
         if phi != None:
             # symm.
             P = self.mask_input(P.T, psi_mask, 0.0).T
@@ -1073,18 +1086,18 @@ class MPS_RNN_2D(nn.Module):
             index = self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).view(1, -1)
             amp = amp * P.gather(0, index).view(-1)  # (local_hilbert_dim, n_batch) -> (n_batch)
 
-            index_phi = (
-                self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).view(1, 1, n_batch)
-            ).repeat(1, self.dcut, 1)
+            index_phi = index.view(1, 1, -1).repeat(1, self.dcut, 1)
+            # index_phi = (
+            #     self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).view(1, 1, n_batch)
+            # ).repeat(1, self.dcut, 1)
             h_i = h_ud.gather(0, index_phi).view(self.dcut, n_batch)
             # h_i = h[a, b].gather(0, q_k).view(self.dcut, n_batch)
             if self.param_dtype == torch.complex128:
                 h_i = h_i.to(torch.complex128)
             # 计算相位
             if self.phase_type == "regular":
-                phi_i = (
-                    self.parm_w[a, b] @ h_i + self.parm_c[a, b]
-                )  # (dcut) (dcut, n_batch)  -> (n_batch)
+                # (dcut) (dcut, n_batch)  -> (n_batch)
+                phi_i = self.parm_w[a, b] @ h_i + self.parm_c[a, b]
                 phi = phi + torch.angle(phi_i)
             # breakpoint()
             return amp, phi, h
@@ -1162,28 +1175,56 @@ class MPS_RNN_2D(nn.Module):
                 )
             else:
                 raise NotImplementedError(f"Please use the 2-sites mode")
+            
             psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
-            psi_orth_mask = self.orth_mask(
-                states=x0[..., : 2 * i], k=2 * i, num_up=num_up, num_down=num_down
-            )
-            psi_mask = psi_mask * psi_orth_mask
+            psi_orth_mask = self.orth_mask(states=x0, k=2 * i, num_up=num_up, num_down=num_down)
+            psi_mask *= psi_orth_mask
             psi_amp_k = self.mask_input(psi_amp_k.T, psi_mask, 0.0)
-            psi_amp_k = psi_amp_k / (torch.max(psi_amp_k, dim=1)[0]).view(-1, 1)
+            # avoid numerical error
+            psi_amp_k /= psi_amp_k.max(dim=1, keepdim=True)[0]
             psi_amp_k = F.normalize(psi_amp_k, dim=1, eps=1e-14)
 
-            counts_i = multinomial_tensor(sample_counts, psi_amp_k.pow(2)).T.flatten()
+            # import time
 
-            idx_count = counts_i > 0
-            # idx_count_with = counts_i >= 0
-            sample_counts = counts_i[idx_count]
-            # if  i == end-1:
-            sample_unique = self.joint_next_samples(sample_unique)[idx_count]
-            amps_value = torch.mul(amps_value.unsqueeze(1).repeat(1, 4), psi_amp_k).T.flatten()[
-                idx_count
-            ]
-            h = h.repeat(1, 1, 1, 1, 4)
-            h = h[..., idx_count]
+            # sample_unique_1 = sample_unique.clone()
+            # amps_value_1 = amps_value.clone()
+            # sample_counts_1 = sample_counts.clone()
+
+            # t0 = time.time_ns()
+            # counts_i = multinomial_tensor(sample_counts_1, psi_amp_k.pow(2)).T.flatten()
+            # idx_count = counts_i > 0
+            # # idx_count_with = counts_i >= 0
+            # sample_counts_1 = counts_i[idx_count]
+            # # if  i == end-1:
+            # sample_unique_1 = self.joint_next_samples(sample_unique_1)[idx_count]
+            # amps_value_1 = torch.mul(amps_value_1.unsqueeze(1).repeat(1, 4), psi_amp_k).T.flatten()[
+            #     idx_count
+            # ]
+            # h_1 = h.repeat(1, 1, 1, 1, 4)
+            # h_1 = h_1[..., idx_count]
+            # t1 = time.time_ns()
+
+            counts_i = multinomial_tensor(sample_counts, psi_amp_k.pow(2))  # (unique, 4)
+            mask_count = counts_i > 0
+            sample_counts = counts_i[mask_count]  # (unique-next)
+            sample_unique = self.joint_next_samples(sample_unique, mask=mask_count)
+            repeat_nums = mask_count.sum(dim=1)  # bool in [0, 4]
+            amps_value = torch.mul(
+                amps_value.repeat_interleave(repeat_nums, 0), psi_amp_k[mask_count]
+            )
+            h = h.repeat_interleave(repeat_nums, -1)
+            # t2 = time.time_ns()
+            # from loguru import logger
+            # logger.info(f"Delta: {(t1 - t0)/1.0e06:.3E} ms, Delta1: {(t2-t1)/1.e06:.3E} ms")
+
+            # from utils.public_function import torch_sort_onv
+            # idx1 = torch_sort_onv(sample_unique_1)
+            # idx2 = torch_sort_onv(sample_unique)
+            # assert torch.allclose(sample_unique_1[idx1], sample_unique[idx2])
+            # assert torch.allclose(amps_value_1[idx1], amps_value[idx2])
+
             l += interval
+
         return sample_unique, sample_counts, amps_value, 2 * l
 
     @torch.no_grad()
@@ -1595,40 +1636,41 @@ if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
     device = "cpu"
-    sorb = 12
-    nele = 6
+    sorb = 20
+    nele = 10
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     length = fock_space.shape[0]
     fci_space = onv_to_tensor(
         get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb
     )
     dim = fci_space.size(0)
-    print(fock_space)
-    model = MPS_RNN_1D(
-        use_symmetry=True,
-        nqubits=sorb,
-        nele=nele,
-        device=device,
-        dcut=8,
-        # param_dtype = torch.complex128
-        # tensor=False,
-    )
-    # model = MPS_RNN_2D(
+    # print(fock_space)
+    # model = MPS_RNN_1D(
     #     use_symmetry=True,
-    #     param_dtype=torch.complex128,
-    #     hilbert_local=4,
     #     nqubits=sorb,
     #     nele=nele,
     #     device=device,
-    #     dcut=6,
+    #     dcut=8,
+    #     # param_dtype = torch.complex128
     #     # tensor=False,
-    #     M=6,
-    #     graph_type="snake",
-    #     phase_type="mlp",
-    #     phase_batch_norm=False,
-    #     phase_hidden_size=[128, 128],
-    #     n_out_phase=1,
     # )
+    model = MPS_RNN_2D(
+        use_symmetry=True,
+        param_dtype=torch.complex128,
+        hilbert_local=4,
+        nqubits=sorb,
+        nele=nele,
+        device=device,
+        dcut=10,
+        # tensor=False,
+        M=10,
+        graph_type="snake",
+        phase_type="regular",
+        phase_batch_norm=False,
+        phase_hidden_size=[128, 128],
+        n_out_phase=1,
+    )
+
     # MPS_RNN_1D = MPS_RNN_2D(
     #     nqubits=sorb,
     #     nele=nele,
@@ -1643,8 +1685,15 @@ if __name__ == "__main__":
     print("============MPS--RNN============")
     print(f"Psi^2 in AR-Sampling")
     print("--------------------------------")
-    sample, counts, wf = model.ar_sampling(n_sample=int(1e15))
-    wf1 = model((sample * 2 - 1).double())
+    sample, counts, wf = model.ar_sampling(n_sample=int(1e12))
+    sample = (sample * 2 - 1).double()
+
+    # # from torch.profiler import profile, record_function, ProfilerActivity
+    # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
+    wf1 = model(sample)
+    # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+    # exit()
+
     print(wf1)
     # breakpoint()
     op1 = wf1.abs().pow(2)[:20]
