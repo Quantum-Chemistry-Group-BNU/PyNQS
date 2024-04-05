@@ -249,11 +249,36 @@ class MPS_RNN_2D(nn.Module):
             self.remove_det = True
             self.det_lut = det_lut
 
-    def orth_mask(self, states: Tensor, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
-        if self.remove_det:
-            return orthonormal_mask(states, self.det_lut)
-        else:
-            return torch.ones(num_up.size(0), 4, device=self.device, dtype=torch.bool)
+    def extra_repr(self) -> str:
+        s = f"The MPS_RNN_2D is working on {self.device}.\n"
+        s += f"The graph of this molecular is {self.M} * {self.L}.\n"
+        s += f"The order is(Spatial orbital).\n"
+        s += f"{torch.flip(self.order, dims=[0])}.\n"
+        s += f"And the params dtype(JUST THE W AND v) is {self.param_dtype}.\n"
+        s += f"The number of params is {sum(p.numel() for p in self.parameters())}.\n"
+        if self.params_file is not None:
+            s += f"Old-params-files: {self.params_file}, dcut-before: {self.dcut_before}.\n"
+        if self.param_dtype == torch.complex128:
+            s += f"(one complex number is the combination of two real number).\n"
+        s += f"Use Tensor-RNN is {self.use_tensor}.\n"
+        if self.use_tensor:
+            s += f"The number included in amp Tensor Term is {(self.parm_T.numel())}.\n"
+        s += f"The number included in amp Matrix Term (M_h and M_v) is {(self.parm_M_h.numel())} + {(self.parm_M_v.numel())}.\n"
+        s += f"The number included in amp vector Term is {(self.parm_v.numel())}.\n"
+        if self.phase_type == "regular":
+            s += f"The number included in phase Matrix Term is {(self.parm_w.numel())}.\n"
+            s += f"The number included in phase vector Term is {(self.parm_c.numel())}.\n"
+            s += f"The number of phase is {(self.parm_w.numel())+(self.parm_c.numel())}.\n"
+        if self.phase_type == "mlp":
+            phase_num = 0
+            net_param_num = lambda net: sum(p.numel() for p in net.parameters())
+            for i in range(len(self.phase_layers)):
+                phase_num += net_param_num(self.phase_layers[i])
+            s += f"The number of phase is {phase_num}\n"
+            s += f"The phase-activations is {self.phase_hidden_activation}\n"
+        s += f"The number included in eta is {(self.parm_eta.numel())}.\n"
+        s += f"The bond dim in MPS part is {self.dcut}, the local dim of Hilbert space is {self.hilbert_local}."
+        return s
 
     def param_init_one_site(self):
         if self.param_dtype == torch.complex128:
@@ -776,6 +801,30 @@ class MPS_RNN_2D(nn.Module):
             x_.unsqueeze_(0)
         return x_
 
+    def orth_mask(self, states: Tensor, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
+        if self.remove_det:
+            return orthonormal_mask(states, self.det_lut)
+        else:
+            return torch.ones(num_up.size(0), 4, device=self.device, dtype=torch.bool)
+
+    def joint_next_samples(self, unique_sample: Tensor, mask: Tensor = None) -> Tensor:
+        """
+        Creative the next possible unique sample
+        """
+        return joint_next_samples(unique_sample, mask=mask, sites=2)
+
+    @torch.no_grad()
+    def state_to_int(self, x: Tensor, value=-1, sites: int = 2) -> Tensor:
+        """
+        convert +1/-1 -> (0, 1, 2, 3), or +1/0, dtype = torch.int64
+        """
+        x = x.masked_fill(x == value, 0).long()
+        if sites == 2:
+            idxs = x[:, ::2] + x[:, 1::2] * 2
+        else:
+            idxs = x
+        return idxs
+
     def calculate_one_site(self, h, target, n_batch, amp, phi) -> tuple[Tensor, Tensor]:
         for i in range(0, self.nqubits):
             k = i
@@ -987,9 +1036,8 @@ class MPS_RNN_2D(nn.Module):
             # FIXME: using broadcast and matmul
             # torch.allclose(torch.einsum("acb, bd ->acd", M_cat, h_cat), torch.matmul(M_cat, h_cat))
             h_ud = torch.matmul(M_cat, h_cat) + self.parm_v[a, b].unsqueeze(-1)  # (4, dcut, nbatch)
-        # h_ud = torch.einsum("acb,bd->acd", M_cat, h_cat) + (
-        #     torch.unsqueeze(self.parm_v[a, b], -1)
-        # ).repeat(1, 1, n_batch)
+        # h_ud = torch.einsum("acb,bd->acd", M_cat, h_cat) + self.parm_v[a, b].unsqueeze(-1)
+
         if self.use_tensor:
             h_ud = h_ud + T
         # 确保数值稳定性的操作
@@ -1000,14 +1048,9 @@ class MPS_RNN_2D(nn.Module):
         # ).real  # 分母上sqrt里面 n_banth应该是一样的
         # normal = torch.mean(normal, dim=(0, 1))
         # normal = torch.sqrt(normal)
-        # breakpoint()
         # x1 = h_ud / normal
 
-        # # FIXME: using broadcast
-        # normal = (normal.view(1, 1, -1)).repeat(self.hilbert_local, self.dcut, 1)
-        # h_ud = h_ud / normal  # 确保数值稳定性的归一化（是按照(S5)归一化，计算矩阵Frobenius二范数）
         # avoid auto-backward fail
-        # breakpoint()
         with profiler.record_function(f"Clone H"):
             if not sampling:
                 # FIXME:(zbwu-24-04-04): avoid in-place in backward
@@ -1031,87 +1074,6 @@ class MPS_RNN_2D(nn.Module):
         # P = P / P.max(dim=0, keepdim=True)[0]
 
         return P, h, h_ud, a, b
-        # breakpoint()/ei
-        # P = P / ((torch.max(P, dim=0)[0]).view(1, -1)).repeat(self.hilbert_local, 1)  # 数值稳定性
-
-        # if phi is not None:
-        #     # symm.
-        #     P = self.mask_input(P.T, psi_mask, 0.0).T
-        #     breakpoint()
-        #     num_up.add_(target[..., 2 * i].to(torch.int64))
-        #     num_down.add_(target[..., 2 * i + 1].to(torch.int64))
-        # P = F.normalize(P, dim=0, eps=1e-15)
-
-        # if phi is None:
-        #     return P, h
-        # else:
-        #     index = self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).view(1, -1)
-        #     amp = amp * P.gather(0, index).view(-1)  # (local_hilbert_dim, n_batch) -> (n_batch)
-
-        #     index_phi = index.view(1, 1, -1).repeat(1, self.dcut, 1)
-        #     # index_phi = (
-        #     #     self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).view(1, 1, n_batch)
-        #     # ).repeat(1, self.dcut, 1)
-        #     h_i = h_ud.gather(0, index_phi).view(self.dcut, n_batch)
-        #     # h_i = h[a, b].gather(0, q_k).view(self.dcut, n_batch)
-        #     if self.param_dtype == torch.complex128:
-        #         h_i = h_i.to(torch.complex128)
-        #     # 计算相位
-        #     if self.phase_type == "regular":
-        #         # (dcut) (dcut, n_batch)  -> (n_batch)
-        #         phi_i = self.parm_w[a, b] @ h_i + self.parm_c[a, b]
-        #         phi = phi + torch.angle(phi_i)
-        #     # breakpoint()
-        #     return amp, phi, h
-
-    def extra_repr(self) -> str:
-        s = f"The MPS_RNN_2D is working on {self.device}.\n"
-        s += f"The graph of this molecular is {self.M} * {self.L}.\n"
-        s += f"The order is(Spatial orbital).\n"
-        s += f"{torch.flip(self.order, dims=[0])}.\n"
-        s += f"And the params dtype(JUST THE W AND v) is {self.param_dtype}.\n"
-        s += f"The number of params is {sum(p.numel() for p in self.parameters())}.\n"
-        if self.params_file is not None:
-            s += f"Old-params-files: {self.params_file}, dcut-before: {self.dcut_before}.\n"
-        if self.param_dtype == torch.complex128:
-            s += f"(one complex number is the combination of two real number).\n"
-        s += f"Use Tensor-RNN is {self.use_tensor}.\n"
-        if self.use_tensor:
-            s += f"The number included in amp Tensor Term is {(self.parm_T.numel())}.\n"
-        s += f"The number included in amp Matrix Term (M_h and M_v) is {(self.parm_M_h.numel())} + {(self.parm_M_v.numel())}.\n"
-        s += f"The number included in amp vector Term is {(self.parm_v.numel())}.\n"
-        if self.phase_type == "regular":
-            s += f"The number included in phase Matrix Term is {(self.parm_w.numel())}.\n"
-            s += f"The number included in phase vector Term is {(self.parm_c.numel())}.\n"
-            s += f"The number of phase is {(self.parm_w.numel())+(self.parm_c.numel())}.\n"
-        if self.phase_type == "mlp":
-            phase_num = 0
-            net_param_num = lambda net: sum(p.numel() for p in net.parameters())
-            for i in range(len(self.phase_layers)):
-                phase_num += net_param_num(self.phase_layers[i])
-            s += f"The number of phase is {phase_num}\n"
-            s += f"The phase-activations is {self.phase_hidden_activation}\n"
-        s += f"The number included in eta is {(self.parm_eta.numel())}.\n"
-        s += f"The bond dim in MPS part is {self.dcut}, the local dim of Hilbert space is {self.hilbert_local}."
-        return s
-
-    def joint_next_samples(self, unique_sample: Tensor, mask: Tensor = None) -> Tensor:
-        """
-        Creative the next possible unique sample
-        """
-        return joint_next_samples(unique_sample, mask=mask, sites=2)
-
-    @torch.no_grad()
-    def state_to_int(self, x: Tensor, value=-1, sites: int = 2) -> Tensor:
-        """
-        convert +1/-1 -> (0, 1, 2, 3), or +1/0, dtype = torch.int64
-        """
-        x = x.masked_fill(x == value, 0).long()
-        if sites == 2:
-            idxs = x[:, ::2] + x[:, 1::2] * 2
-        else:
-            idxs = x
-        return idxs
 
     def _interval_sample(
         self,
@@ -1143,9 +1105,6 @@ class MPS_RNN_2D(nn.Module):
                 raise NotImplementedError(f"Please use the 2-sites mode")
 
             # logger.info(f"psi_amp_K: {psi_amp_k.shape}, h :{h.shape}, h_ud: {h_ud.shape}")
-            # psi_amp_k = F.normalize(psi_amp_k, dim=0, eps=1e-15)
-            # P = P / P.max(dim=0, keepdim=True)[0]
-            # P = F.normalize(P, dim=0, eps=1e-15)
 
             psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
             psi_orth_mask = self.orth_mask(states=x0, k=2 * i, num_up=num_up, num_down=num_down)
@@ -1154,25 +1113,6 @@ class MPS_RNN_2D(nn.Module):
             # avoid numerical error
             psi_amp_k /= psi_amp_k.max(dim=1, keepdim=True)[0]
             psi_amp_k = F.normalize(psi_amp_k, dim=1, eps=1e-14)
-
-            # import time
-            # sample_unique_1 = sample_unique.clone()
-            # amps_value_1 = amps_value.clone()
-            # sample_counts_1 = sample_counts.clone()
-
-            # t0 = time.time_ns()
-            # counts_i = multinomial_tensor(sample_counts_1, psi_amp_k.pow(2)).T.flatten()
-            # idx_count = counts_i > 0
-            # # idx_count_with = counts_i >= 0
-            # sample_counts_1 = counts_i[idx_count]
-            # # if  i == end-1:
-            # sample_unique_1 = self.joint_next_samples(sample_unique_1)[idx_count]
-            # amps_value_1 = torch.mul(amps_value_1.unsqueeze(1).repeat(1, 4), psi_amp_k).T.flatten()[
-            #     idx_count
-            # ]
-            # h_1 = h.repeat(1, 1, 1, 1, 4)
-            # h_1 = h_1[..., idx_count]
-            # t1 = time.time_ns()
 
             with profiler.record_function("updating unique sample"):
                 counts_i = multinomial_tensor(sample_counts, psi_amp_k.pow(2))  # (unique, 4)
@@ -1184,7 +1124,9 @@ class MPS_RNN_2D(nn.Module):
                 sample_counts = counts_i[mask_count]  # (unique-next)
                 sample_unique = self.joint_next_samples(sample_unique, mask=mask_count)
                 repeat_nums = mask_count.sum(dim=1)  # bool in [0, 4]
-                amps_value = torch.mul(amps_value.repeat_interleave(repeat_nums, 0), psi_amp_k[mask_count])
+                amps_value = torch.mul(
+                    amps_value.repeat_interleave(repeat_nums, 0), psi_amp_k[mask_count]
+                )
                 h = h.repeat_interleave(repeat_nums, -1)
 
             # calculate phase
@@ -1202,21 +1144,12 @@ class MPS_RNN_2D(nn.Module):
                     phi_i = self.parm_w[a, b] @ h_i + self.parm_c[a, b]
                     phi = phi.repeat_interleave(repeat_nums, dim=-1)
                     phi = phi + torch.angle(phi_i)
-            # t2 = time.time_ns()
-            # from loguru import logger
-            # logger.info(f"Delta: {(t1 - t0)/1.0e06:.3E} ms, Delta1: {(t2-t1)/1.e06:.3E} ms")
-
-            # from utils.public_function import torch_sort_onv
-            # idx1 = torch_sort_onv(sample_unique_1)
-            # idx2 = torch_sort_onv(sample_unique)
-            # assert torch.allclose(sample_unique_1[idx1], sample_unique[idx2])
-            # assert torch.allclose(amps_value_1[idx1], amps_value[idx2])
 
             l += interval
 
-        return sample_unique, sample_counts, amps_value, phi, 2 * l
-    
-    def forward(self, x: Tensor):
+        return sample_unique, sample_counts, h, amps_value, phi, 2 * l
+
+    def forward(self, x: Tensor) -> Tensor:
         """
         定义输入 x
         如何算出一个数出来（或者说算出一个矢量）
@@ -1225,9 +1158,8 @@ class MPS_RNN_2D(nn.Module):
         target = (x + 1) / 2
         n_batch = x.shape[0]
         h = self.h_boundary
-        h = (torch.unsqueeze(h, -1)).repeat(
-            1, 1, 1, 1, n_batch
-        )  # (M, L, local_hilbert_dim, dcut, n_batch)
+        # (M, L, local_hilbert_dim, dcut, n_batch)
+        h = (torch.unsqueeze(h, -1)).repeat(1, 1, 1, 1, n_batch)
         # h = torch.ones((self.hilbert_local,self.dcut,n_batch),device=self.device)
         # h_row = torch.zeros((self.hilbert_local,self.dcut,n_batch),device=self.device)
         phi = torch.zeros(n_batch, device=self.device)  # (n_batch,)
@@ -1242,7 +1174,7 @@ class MPS_RNN_2D(nn.Module):
             for i in range(0, self.nqubits // 2):
                 P, h, h_ud, a, b = self.calculate_two_site(h, target, n_batch, i, sampling=False)
 
-                logger.info(f"h: {h.shape}, h_ud: {h_ud.shape}")
+                # logger.info(f"h: {h.shape}, h_ud: {h_ud.shape}")
                 # symmetry
                 psi_mask = self.symmetry_mask(2 * i, num_up, num_down)
                 psi_orth_mask = self.orth_mask(target[..., : 2 * i], 2 * i, num_up, num_down)
@@ -1317,9 +1249,8 @@ class MPS_RNN_2D(nn.Module):
         elif self.phase_type == "regular":
             psi_phase = torch.exp(phi * 1j)
         psi = psi_amp * psi_phase
-        extra_phase = permute_sgn(
-            torch.arange(self.nqubits, device=self.device), sample_unique.long(), self.nqubits
-        )
+        baseline = torch.arange(self.nqubits, device=self.device),
+        extra_phase = permute_sgn(baseline, sample_unique.long(), self.nqubits)
         psi = psi * extra_phase
 
         # wf = self.forward(sample_unique)
@@ -1332,54 +1263,7 @@ class MPS_RNN_2D(nn.Module):
         n_sample: int,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         return self.forward_sample(n_sample)
-    
-    def extra_repr(self) -> str:
-        s = f"The MPS_RNN_2D is working on {self.device}.\n"
-        s += f"The graph of this molecular is {self.M} * {self.L}.\n"
-        s += f"The order is(Spatial orbital).\n"
-        s += f"{torch.flip(self.order, dims=[0])}.\n"
-        s += f"And the params dtype(JUST THE W AND v) is {self.param_dtype}.\n"
-        s += f"The number of params is {sum(p.numel() for p in self.parameters())}.\n"
-        if self.params_file is not None:
-            s += f"Old-params-files: {self.params_file}, dcut-before: {self.dcut_before}.\n"
-        if self.param_dtype == torch.complex128:
-            s += f"(one complex number is the combination of two real number).\n"
-        s += f"Use Tensor-RNN is {self.use_tensor}.\n"
-        if self.use_tensor:
-            s += f"The number included in amp Tensor Term is {(self.parm_T.numel())}.\n"
-        s += f"The number included in amp Matrix Term (M_h and M_v) is {(self.parm_M_h.numel())} + {(self.parm_M_v.numel())}.\n"
-        s += f"The number included in amp vector Term is {(self.parm_v.numel())}.\n"
-        if self.phase_type == "regular":
-            s += f"The number included in phase Matrix Term is {(self.parm_w.numel())}.\n"
-            s += f"The number included in phase vector Term is {(self.parm_c.numel())}.\n"
-            s += f"The number of phase is {(self.parm_w.numel())+(self.parm_c.numel())}.\n"
-        if self.phase_type == "mlp":
-            phase_num = 0
-            net_param_num = lambda net: sum(p.numel() for p in net.parameters())
-            for i in range(len(self.phase_layers)):
-                phase_num += net_param_num(self.phase_layers[i])
-            s += f"The number of phase is {phase_num}\n"
-            s += f"The phase-activations is {self.phase_hidden_activation}\n"
-        s += f"The number included in eta is {(self.parm_eta.numel())}.\n"
-        s += f"The bond dim in MPS part is {self.dcut}, the local dim of Hilbert space is {self.hilbert_local}."
-        return s
 
-    def joint_next_samples(self, unique_sample: Tensor, mask: Tensor = None) -> Tensor:
-        """
-        Creative the next possible unique sample
-        """
-        return joint_next_samples(unique_sample, mask=mask, sites=2)
-
-    def state_to_int(self, x: Tensor, value=-1, sites: int = 2) -> Tensor:
-        """
-        convert +1/-1 -> (0, 1, 2, 3), or +1/0, dtype = torch.int64
-        """
-        x = x.masked_fill(x == value, 0).long()
-        if sites == 2:
-            idxs = x[:, ::2] + x[:, 1::2] * 2
-        else:
-            idxs = x
-        return idxs
 
 class MPS_RNN_1D(nn.Module):
     """
@@ -1813,8 +1697,8 @@ if __name__ == "__main__":
     print("============MPS--RNN============")
     print(f"Psi^2 in AR-Sampling")
     print("--------------------------------")
-    # sample, counts, wf = model.ar_sampling(n_sample=int(1e12))
-    # sample = (sample * 2 - 1).double()
+    sample, counts, wf = model.ar_sampling(n_sample=int(1e12))
+    sample = (sample * 2 - 1).double()
     wf1 = model(fci_space)
     loss = wf1.norm()
 
@@ -1829,8 +1713,8 @@ if __name__ == "__main__":
     ) as prof:
         # sample, counts, wf = model.ar_sampling(n_sample=int(1e12))
         # sample = (sample * 2 - 1).double()
-        # loss.backward()
-        model(fci_space)
+        loss.backward()
+        # model(fci_space)
     # torch.save(wf1.detach(), "wf1.pth")
     print(prof.key_averages(group_by_stack_n=5).table(sort_by="cuda_time_total", row_limit=20))
     # exit()
