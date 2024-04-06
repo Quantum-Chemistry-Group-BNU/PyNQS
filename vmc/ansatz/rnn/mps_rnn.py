@@ -24,6 +24,70 @@ import torch.autograd.profiler as profiler
 from loguru import logger
 
 
+from typing import NewType
+
+LTensor = NewType("LTensor", list[Tensor])
+MTensor = NewType("MTensor", list[LTensor])
+
+
+class HiddenStates:
+    def __init__(
+        self,
+        M: int,
+        L: int,
+        values: Tensor,
+        device: str = "cpu",
+        use_list: bool = True,
+    ) -> None:
+        self.M = M
+        self.L = L
+        self.device = device
+        self.use_list = use_list
+        self.MTensor: MTensor | Tensor = None
+        if self.use_list:
+            self.MTensor: MTensor = [
+                [torch.tensor([], device=device) for _ in range(L)] for _ in range(M)
+            ]
+            for i in range(M):
+                for j in range(L):
+                    self.MTensor[i][j] = values.clone()
+        else:
+            assert values.size(0) == M and values.size(1) == L
+            self.MTensor = values
+
+    def repeat(self, *size: tuple):
+        if self.use_list:
+            for i in range(self.M):
+                for j in range(self.L):
+                    self.MTensor[i][j] = self.MTensor[i][j].repeat(size)
+        else:
+            self.MTensor = self.MTensor.repeat(size)
+        
+        return self
+
+    def repeat_interleave(self, repeats_nums: Tensor, dim: int = -1):
+        if self.use_list:
+            for i in range(self.M):
+                for j in range(self.L):
+                    self.MTensor[i][j] = self.MTensor[i][j].repeat_interleave(repeats_nums, dim=dim)
+        else:
+            self.MTensor = self.MTensor.repeat_interleave(repeats_nums, dim=dim)
+        
+        return self
+
+    def __getitem__(self, index: tuple[int, int, any]) -> Tensor:
+        i, j, *k = index
+        if len(k) == 0 or k == [Ellipsis]:
+            ...
+        else:
+            raise NotImplementedError()
+        return self.MTensor[i][j]
+
+    def __setitem__(self, index, value: Tensor) -> None:
+        i, j = index
+        self.MTensor[i][j] = value
+
+
 def get_order(
     order_type: str,
     dim_graph: int,
@@ -960,8 +1024,10 @@ class MPS_RNN_2D(nn.Module):
         k = i
         # 横向传播并纵向计算概率
         idx = torch.nonzero(self.order == i)
+        # breakpoint()
         b = idx[0, 1]  # 第 b 列
         a = idx[0, 0]  # 第 a 行
+        # logger.info(f"a: {a}, b: {b}")
         if self.graph_type == "snake":
             if a % 2 == 0:  # 偶数行，左->右
                 if a == 0:
@@ -1054,7 +1120,9 @@ class MPS_RNN_2D(nn.Module):
         with profiler.record_function(f"Clone H"):
             if not sampling:
                 # FIXME:(zbwu-24-04-04): avoid in-place in backward
-                h = h.clone()
+                ...
+                #  h = h.clone()
+            # (M, L, dcut, 4, nbatch)
             h[a, b] = h_ud  # 更新h
         # 计算概率（振幅部分） 并归一化
         # breakpoint()
@@ -1100,7 +1168,9 @@ class MPS_RNN_2D(nn.Module):
             if self.hilbert_local == 4:
                 # h: (2, 4, 4, dcut, n-unique), h_ud: (4, dcut, n-unique)
                 with profiler.record_function("Update amp"):
-                    psi_amp_k, h, h_ud, a, b = self.calculate_two_site(h, x0, n_batch, i, sampling=True)
+                    psi_amp_k, h, h_ud, a, b = self.calculate_two_site(
+                        h, x0, n_batch, i, sampling=True
+                    )
             else:
                 raise NotImplementedError(f"Please use the 2-sites mode")
 
@@ -1115,11 +1185,13 @@ class MPS_RNN_2D(nn.Module):
             psi_amp_k = F.normalize(psi_amp_k, dim=1, eps=1e-14)
 
             with profiler.record_function("updating unique sample"):
-                counts_i = multinomial_tensor(sample_counts, psi_amp_k.pow(2))  # (unique, 4)
+                prob = psi_amp_k.pow(2)
+                # prob = prob.masked_fill(prob <= 1.0e-10, 0.0)
+                counts_i = multinomial_tensor(sample_counts, probs=prob)  # (unique, 4)
                 mask_count = counts_i > 0
-                if sample_counts.sum() >= 1.0e6:
-                    # drop n-samples < 5 and avoid too-many unique-sample
-                    mask_count = torch.logical_and(mask_count, counts_i >= 5)
+                # if sample_counts.sum() >= 1.0e6:
+                #     # drop n-samples < 5 and avoid too-many unique-sample
+                #     mask_count = torch.logical_and(mask_count, counts_i >= 5)
 
                 sample_counts = counts_i[mask_count]  # (unique-next)
                 sample_unique = self.joint_next_samples(sample_unique, mask=mask_count)
@@ -1127,7 +1199,7 @@ class MPS_RNN_2D(nn.Module):
                 amps_value = torch.mul(
                     amps_value.repeat_interleave(repeat_nums, 0), psi_amp_k[mask_count]
                 )
-                h = h.repeat_interleave(repeat_nums, -1)
+                h.repeat_interleave(repeat_nums, -1)
 
             # calculate phase
             with profiler.record_function("calculate phase"):
@@ -1157,9 +1229,14 @@ class MPS_RNN_2D(nn.Module):
         #  x: (+1/-1)
         target = (x + 1) / 2
         n_batch = x.shape[0]
-        h = self.h_boundary
+        M = self.h_boundary.size(0)
+        L = self.h_boundary.size(1)
+        h = HiddenStates(M, L, self.h_boundary[0][0].unsqueeze(-1), self.device, use_list=True)
+        h.repeat(1, 1, n_batch)
+        # h = self.h_boundary
+        # breakpoint()
         # (M, L, local_hilbert_dim, dcut, n_batch)
-        h = (torch.unsqueeze(h, -1)).repeat(1, 1, 1, 1, n_batch)
+        # h = (torch.unsqueeze(h, -1)).repeat(1, 1, 1, 1, n_batch)
         # h = torch.ones((self.hilbert_local,self.dcut,n_batch),device=self.device)
         # h_row = torch.zeros((self.hilbert_local,self.dcut,n_batch),device=self.device)
         phi = torch.zeros(n_batch, device=self.device)  # (n_batch,)
@@ -1226,6 +1303,9 @@ class MPS_RNN_2D(nn.Module):
         self.min_batch = min_batch
         h = self.h_boundary
         h = (torch.unsqueeze(h, -1)).repeat(1, 1, 1, 1, 1)  # (local_hilbert_dim, dcut, n_batch)
+        M = self.h_boundary.size(0)
+        L = self.h_boundary.size(1)
+        h = HiddenStates(M, L, h, use_list=False, device=self.device)
         phi = torch.zeros(1, device=self.device)  # (n_batch,)
 
         sample_unique, sample_counts, h, psi_amp, phi, _ = self._interval_sample(
@@ -1249,7 +1329,7 @@ class MPS_RNN_2D(nn.Module):
         elif self.phase_type == "regular":
             psi_phase = torch.exp(phi * 1j)
         psi = psi_amp * psi_phase
-        baseline = torch.arange(self.nqubits, device=self.device),
+        baseline = torch.arange(self.nqubits, device=self.device)
         extra_phase = permute_sgn(baseline, sample_unique.long(), self.nqubits)
         psi = psi * extra_phase
 
@@ -1699,9 +1779,10 @@ if __name__ == "__main__":
     print("--------------------------------")
     sample, counts, wf = model.ar_sampling(n_sample=int(1e12))
     sample = (sample * 2 - 1).double()
-    wf1 = model(fci_space)
+    wf1 = model(sample)
     loss = wf1.norm()
 
+    breakpoint()
     # from torch.profiler import profile, record_function, ProfilerActivity
     with torch.autograd.profiler.profile(
         enabled=True,
@@ -1713,8 +1794,8 @@ if __name__ == "__main__":
     ) as prof:
         # sample, counts, wf = model.ar_sampling(n_sample=int(1e12))
         # sample = (sample * 2 - 1).double()
-        loss.backward()
-        # model(fci_space)
+        # loss.backward()
+        model(fci_space)
     # torch.save(wf1.detach(), "wf1.pth")
     print(prof.key_averages(group_by_stack_n=5).table(sort_by="cuda_time_total", row_limit=20))
     # exit()
