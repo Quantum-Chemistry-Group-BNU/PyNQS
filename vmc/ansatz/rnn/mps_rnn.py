@@ -18,6 +18,8 @@ from utils.public_function import (
     get_special_space,
     setup_seed,
     multinomial_tensor,
+    split_batch_idx,
+    split_length_idx,
 )
 
 import torch.autograd.profiler as profiler
@@ -38,7 +40,7 @@ class HiddenStates:
         values: Tensor,
         device: str = "cpu",
         use_list: bool = True,
-    ) -> None:
+    ):
         self.M = M
         self.L = L
         self.device = device
@@ -62,7 +64,7 @@ class HiddenStates:
                     self.MTensor[i][j] = self.MTensor[i][j].repeat(size)
         else:
             self.MTensor = self.MTensor.repeat(size)
-        
+
         return self
 
     def repeat_interleave(self, repeats_nums: Tensor, dim: int = -1):
@@ -72,20 +74,32 @@ class HiddenStates:
                     self.MTensor[i][j] = self.MTensor[i][j].repeat_interleave(repeats_nums, dim=dim)
         else:
             self.MTensor = self.MTensor.repeat_interleave(repeats_nums, dim=dim)
-        
+
         return self
 
-    def __getitem__(self, index: tuple[int, int, any]) -> Tensor:
+    def __getitem__(self, index: tuple[int | slice, int | slice, any]):
         i, j, *k = index
-        if len(k) == 0 or k == [Ellipsis]:
-            ...
+        if len(k) == 0 and i == Ellipsis and isinstance(j, slice):
+            if not self.use_list:
+                x = HiddenStates(self.M, self.L, self.MTensor[..., j], self.device, use_list=False)
+                return x
+            else:
+                raise NotImplementedError(f"List[Tensor] does not support {index}")
+        elif len(k) == 0 or k == [Ellipsis]:
+            return self.MTensor[i][j]
         else:
+            logger.info(index)
             raise NotImplementedError()
-        return self.MTensor[i][j]
 
     def __setitem__(self, index, value: Tensor) -> None:
         i, j = index
         self.MTensor[i][j] = value
+
+    def shape(self) -> tuple[int, ...]:
+        if self.use_list:
+            return (self.M, self.L) + tuple(self.MTensor[0][0].shape)
+        else:
+            return self.MTensor.shape
 
 
 def get_order(
@@ -1009,7 +1023,7 @@ class MPS_RNN_2D(nn.Module):
 
     def calculate_two_site(
         self,
-        h: Tensor,
+        h: HiddenStates,
         target: Tensor,
         n_batch: int,
         i: int,
@@ -1148,7 +1162,7 @@ class MPS_RNN_2D(nn.Module):
         sample_unique: Tensor,
         sample_counts: Tensor,
         amps_value: Tensor,
-        h: Tensor,
+        h: HiddenStates,
         phi: Tensor,
         begin: int,
         end: int,
@@ -1220,6 +1234,75 @@ class MPS_RNN_2D(nn.Module):
             l += interval
 
         return sample_unique, sample_counts, h, amps_value, phi, 2 * l
+
+    def _sample_dfs(
+        self,
+        sample_unique: Tensor,
+        sample_counts: Tensor,
+        amps_value: Tensor,
+        h: HiddenStates,
+        phi: Tensor,
+        k_start: int,
+        k_end: int,
+        min_batch: int = -1,
+        interval: int = 1,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        # h: [M, L, 4, dcut, n-unique]
+        # phi: [n-unique]
+        if min_batch == -1:
+            min_batch = float("inf")
+        for k_th in range(k_start, k_end, interval):
+            # logger.info(f"dim: {sample_unique.shape[0]}. min-batch: {min_batch}")
+            if sample_unique.shape[0] > min_batch:
+                dim = sample_unique.shape[0]
+                num_loop = int(((dim - 1) // min_batch) + 1)
+                idx_rank_lst = [0] + split_length_idx(dim, length=num_loop)
+                sample_unique_list, sample_counts_list, amp_value_list, phi_list = [], [], [], []
+                for i in range(num_loop):
+                    begin = idx_rank_lst[i]
+                    end = idx_rank_lst[i + 1]
+                    _sample_unique, _sample_counts, _amps_value, _phi = (
+                        sample_unique[begin:end].clone(),
+                        sample_counts[begin:end].clone(),
+                        amps_value[begin:end].clone(),
+                        phi[begin:end].clone(),
+                    )
+                    # ...
+                    _h = h[..., begin:end]
+                    su, sc, av, pl = self._sample_dfs(
+                        _sample_unique,
+                        _sample_counts,
+                        _amps_value,
+                        _h,
+                        _phi,
+                        k_th,
+                        k_end,
+                        min_batch,
+                    )
+                    sample_unique_list.append(su)
+                    sample_counts_list.append(sc)
+                    amp_value_list.append(av)
+                    phi_list.append(pl)
+
+                return (
+                    torch.cat(sample_unique_list, dim=0),
+                    torch.cat(sample_counts_list, dim=0),
+                    torch.cat(amp_value_list, dim=0),
+                    torch.cat(phi_list, dim=0),
+                )
+            else:
+                sample_unique, sample_counts, h, amps_value, phi, _ = self._interval_sample(
+                    sample_unique=sample_unique,
+                    sample_counts=sample_counts,
+                    amps_value=amps_value,
+                    h=h,
+                    phi=phi,
+                    begin=k_th,
+                    end=k_th + 1,
+                    min_batch=min_batch,
+                )
+
+        return sample_unique, sample_counts, amps_value, phi
 
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -1308,16 +1391,30 @@ class MPS_RNN_2D(nn.Module):
         h = HiddenStates(M, L, h, use_list=False, device=self.device)
         phi = torch.zeros(1, device=self.device)  # (n_batch,)
 
-        sample_unique, sample_counts, h, psi_amp, phi, _ = self._interval_sample(
-            sample_unique=sample_unique,
-            sample_counts=sample_counts,
-            amps_value=psi_amp,
-            phi=phi,
-            h=h,
-            begin=0,
-            end=self.nqubits // 2,
-            min_batch=self.min_batch,
-        )
+        self.min_batch = 5000
+        use_dfs = True
+        if not use_dfs:
+            sample_unique, sample_counts, h, psi_amp, phi, _ = self._interval_sample(
+                sample_unique=sample_unique,
+                sample_counts=sample_counts,
+                amps_value=psi_amp,
+                phi=phi,
+                h=h,
+                begin=0,
+                end=self.nqubits // 2,
+                min_batch=self.min_batch,
+            )
+        else:
+            sample_unique, sample_counts, psi_amp, phi = self._sample_dfs(
+                sample_unique=sample_unique,
+                sample_counts=sample_counts,
+                amps_value=psi_amp,
+                phi=phi,
+                h=h,
+                k_start=0,
+                k_end=self.nqubits // 2,
+                min_batch=self.min_batch,
+            )
 
         if self.phase_type == "mlp":
             # (nbatch, 2)
@@ -1727,7 +1824,7 @@ class MPS_RNN_1D(nn.Module):
 if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
-    device = "cpu"
+    device = "cuda"
     sorb = 20
     nele = 10
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
@@ -1777,12 +1874,15 @@ if __name__ == "__main__":
     print("============MPS--RNN============")
     print(f"Psi^2 in AR-Sampling")
     print("--------------------------------")
-    sample, counts, wf = model.ar_sampling(n_sample=int(1e12))
+    sample, counts, wf = model.ar_sampling(n_sample=int(1e14))
     sample = (sample * 2 - 1).double()
     wf1 = model(sample)
-    loss = wf1.norm()
-
+    logger.info(f"p1 {(counts / counts.sum())[:30]}")
+    logger.info(f"p2: {wf.abs().pow(2)[:30]}")
     breakpoint()
+    # loss = wf1.norm()
+
+    # breakpoint()
     # from torch.profiler import profile, record_function, ProfilerActivity
     with torch.autograd.profiler.profile(
         enabled=True,
@@ -1794,8 +1894,8 @@ if __name__ == "__main__":
     ) as prof:
         # sample, counts, wf = model.ar_sampling(n_sample=int(1e12))
         # sample = (sample * 2 - 1).double()
-        # loss.backward()
-        model(fci_space)
+        loss.backward()
+        # model(fci_space)
     # torch.save(wf1.detach(), "wf1.pth")
     print(prof.key_averages(group_by_stack_n=5).table(sort_by="cuda_time_total", row_limit=20))
     # exit()
@@ -1826,12 +1926,12 @@ if __name__ == "__main__":
     # psi = model(fci_space)
     # print((psi * psi.conj()).sum().item())
     # print("================================")
-    torch.autograd.set_detect_anomaly(True)
-    loss = wf1.norm()
-    loss.backward()
-    grad = []
-    for param in model.parameters():
-        grad.append(param.grad.reshape(-1))
-    from loguru import logger
+    # torch.autograd.set_detect_anomaly(True)
+    # loss = wf1.norm()
+    # loss.backward()
+    # grad = []
+    # for param in model.parameters():
+    #     grad.append(param.grad.reshape(-1))
+    # from loguru import logger
 
-    logger.info(torch.cat(grad).sum().item())
+    # logger.info(torch.cat(grad).sum().item())
