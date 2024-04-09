@@ -189,7 +189,7 @@ if __name__ == "__main__":
         "use_LUT": True,
         "use_unique": True,
         "reduce_psi": False,
-        "use_sample_space": False,
+        "use_sample_space": True,
         "eps": 1.0e-10,
         "only_AD": False,
         "use_same_tree": True,  # different rank-sample
