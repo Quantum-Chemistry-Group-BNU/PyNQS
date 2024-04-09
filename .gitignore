@@ -1,0 +1,7 @@
+*output*/
+*log*/
+molecule/
+tmp/
+.vscode/
+*.atmp
+

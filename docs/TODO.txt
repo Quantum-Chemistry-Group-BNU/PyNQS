@@ -1,0 +1,99 @@
+
+#--------2023-03-29----------- zbwu1996@gmail.com
+1. pre-training from UCISD coeff and notice sign correction (Y)
+    a: convergence speed before and after pre-training 
+    b: Energy change (exact sampling or CISD-onstate)
+2. Check the pre-training result:
+    a: Add New Class "CIWavefunction" to fit CISD or FCI wavefunction in order to 
+       accelerate VMC optimization (N)
+    b: Add Member Functions of the Class RMBWavefunction to calculate energy (N):
+       e = <psi|H|psi>/<psi|psi>  <psi|H|psi> = \sum_{ij}c_i<i|H|j>c_j (Y)
+3. Sampling question.
+    a: Compare exact-VMC and sample in same parameters H6-1.50, H4-1.00
+    b: Compare different alpha [2, 6, 8]
+    c: wrap mcmc function "spin_rand_flip" using C++ (Y) and mpi4py
+
+#------2024-04-04------------- zbwu1996@gmail.com
+1. PYSCF-UCISD -> fci-cisd -> basis, phase (Y) Read LaTeX
+2. RMB-MemberFunction:  (exact =<psi|H|psi>/<psi|psi> and VMC = \sum_k E_loc(x_k)|psi_theta(x_k)|**2 )
+3. CIWavefunction: MemberFunction: (Y)
+4. Support torch.complex128 (Y)
+5. torch.compile does not support RNNWavefunction. Why? 
+
+#----------2023-04-13--------- zbwu1996@gmail.com
+1. Debug sampling
+2. Fit UCISD with sampling using MCMC sampling. (Y, affected by optimizer and learning rate, lr ~0.001)
+3. the better interface about MCMC sampling or auto-regressive sampling (Y) 
+4. A class about complex128 or double64, defaults: double64 (Y)
+
+#----------2023-4-20---------- zbwu1996@gmail.com
+1. refactor code referring to https://github.com/twesterhout/nqs-playground
+2. modify the module of calculating local energy and SR (Y)
+3. record log events using "Loguru" package. (TODO)
+
+#----------2023-5-08---------- zbwu1996@gmail.com
+1. Using Separate Compilation in CUDA (Y)
+BUG: pre_train failure (Y)
+
+#----------2023-6-01---------- zbwu1996@gmail.com
+1. How to calculate batch when calculating local energy using RNN model
+2. How to use Multiple GPU
+
+#----------2023-8------------ zbwu1996@gmail.com
+1. Add CUDAException handle (Y)
+2. MPS onstate index implement in CUDA or CPU by binary search. (Y)
+3. Store onstate local energy.
+4. Test Fe2S2/Fe8S7 energy, interface-magma-dgemv-vbatch (Y)
+5. RNNWavefunction distributed.
+
+#---------------feature's------------------
+1. Add tutorial using "Read the Docs"
+2. Support spin_multiplicity == 1
+3. Support mpi4py
+4. Support SR from RNN, vmap doesn't 'torch.nn.functions.one_hot' functions
+5. Support different cuda stream. ref: https://zhuanlan.zhihu.com/p/51402722
+6. Support block calculation energy in CIWavefunction. ref:https://zhuanlan.zhihu.com/p/422710424
+7. Support Multiprocessing or Multithreading/OPENMP
+8. mpi4py: the seed of the different rank
+
+
+#---------------question about pytorch------------------
+1. torch.compile doesn't speedups GRU, RNN, see: https://github.com/pytorch/pytorch/issues/91439
+2. vmap doesn't support 'torch.nn.functions.one_hot' functions
+3. MPSWavefunction(aten::fill_) doesn't support model Serialization,
+    see: https://github.com/pytorch/pytorch/issues/67834
+
+#----------------Bug--------------------
+1. cpp_src C_extension functions doesn't support different cuda stream,
+  so, it is better to set environ "CUDA_VISIBLE_DEVICES", not using cuda:1 or others.
+  this bug would be fixed in later version.
+2. RNNWavefunction does not 1.00E7 sample,
+   "Trying to create tensor with negative dimension -2483944428352"
+3. cpp_src: size_t, int64_t and int usage confusion
+4. Fe8S7, cuda get_hij_torch error? OOM?? onv_to_tensor (Y) (Y, 23-08-15)
+5. Video memory leak?? interface_magma error?? (Y, 23-08-24)
+   pytorch memory cache, and using del tensor and torch.cuda.empty_cache() release.
+6. MPS index functions is pretty slower. see: qubic/qmatrix/utils "convert_sites" functions
+    e.g. Fe8S7: [2, 1216609, 24], cost time: ~800s, how to implement in cuda. (Y, 23-08-22)
+    CUDA binary search: ~32.1ms, CPU binary search ~11.6s, see: tensor/bind.cpp/nbatch_convert_sites.
+7. How to remove duplicate onstate. how to set threshold?? (nbatch < n_SD)
+
+#---------------Notice------------------
+1. h1e and h2e may be different even though the molecular structure is the same. 
+    The phase of h1e/h2e is different (+-).
+2. libtorch slice dim.
+
+
+
+#---------------Test-------------------
+1. Fe8S7(114e, 73o) n_SD: 1216608 A100-40GB
+time         n_SD    <i|Hj>    MPS     magma-vbatch    mps-index
+batch =4:   4.817ms  0.043ms  64.27s    63.51s         0.2168s
+energy             mean:        delta-E	       var:        SD:      ref-energy
+sample = 200/4  -1075.523502    0.007441	0.007139    0.084497    -1075.516061
+sample = 300/2  -1075.521529    0.005468	0.005265    0.072560    
+sample = 1000/4 -1075.519443    0.003382	0.003750    0.0612375   ~ 276 min
+
+flops max~5.0E11 see: magma-dgemv-flops.png
+cudaMemcpy Device->Device ~614GiB/s
+MPS is so pretty expensive, so MPS + RMB/MPS *RMB fail.
