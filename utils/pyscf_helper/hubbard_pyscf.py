@@ -94,7 +94,7 @@ def get_Hubbard_U(nbas: int, U: float) -> ndarray[np.float64]:
     return h2e
 
 
-def get_Hubbard_molmf(thop: ndarray, eri: ndarray, nelec: int):
+def get_Hubbard_molmf(thop: ndarray, eri: ndarray, nelec: int, orbital_type:str="HF"):
     nbas = thop.shape[0]
     # from pyscf import gto, scf, ao2mo
     mol = gto.M()
@@ -105,16 +105,19 @@ def get_Hubbard_molmf(thop: ndarray, eri: ndarray, nelec: int):
     mf.get_ovlp = lambda *args: np.eye(nbas)
     mf._eri = ao2mo.restore(8, eri, nbas)
     mf.kernel()
+    if orbital_type == "Lattice":
+        mf.mo_coeff = np.eye(nbas)
     return mol, mf
 
 
-def get_hubbard_model(nbas: int, nelec: int, U: float = 1.0, dim: int = 1, pbc: bool = False, M:int=None):
+def get_hubbard_model(nbas: int, nelec: int, U: float = 1.0, dim: int = 1, pbc: bool = False, M:int=None, orbital_type:str="HF"):
     """
     nbas(int): the number of spatial orbital
     nelec(int): the number of the electron
     U(float): default 1.0
     pbc(bool): Whether to use periodic boundary conditions, default use obc
     M(int): 2d-Hubbard model's columns 
+    orbital_type(str): "H--F" or "Lattice"(use unitary martix represent mo_coeff)
     """
     if dim == 1:
         thop = get_Hubbard_t1D(nbas, 1, pbc)
@@ -123,7 +126,7 @@ def get_hubbard_model(nbas: int, nelec: int, U: float = 1.0, dim: int = 1, pbc: 
         thop = get_Hubbard_t2D(nbas, 1, pbc, M)
     eri = get_Hubbard_U(nbas, U)
 
-    mol, mf = get_Hubbard_molmf(thop, eri, nelec)
+    mol, mf = get_Hubbard_molmf(thop, eri, nelec, orbital_type)
     mo_coeff = mf.mo_coeff
     ecore = mol.energy_nuc()
     h1e, h2e = get_RHF_int_h1h2(thop, eri, mo_coeff)
