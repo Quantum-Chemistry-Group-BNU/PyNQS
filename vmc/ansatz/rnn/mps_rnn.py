@@ -1031,12 +1031,7 @@ class MPS_RNN_2D(nn.Module):
         i: int,
         sampling: bool = True,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-        # symm.
-        # psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
-        # psi_orth_mask = self.orth_mask(
-        #     states=target[..., : 2 * i], k=2 * i, num_up=num_up, num_down=num_down
-        # )
-        # psi_mask = psi_mask * psi_orth_mask
+
         k = i
         # 横向传播并纵向计算概率
         idx = torch.nonzero(self.order == i)
@@ -1111,13 +1106,11 @@ class MPS_RNN_2D(nn.Module):
         if self.use_tensor:
             T = torch.einsum("iabc,an,bn->icn", self.parm_T[a, b, ...], h_h, h_v)
         # 更新纵向 (hilbert_local,dcut,dcut) (dcut,n_batch) -> (hilbert_local,dcut,n_batch)
-        with profiler.record_function("Update H_ud"):
-            M_cat = torch.cat([self.parm_M_h[a, b, ...], self.parm_M_v[a, b, ...]], -1)
-            h_cat = torch.cat([h_h, h_v], 0)
-
-            # FIXME: using broadcast and matmul
-            # torch.allclose(torch.einsum("acb, bd ->acd", M_cat, h_cat), torch.matmul(M_cat, h_cat))
-            h_ud = torch.matmul(M_cat, h_cat) + self.parm_v[a, b].unsqueeze(-1)  # (4, dcut, nbatch)
+        # with profiler.record_function("Update H_ud"):
+        M_cat = torch.cat([self.parm_M_h[a, b, ...], self.parm_M_v[a, b, ...]], -1)
+        h_cat = torch.cat([h_h, h_v], 0)
+        # torch.allclose(torch.einsum("acb, bd ->acd", M_cat, h_cat), torch.matmul(M_cat, h_cat))
+        h_ud = torch.matmul(M_cat, h_cat) + self.parm_v[a, b].unsqueeze(-1)  # (4, dcut, nbatch)
         # h_ud = torch.einsum("acb,bd->acd", M_cat, h_cat) + self.parm_v[a, b].unsqueeze(-1)
 
         if self.use_tensor:
@@ -1133,29 +1126,26 @@ class MPS_RNN_2D(nn.Module):
         # x1 = h_ud / normal
 
         # avoid auto-backward fail
-        with profiler.record_function(f"Clone H"):
-            if not sampling:
-                # FIXME:(zbwu-24-04-04): avoid in-place in backward
-                ...
-                #  h = h.clone()
-            # (M, L, dcut, 4, nbatch)
-            h[a, b] = h_ud  # 更新h
+        # with profiler.record_function(f"Clone H"):
+        if not sampling:
+            # avoid in-place in backward, so use List[Tensor]
+            ...
+            #  h = h.clone()
+        # (M, L, dcut, 4, nbatch)
+        # update Hidden states using Tensor or List[Tensor]
+        h[a, b] = h_ud
         # 计算概率（振幅部分） 并归一化
-        # breakpoint()
         eta = torch.abs(self.parm_eta[a, b]) ** 2
-        # if self.param_dtype == torch.complex128:
-        #     eta = eta + 0 * 1j
+
 
         # "iac, a -> ic" # (4/2, nbatch)
         P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
         # P = torch.einsum(
         #     "iac,iac,a->ic", h_ud.conj(), h_ud, eta
         # ).real  # -> (local_hilbert_dim, n_batch)
-        # print("归一化之前")
-        # print(P)
+
         # print(torch.exp(self.parm_eta[a, b]))
         P = torch.sqrt(P)
-        # P = P / P.max(dim=0, keepdim=True)[0]
 
         return P, h, h_ud, a, b
 
@@ -1269,7 +1259,6 @@ class MPS_RNN_2D(nn.Module):
                         amps_value[begin:end].clone(),
                         phi[begin:end].clone(),
                     )
-                    # ...
                     _h = h[..., begin:end]
                     su, sc, av, pl = self._sample_dfs(
                         _sample_unique,
@@ -1307,23 +1296,14 @@ class MPS_RNN_2D(nn.Module):
         return sample_unique, sample_counts, amps_value, phi
 
     def forward(self, x: Tensor) -> Tensor:
-        """
-        定义输入 x
-        如何算出一个数出来（或者说算出一个矢量）
-        """
         #  x: (+1/-1)
         target = (x + 1) / 2
         n_batch = x.shape[0]
         M = self.h_boundary.size(0)
         L = self.h_boundary.size(1)
+        # List[List[Tensor]] (M, L, local_hilbert_dim, dcut, n_batch)
         h = HiddenStates(M, L, self.h_boundary[0][0].unsqueeze(-1), self.device, use_list=True)
         h.repeat(1, 1, n_batch)
-        # h = self.h_boundary
-        # breakpoint()
-        # (M, L, local_hilbert_dim, dcut, n_batch)
-        # h = (torch.unsqueeze(h, -1)).repeat(1, 1, 1, 1, n_batch)
-        # h = torch.ones((self.hilbert_local,self.dcut,n_batch),device=self.device)
-        # h_row = torch.zeros((self.hilbert_local,self.dcut,n_batch),device=self.device)
         phi = torch.zeros(n_batch, device=self.device)  # (n_batch,)
         amp = torch.ones(n_batch, device=self.device)  # (n_batch,)
         num_up = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
@@ -1422,7 +1402,7 @@ class MPS_RNN_2D(nn.Module):
         idx_rank_lst = [0] + split_length_idx(dim, length=self.world_size)
         begin = idx_rank_lst[self.rank]
         end = idx_rank_lst[self.rank + 1]
-        if self.rank == 0 and self.world_size > 1:
+        if self.rank == 0 and self.world_size >= 2:
             logger.info(f"dim: {dim}, world-size: {self.world_size}", master=True)
             logger.info(f"idx_rank_lst: {idx_rank_lst}", master=True)
 
@@ -1435,7 +1415,7 @@ class MPS_RNN_2D(nn.Module):
         else:
             ...
 
-        if use_dfs_sample:
+        if not use_dfs_sample:
             sample_unique, sample_counts, h, psi_amp, phi, _ = self._interval_sample(
                 sample_unique=sample_unique,
                 sample_counts=sample_counts,
@@ -1550,7 +1530,7 @@ if __name__ == "__main__":
     print(f"Psi^2 in AR-Sampling")
     print("--------------------------------")
     sample, counts, wf = model.ar_sampling(
-        n_sample=int(1e14), min_tree_height=9
+        n_sample=int(1e14), min_tree_height=9, use_dfs_sample=True, min_batch=1000,
     )
     sample = (sample * 2 - 1).double()
     wf1 = model(sample)
