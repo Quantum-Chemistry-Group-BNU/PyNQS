@@ -1429,7 +1429,7 @@ class MPS_RNN_2D(nn.Module):
                 min_batch=self.min_batch,
             )
         else:
-            if self.min_batch == float("float"):
+            if self.min_batch == float("inf"):
                 raise ValueError(f"min_batch: {self.min_batch} must be Integral if using DFS")
             sample_unique, sample_counts, psi_amp, phi = self._sample_dfs(
                 sample_unique=sample_unique,

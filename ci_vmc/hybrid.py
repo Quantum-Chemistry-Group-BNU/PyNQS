@@ -26,7 +26,7 @@ from libs.C_extension import get_hij_torch, onv_to_tensor, tensor_to_onv, get_co
 from ci import CIWavefunction
 
 USE_SCIPY = False
-USE_CPU = True
+USE_CPU = False
 
 
 @dataclass

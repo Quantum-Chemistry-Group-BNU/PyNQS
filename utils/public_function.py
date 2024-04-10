@@ -732,7 +732,7 @@ class WavefunctionLUT:
             idx = torch_sort_onv(bra_key)
             self._bra_key = bra_key[idx].to(device)
             self._wf_value = wf_value[idx].to(device)
-            self.idx_sorted = idx
+            self.idx_sorted = torch.argsort(idx, stable=True)
         else:
             self._bra_key = bra_key.to(device)
             self._wf_value = wf_value.to(device)
@@ -786,7 +786,7 @@ class WavefunctionLUT:
 
     def index_value(self, begin: int, end: int) -> Tensor:
         """
-        Notice: wf_values is all-rank, begin/end is very rank
+        Notice: wf_values is all-rank, begin/end is every rank
         index not-sorted data, only is used in '_only_sample_space''
         """
         assert self.sort == True, "not-sorted does not support index-value"
