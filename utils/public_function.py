@@ -16,8 +16,8 @@ from loguru import logger
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv, wavefunction_lut
 from .onv import ONV
-from .distributed import get_rank
-
+from .distributed import get_rank, get_world_size
+# from libs.bak.C_extension import wavefunction_lut as v1
 
 def check_para(bra: Tensor):
     r"""
@@ -43,7 +43,7 @@ def diff_rank_seed(x: int, rank: int = 0) -> int:
     """
     diff rank random seed
     """
-    x = (rank * 2*rank * 10000 + x) % (1 << 32)
+    x = (rank * 2 * rank * 10000 + x) % (1 << 32)
     setup_seed(x)
     return x
 
@@ -194,7 +194,6 @@ def _get_nbatch_sample_space(
     """
     bra_len: int = (sorb - 1) // 64 + 1
     is_complex: bool = False
-    sd_le_sample: bool = n_sd <= n_sample * 0.25
 
     if dtype == torch.double:
         is_complex = False
@@ -203,6 +202,8 @@ def _get_nbatch_sample_space(
     else:
         raise NotImplementedError
 
+    # if not sd_le_sample, using index instead of WF-LUT and avoid launch cuda-kernel
+    sd_le_sample: bool = n_sd * (2 + is_complex + bra_len) <= n_sample
     # Hij (n_batch, n_sd) double
     # psi(x') (nbatch, n_sd) double/complex128
     # psi(x): (nbatch) double/complex128
@@ -297,6 +298,7 @@ def find_common_state(state1: Tensor, state2: Tensor) -> Tuple[Tensor, Tensor, T
     assert torch.all(idx1 < state1.shape[0])
     assert torch.all(idx2 < state2.shape[0])
     return common, idx1, idx2
+
 
 def sign_IaIb2ONV(space: np.ndarray | Tensor, sorb: int) -> np.ndarray:
     """
@@ -725,14 +727,23 @@ class WavefunctionLUT:
         """
         check_para(bra_key)
         assert bra_key.size(0) == wf_value.size(0)
+        self.sort = sort
         if sort:
             idx = torch_sort_onv(bra_key)
             self._bra_key = bra_key[idx].to(device)
             self._wf_value = wf_value[idx].to(device)
+            self.idx_sorted = idx
         else:
             self._bra_key = bra_key.to(device)
             self._wf_value = wf_value.to(device)
         self.sorb = sorb
+
+        self.rank = get_rank()
+        self.world_size = get_world_size()
+        rank_idx = [0] + split_length_idx(bra_key.size(0), self.world_size)
+        self.rank_idx = rank_idx
+        self.rank_begin = rank_idx[self.rank]
+        self.rank_end = rank_idx[self.rank + 1]
 
     def __name__(self) -> Literal["WavefunctionLUT"]:
         return "WavefunctionLUT"
@@ -761,17 +772,28 @@ class WavefunctionLUT:
              value: the wavefunction value of onv in bra-key
         """
         # XXX: not-idx implemented in c++ may be faster than the following.
-        idx_array = wavefunction_lut(self._bra_key, onv, self.sorb)
+        # idx_array1 = v1(self._bra_key, onv, self.sorb)
+        # assert torch.allclose(idx_array, idx_array1)
         nbatch = onv.size(0)
         device = onv.device
-        mask = idx_array.gt(-1)  # if not found, set to -1
         baseline = torch.arange(nbatch, device=device, dtype=torch.int64)
-
+        idx_array, mask = wavefunction_lut(self._bra_key, onv, self.sorb)
         # the index of onv in/not int bra-key
         onv_idx = baseline[mask]
         onv_not_idx = baseline[torch.logical_not(mask)]
         value = self._wf_value[idx_array.masked_select(mask)]
         return (onv_idx, onv_not_idx, value)
+
+    def index_value(self, begin: int, end: int) -> Tensor:
+        """
+        Notice: wf_values is all-rank, begin/end is very rank
+        index not-sorted data, only is used in '_only_sample_space''
+        """
+        assert self.sort == True, "not-sorted does not support index-value"
+        begin = self.rank_begin + begin
+        end = self.rank_begin + end
+        assert self.rank_end >= end, "Index date must be in the same rank"
+        return self.wf_value[self.idx_sorted[begin: end]]
 
     def __repr__(self) -> str:
         return (

@@ -530,7 +530,7 @@ int64_t binary_search_BigInteger(const IntType *arr, const IntType *target,
   return -1;
 }
 
-Tensor wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
+tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
                             const int sorb, const bool little_endian = true) {
   // bra_key: (length, bra_len * 8)
   // onv: (nbatch, bra_len * 8)
@@ -541,29 +541,38 @@ Tensor wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
   const int64_t nbatch = onv.size(0);
   int64_t length = bra_key.size(0);
 
+  auto options = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU);
+  auto options_bool =  torch::TensorOptions().dtype(torch::kBool).device(torch::kCPU);
+
   if (onv.numel() == 0) {
-    Tensor result = torch::zeros(
-        {0}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
-    return result;
+    Tensor result = torch::zeros({0}, options);
+    Tensor mask = torch::zeros({0}, options_bool);
+    return std::make_tuple(result, mask);
   }
 
   const unsigned long *onv_ptr =
       reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
   const unsigned long *bra_key_ptr =
       reinterpret_cast<unsigned long *>(bra_key.data_ptr<uint8_t>());
-  Tensor result = torch::zeros(
-      nbatch, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+  Tensor result = torch::zeros(nbatch, options);
+  Tensor mask = torch::ones(nbatch, options_bool);
   int64_t *result_ptr = result.data_ptr<int64_t>();
+  bool *mask_ptr = mask.data_ptr<bool>();
 
   // at::parallel_for maybe is faster, but push_back is error
-  for (int64_t i = 0; i < nbatch; i++) {
-    result_ptr[i] = binary_search_BigInteger<unsigned long>(
-        bra_key_ptr, &onv_ptr[i * bra_len], length, bra_len, little_endian);
-  }
-
-  return result;
-  // auto idx = torch::masked_select(result, result.gt(-1));
-  // return std::make_tuple(result, wf_value.index_select(0, idx));
+  // parallel, ref: https://zhuanlan.zhihu.com/p/652659936
+  // std::cout << "nbatch: " << nbatch << " length: " << length << std::endl;
+  at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+    for (const auto i: c10::irange(begin, end)) {
+      auto x = binary_search_BigInteger<unsigned long>(
+          bra_key_ptr, &onv_ptr[i * bra_len], length, bra_len, little_endian);
+      result_ptr[i] = x;
+      if (x == -1) {
+        mask_ptr[i] = false;
+      }
+    }
+  });
+  return std::make_tuple(result, mask);
 }
 
 inline std::vector<std::vector<unsigned long>> convert_space(const Tensor &bra,

@@ -89,6 +89,7 @@ def total_energy(
                 reduce_psi=reduce_psi,
                 eps=eps,
                 use_sample_space=use_sample_space,
+                index=(begin, end)
             )
             eloc[begin:end] = _eloc
             psi[begin:end] = _psi

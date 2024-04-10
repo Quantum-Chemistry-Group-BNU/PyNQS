@@ -279,7 +279,11 @@ def constrain_make_charts(sym_idex: Tensor):
     # ).reshape(-1, 4)
 
 def wavefunction_lut(
-    bra_key: Tensor, onv: Tensor, sorb: int, little_endian: bool = True) -> Tensor:
+    bra_key: Tensor,
+    onv: Tensor,
+    sorb: int,
+    little_endian: bool = True,
+    ) -> Tuple[Tensor, Tensor]:
     r"""
     wavefunction lookup-table implement using binary-search, bra_len = (sorb - 1) / 64 + 1
 
@@ -292,7 +296,8 @@ def wavefunction_lut(
 
     Returns
     -------
-        result: the index of onv in bra-key, if not find, set to -1. (torch.int64)
+        index: the index of onv in bra-key, if not find, set to -1. (torch.int64)
+        mask: bool array: if not find, set to False.
 
     Example
     -------
@@ -322,5 +327,5 @@ def wavefunction_lut(
     )
     >>> info = wavefunction_lut(key, onv, sorb)
     >>> print(info)
-    tensor([2, 4, 1, -1, 5])
+    tensor([2, 4, 1, 0, -1, 5], tensor([ True, True, True, True, False, True]))
     """

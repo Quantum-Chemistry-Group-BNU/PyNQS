@@ -36,6 +36,7 @@ def local_energy(
     reduce_psi: bool = False,
     eps: float = 1e-12,
     use_sample_space: bool = False,
+    index: Tuple[int, int] = None,
 ) -> tuple[Tensor, Tensor, tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
@@ -67,7 +68,7 @@ def local_energy(
     with torch.no_grad():
         if use_sample_space:
             assert WF_LUT is not None, "WF_ULT must be used if use_sample"
-            func = _only_sample_space
+            func = partial(_only_sample_space, index=index)
         else:
             if reduce_psi and eps > 0.0:
                 func = _reduce_psi
@@ -357,6 +358,7 @@ def _only_sample_space(
     WF_LUT: WavefunctionLUT = None,
     use_unique: bool = True,
     eps: float = 1.0e-12,
+    index: tuple[int, int] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
 
@@ -372,7 +374,10 @@ def _only_sample_space(
     # XXX: reduce memory usage
     # memory usage: batch * n_comb_sd * (sorb - 1/64 + 1) / 8 / 2**20 MiB
     # maybe n_comb_sd * batch <= n_sample maybe be better
-    sd_le_sample: bool = n_comb_sd <= n_sample * 0.25
+    is_complex: bool = dtype.is_complex
+    _len = (sorb - 1) // 64 + 1
+    sd_le_sample: bool = n_comb_sd + (2 + is_complex + _len) <= n_sample
+    # sd_le_sample = False
 
     if sd_le_sample:
         # (batch, n_comb_sd, bra_len)
@@ -417,9 +422,11 @@ def _only_sample_space(
         # breakpoint()
     else:
         sample_value = WF_LUT.wf_value
-        not_idx, psi_x = WF_LUT.lookup(x)[1:]  # (batch)
+        psi_x = WF_LUT.index_value(*index)
+        # not_idx, psi_x1 = WF_LUT.lookup(x)[1:] 
+        # assert torch.allclose(psi_x1, psi_x1)
         # WF_LUT coming from sampling x must been found in WF_LUT.
-        assert not_idx.size(0) == 0
+        # assert not_idx.size(0) == 0
 
         if WF_LUT.dtype == torch.complex128:
             value = torch.empty(batch * 2, device=device, dtype=torch.double)

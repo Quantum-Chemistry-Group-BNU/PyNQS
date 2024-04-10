@@ -90,5 +90,5 @@ __host__ void constrain_lookup_table(const int64_t *sym_index, double *result,
 
 __host__ void binary_search_BigInteger_cuda(
     const unsigned long *arr, const unsigned long *target, int64_t *result,
-    const int64_t nbatch, const int64_t arr_length, const int64_t target_length,
-    bool little_endian);
+    bool *mask, const int64_t nbatch, const int64_t arr_length,
+    const int64_t target_length, bool little_endian);

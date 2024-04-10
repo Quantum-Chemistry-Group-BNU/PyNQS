@@ -214,7 +214,7 @@ Tensor constrain_make_charts(const Tensor &sym_index) {
 }
 
 // wavefunction lookup-table implement using binary-search
-Tensor wavefunction_lut(const Tensor &bra_key, const Tensor &onv,
+tuple_tensor_2d wavefunction_lut(const Tensor &bra_key, const Tensor &onv,
                         const int sorb, bool little_endian = true) {
   /*
   bra_len = (sorb - 1) / 64 + 1;
