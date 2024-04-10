@@ -228,6 +228,8 @@ class MPS_RNN_2D(nn.Module):
         # distributed
         self.rank = get_rank()
         self.world_size = get_world_size()
+        self.min_batch: int = None
+        self.min_tree_height: int = None
 
         if self.phase_type == "mlp":
             self.n_out_phase = n_out_phase
@@ -1427,6 +1429,8 @@ class MPS_RNN_2D(nn.Module):
                 min_batch=self.min_batch,
             )
         else:
+            if self.min_batch == float("float"):
+                raise ValueError(f"min_batch: {self.min_batch} must be Integral if using DFS")
             sample_unique, sample_counts, psi_amp, phi = self._sample_dfs(
                 sample_unique=sample_unique,
                 sample_counts=sample_counts,
@@ -1514,7 +1518,7 @@ if __name__ == "__main__":
         phase_hidden_size=[128, 128],
         n_out_phase=1,
     )
-
+    logger.info(hasattr(model, "min_batch"))
     # MPS_RNN_1D = MPS_RNN_2D(
     #     nqubits=sorb,
     #     nele=nele,

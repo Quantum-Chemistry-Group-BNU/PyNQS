@@ -504,17 +504,17 @@ __global__ void BigInteger_kernel(const unsigned long *arr,
                                   const int64_t target_length,
                                   bool little_endian) {
   int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
-  int tx = threadIdx.x;
-  __shared__ unsigned long tmp[256][MAX_SORB_LEN];
+  // int tx = threadIdx.x;
+  // __shared__ unsigned long tmp[256][MAX_SORB_LEN];
   if (idn >= nbatch)
     return;
-#pragma unroll
-  for (int i = 0; i < MAX_SORB_LEN; i++) {
-    tmp[tx][i] = target[target_length * idn + i];
-  }
-  __syncthreads();
-  // result[idn]
-  int64_t x = BigInteger_device<unsigned long>(arr, tmp[tx], arr_length,
+// #pragma unroll
+//   for (int i = 0; i < MAX_SORB_LEN; i++) {
+//     tmp[tx][i] = target[target_length * idn + i];
+//   }
+//   __syncthreads();
+//   // result[idn]
+  int64_t x = BigInteger_device<unsigned long>(arr, &target[idn * target_length], arr_length,
                                                target_length, little_endian);
   result[idn] = x;
   if (x == -1) {
