@@ -203,7 +203,8 @@ def _get_nbatch_sample_space(
         raise NotImplementedError
 
     # if not sd_le_sample, using index instead of WF-LUT and avoid launch cuda-kernel
-    sd_le_sample: bool = n_sd * (2 + is_complex + bra_len) <= n_sample
+    alpha = min(alpha, 2)
+    sd_le_sample: bool = n_sd * (2 + is_complex + bra_len) * alpha <= n_sample
     # Hij (n_batch, n_sd) double
     # psi(x') (nbatch, n_sd) double/complex128
     # psi(x): (nbatch) double/complex128

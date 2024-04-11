@@ -516,9 +516,9 @@ class Sampler:
 
         s = f"Completed {self.method_sample} Sampling: {delta:.3E} s, "
         s += f"unique sample: {sample_counts.sum().item():.3E} -> {sample_counts.size(0)}"
-        logger.debug(s)
+        logger.info(s)
         if self.rank == 0:
-            logger.info(f"{self.method_sample} Sampling {delta:.3E}")
+            logger.info(f"{self.method_sample} Sampling {delta:.3E}", master=0)
 
         # Sample-comm, gather->merge->scatter
         return self.gather_scatter_sample(sample_unique, sample_counts, wf_value)
@@ -686,6 +686,7 @@ class Sampler:
                 reduce_psi=self.reduce_psi,
                 eps=self.eps,
                 use_sample_space=self.use_sample_space,
+                alpha=self.alpha,
             )
         else:
             # e_total = -2.33233
