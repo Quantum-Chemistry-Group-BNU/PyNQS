@@ -518,7 +518,7 @@ class Sampler:
         s += f"unique sample: {sample_counts.sum().item():.3E} -> {sample_counts.size(0)}"
         logger.info(s)
         if self.rank == 0:
-            logger.info(f"{self.method_sample} Sampling {delta:.3E}", master=0)
+            logger.info(f"{self.method_sample} Sampling {delta:.3E} s", master=True)
 
         # Sample-comm, gather->merge->scatter
         return self.gather_scatter_sample(sample_unique, sample_counts, wf_value)
@@ -649,9 +649,13 @@ class Sampler:
         """
         # this is applied when pre-train
         WF_LUT = self.WF_LUT if WF_LUT is None else WF_LUT
+        if self.WF_LUT is not None:
+            n_sample = self.WF_LUT.bra_key.size(0)
+        else:
+            n_sample = sample.size(0)
         nbatch = get_nbatch(
             self.sorb,
-            len(sample),
+            n_sample,
             self.n_SinglesDoubles,
             self.max_memory,
             self.alpha,

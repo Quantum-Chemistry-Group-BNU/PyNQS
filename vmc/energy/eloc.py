@@ -378,7 +378,7 @@ def _only_sample_space(
     # maybe n_comb_sd * batch <= n_sample maybe be better
     is_complex: bool = dtype.is_complex
     _len = (sorb - 1) // 64 + 1
-    alpha = min(alpha, 2)
+    alpha = max(alpha, 1)
     sd_le_sample = n_comb_sd * (2 + is_complex + _len) * alpha <= n_sample
     # sd_le_sample = False
 

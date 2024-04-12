@@ -202,6 +202,7 @@ class MPS_RNN_2D(nn.Module):
         n_out_phase: int = 1,
         sample_order: Tensor | list[int] = None,
         det_lut: DetLUT = None,
+        rank_independent_sampling: bool = False,
     ) -> None:
         super(MPS_RNN_2D, self).__init__()
         # 模型输入参数
@@ -230,6 +231,7 @@ class MPS_RNN_2D(nn.Module):
         self.world_size = get_world_size()
         self.min_batch: int = None
         self.min_tree_height: int = None
+        self.rank_independent_sampling = rank_independent_sampling
 
         if self.phase_type == "mlp":
             self.n_out_phase = n_out_phase
@@ -1356,6 +1358,11 @@ class MPS_RNN_2D(nn.Module):
         elif self.phase_type == "regular":
             psi_phase = torch.exp(phi * 1j)
         psi = psi_amp * psi_phase
+
+        # Nan -> 0.0, if exact optimization and use CI-NQS
+        if self.det_lut is not None:
+            psi = torch.where(psi.isnan(), torch.full_like(psi, 0), psi)
+
         extra_phase = permute_sgn(
             torch.arange(self.nqubits, device=self.device), target.long(), self.nqubits
         )
@@ -1397,25 +1404,27 @@ class MPS_RNN_2D(nn.Module):
             end=self.min_tree_height // 2 + 1,
             min_batch=self.min_batch,
         )
-        synchronize()
 
         # the different rank sampling using the the same QuadTree or BinaryTree
-        dim = sample_unique.size(0)
-        idx_rank_lst = [0] + split_length_idx(dim, length=self.world_size)
-        begin = idx_rank_lst[self.rank]
-        end = idx_rank_lst[self.rank + 1]
-        if self.rank == 0 and self.world_size >= 2:
-            logger.info(f"dim: {dim}, world-size: {self.world_size}", master=True)
-            logger.info(f"idx_rank_lst: {idx_rank_lst}", master=True)
+        logger.info(f"{self.rank_independent_sampling}")
+        if not self.rank_independent_sampling:
+            synchronize()
+            dim = sample_unique.size(0)
+            idx_rank_lst = [0] + split_length_idx(dim, length=self.world_size)
+            begin = idx_rank_lst[self.rank]
+            end = idx_rank_lst[self.rank + 1]
+            if self.rank == 0 and self.world_size >= 2:
+                logger.info(f"dim: {dim}, world-size: {self.world_size}", master=True)
+                logger.info(f"idx_rank_lst: {idx_rank_lst}", master=True)
 
-        if self.world_size >= 2:
-            sample_unique = sample_unique[begin:end]
-            sample_counts = sample_counts[begin:end]
-            h = h[begin:end]
-            psi_amp = psi_amp[begin:end]
-            phi = phi[begin:end]
-        else:
-            ...
+            if self.world_size >= 2:
+                sample_unique = sample_unique[begin:end]
+                sample_counts = sample_counts[begin:end]
+                h = h[..., begin:end]
+                psi_amp = psi_amp[begin:end]
+                phi = phi[begin:end]
+            else:
+                ...
 
         if not use_dfs_sample:
             sample_unique, sample_counts, h, psi_amp, phi, _ = self._interval_sample(
@@ -1477,6 +1486,8 @@ class MPS_RNN_2D(nn.Module):
             sample_counts: the counts of unique sample, s.t. sum(sample_counts) = n_sample
             wf_value: the wavefunction of unique sample
         """
+        if min_tree_height is None:
+            min_tree_height = 8
         return self.forward_sample(n_sample, min_batch, min_tree_height, use_dfs_sample)
 
 
