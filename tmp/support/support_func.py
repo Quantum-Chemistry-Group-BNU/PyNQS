@@ -18,9 +18,11 @@ def make_prefix(seed, ansatz, no, e_name):
     today_folder_path = create_today_folder(base_path)
     
     name_fold = ansatz
-    name_fold += "_seed=" + str(seed)
-    name_fold += "_"+ str(e_name) +"_"
-    name_fold += "_" + no + "_"
+    if seed is not None:
+        name_fold += "_seed" + str(seed)
+    name_fold += "_"+ str(e_name)
+    if no is not None:
+        name_fold += "_" + no
     
     pre_flod = str(today_folder_path)
     save_flod_0 = os.path.join(pre_flod,name_fold)
