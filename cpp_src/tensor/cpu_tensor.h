@@ -40,8 +40,8 @@ Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
 
 Tensor constrain_make_charts_cpu(const Tensor &sym_index);
 
-Tensor wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
-                            const int sorb, const bool little_endian);
+tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
+                                     const int sorb, const bool little_endian);
 
 tuple_tensor_2d wavefunction_lut_hash(const Tensor &bra_key,
                                       const Tensor &wf_value, const Tensor &onv,

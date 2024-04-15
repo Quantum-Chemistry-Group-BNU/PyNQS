@@ -105,7 +105,7 @@ CPU_VERSION = CppExtension(\
 name=s,\
 sources=sources,\
 include_dirs=include_dirs,\
-extra_compile_args={"cxx": ["-O3", "-std=c++17", "-UGPU"]}\
+extra_compile_args={"cxx": ["-O3", "-fopenmp" "-std=c++17", "-UGPU"]}\
 )\
 ' setup.py
                 sed -i "s/COMPILE_MODE/CPU_VERSION/" setup.py
@@ -120,7 +120,7 @@ if use_magma:\
     magma_INCLUDE = magma_DIR +"/include"\
     magma_LIB = magma_DIR + "/lib"\
     include_dirs = [osp.join(ROOT_DIR), magma_INCLUDE]\
-    cxx_param = ["-O3", "-std=c++17", "-DGPU=1", "-lcudadevrt", "-DMAGMA=1","-DMAGMA_ILP64","-lmagma"]\
+    cxx_param = ["-O3", "-fopenmp", "-std=c++17", "-DGPU=1", "-lcudadevrt", "-DMAGMA=1","-DMAGMA_ILP64","-lmagma"]\
     library_dirs=[CUDA_LIB, magma_LIB]\
     extra_link_args= {\
                       "-Wl,-rpath,"+magma_LIB,\
@@ -131,7 +131,7 @@ if use_magma:\
 else:\
     sources = [i for i in sources if "magma" not in i ]\
     include_dirs =[osp.join(ROOT_DIR)]\
-    cxx_param = ["-O3", "-std=c++17", "-DGPU=1", "-lcudadevrt"]\
+    cxx_param = ["-O3", "-fopenmp", "-std=c++17", "-DGPU=1", "-lcudadevrt"]\
     library_dirs = [CUDA_LIB]\
     extra_link_args = {"-Wl,-rpath,"+torch_LIB}\
 print(sources)\

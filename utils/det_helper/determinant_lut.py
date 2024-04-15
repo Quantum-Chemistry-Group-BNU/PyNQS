@@ -12,6 +12,7 @@ from torch import Tensor
 
 from libs.C_extension import wavefunction_lut, tensor_to_onv, onv_to_tensor
 from utils.public_function import torch_sort_onv
+# from libs.bak.C_extension import wavefunction_lut
 
 __all__ = ["DetLUT"]
 
@@ -107,7 +108,7 @@ def get_all_orb_onv(
             y = tensor_to_onv(unique[_mask].to(torch.uint8), unique.size(1))
             if k > 2:
                 y0 = tensor_to_onv(unique[_mask][:, :-2].to(torch.uint8), unique.size(1) - 2)
-                _mask1 = wavefunction_lut(onv_lst[0][k//2 -1], y0, unique.size(1) - 2) == -1 # first-node
+                _mask1 = wavefunction_lut(onv_lst[0][k//2 -1], y0, unique.size(1) - 2)[0] == -1 # first-node
                 # print(_mask1.sum(), y.size(0))
                 y = y[_mask1]
                 # print(y.size(0))
@@ -124,7 +125,7 @@ def get_all_orb_onv(
     idx = torch_sort_onv(y)
     onv_lst[0][-1] = y[idx] # Exact optimization
     y0 = tensor_to_onv(unique[:, :-2].to(torch.uint8), unique.size(1) -2)
-    _mask_last = wavefunction_lut(onv_lst[0][-2], y0, unique.size(1) - 2) == -1
+    _mask_last = wavefunction_lut(onv_lst[0][-2], y0, unique.size(1) - 2)[0] == -1
     states_lst[0][-1] = unique[idx]
     orth_lst[0][-1] = torch.zeros(y.size(0), 4, device=device, dtype=torch.bool)
 
@@ -138,7 +139,7 @@ def get_all_orb_onv(
             if i > 1:
                 unique = torch.unique(states_lst[0][i][:, :-2], dim=0).to(torch.uint8)  # 1/0
                 unique_onv = tensor_to_onv(unique, i_sorb - 2)
-                idx_array = wavefunction_lut(onv_lst[0][i - 1], unique_onv, sorb=i_sorb - 2)
+                idx_array = wavefunction_lut(onv_lst[0][i - 1], unique_onv, sorb=i_sorb - 2)[0]
                 mask = idx_array.gt(-1)
                 before_onv = unique_onv[torch.logical_not(mask)]
                 before_states = ((onv_to_tensor(before_onv, i_sorb - 2) + 1) / 2).long()
@@ -149,7 +150,7 @@ def get_all_orb_onv(
             next_states = joint_next_samples(before_states)
             next_onv = tensor_to_onv(next_states.to(torch.uint8), i_sorb)
             # breakpoint()
-            idx_array = wavefunction_lut(onv_lst[0][i], next_onv, sorb=i_sorb)
+            idx_array = wavefunction_lut(onv_lst[0][i], next_onv, sorb=i_sorb)[0]
             mask = idx_array.eq(-1)
             orth_idx = mask.reshape(4, -1).T
             onv_lst[1][i - 1] = before_onv
@@ -247,7 +248,7 @@ class DetLUT:
             # 排除FCI-space 部分态 在精确优化中
             onv = x
             k_onv_lst = self.onv_lst[-1]
-            idx_array = wavefunction_lut(k_onv_lst, onv, self.sorb)
+            idx_array = wavefunction_lut(k_onv_lst, onv, self.sorb)[0]
             # if not found, set to -1
             return idx_array, placeholders, placeholders
 
@@ -284,11 +285,11 @@ class DetLUT:
             else:
                 onv = tensor_to_onv(onv.contiguous(), k)
                 # breakpoint()
-                idx_array = wavefunction_lut(k_onv_lst, onv, k)
                 nbatch = onv.size(0)
                 device = onv.device
-                mask = idx_array.gt(-1)  # if not found, set to -1
                 baseline = torch.arange(nbatch, device=device, dtype=torch.int64)
+                idx_array, mask = wavefunction_lut(k_onv_lst, onv, k)
+                # mask = idx_array.gt(-1)  # if not found, set to -1
 
                 onv_idx = baseline[mask]
                 onv_not_idx = baseline[torch.logical_not(mask)]

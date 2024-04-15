@@ -36,6 +36,7 @@ def total_energy(
     reduce_psi: bool = False,
     eps: float = 1.0e-12,
     use_sample_space: bool = False,
+    alpha: float = 2.0,
 ) -> tuple[Tensor, Tensor, Tensor]:
     r"""
 
@@ -89,6 +90,8 @@ def total_energy(
                 reduce_psi=reduce_psi,
                 eps=eps,
                 use_sample_space=use_sample_space,
+                index=(begin, end),
+                alpha=alpha,
             )
             eloc[begin:end] = _eloc
             psi[begin:end] = _psi

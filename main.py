@@ -19,9 +19,16 @@ from utils import setup_seed, Logger, ElectronInfo, Dtype, state_to_string
 from utils.pyscf_helper import read_integral, interface
 from utils import convert_onv, get_fock_space
 from utils.det_helper import DetLUT, select_det, sort_det
+from utils.pyscf_helper.dice_pyscf import run_shci
 from utils.distributed import get_rank
 from utils.loggings import dist_print
-from vmc.ansatz import RBMWavefunction, RNNWavefunction, RBMSites, DecoderWaveFunction, MPS_RNN_1D, MPS_RNN_2D
+from vmc.ansatz import (
+    RBMWavefunction,
+    RNNWavefunction,
+    RBMSites,
+    DecoderWaveFunction,
+    MPS_RNN_2D,
+)
 from vmc.optim import VMCOptimizer, GD
 from libs.C_extension import onv_to_tensor
 from torchinfo import summary
@@ -42,7 +49,7 @@ print = partial(print, flush=True)
 if __name__ == "__main__":
     # dist.init_process_group("nccl")
     dist.init_process_group("gloo")
-    device = "cpu"
+    device = "cuda"
     # init_process(backend="nccl", device=device)
     # local_rank = int(os.environ["LOCAL_RANK"])
     local_rank = 0
@@ -54,55 +61,33 @@ if __name__ == "__main__":
     logger.remove()
     logger.add(dist_print, format="{message}", enqueue=True, level="DEBUG")
     rank = get_rank()
+
     # electronic structure information
     # if dist.get_rank() == 0:
-    #     # atom: str = ""
-    #     # bond = 1.10
-    #     # # for k in range(2):
-    #     # #     atom += f"N, 0.00, 0.00, {k * bond:.3f} ;"
-    #     # for i in range(2):
-    #     #     for j in range(3):
-    #     #         x = i * 1.5
-    #     #         y = j * 1.5
-    #     #         atom += f"H, {x:.2f}, {y:.2f}, 0.00 ;\n"
-
-    #     # integral_file = tempfile.mkstemp()[1]
-    #     # sorb, nele, e_lst, fci_amp, ucisd_amp, mf = interface(
-    #     #     atom, integral_file=integral_file, cisd_coeff=True,
-    #     #     basis="sto-3g",
-    #     #     # localized_orb=False,
-    #     #     # localized_method="lowdin",
-    #     # )
-
+    #     atom: str = ""
+    #     bond = 1.60
+    #     # atom = "N, 0.0, 0.0, 0.0; N, 0.0, 0.0, 1.10"
+    #     for k in range(6):
+    #         atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
     #     integral_file = tempfile.mkstemp()[1]
-
-    #     hubbard_nbas = 8
-    #     hubbard_nelec = 8
-    #     hubbard_U = 1.0
-    #     hubbard_dim = 2
-    #     hubbard_M = 4
-    #     hubbard_pbc = False
-    #     hubbard_info = [hubbard_nbas, hubbard_nelec, hubbard_U, hubbard_dim, hubbard_pbc, hubbard_M]
-    #     # breakpoint()
     #     sorb, nele, e_lst, fci_amp, ucisd_amp, mf = interface(
-    #         integral_file=integral_file, cisd_coeff=True,
+    #         atom,
+    #         integral_file=integral_file,
+    #         cisd_coeff=True,
     #         basis="sto-3g",
-    #         model_type = "Hubbard",
-    #         hubbard_info = hubbard_info,
     #         # localized_orb=False,
-    #         # localized_method="lowdin",
+    #         # localized_method="meta-lowdin",
     #     )
-        
-    #     # from utils.pyscf_helper.interface_pyscf import interface
-    #     # integral_file = tempfile.mkstemp()[1]
-    #     # sorb, nele, e_lst, coeff, amp, mf = interface("H", integral_file=integral_file, cisd_coeff=True, basis="sto-3g",)
+    #     cas = (sorb // 2, (nele // 2, nele // 2))
+    #     # run_shci(mf, cas, det_file="./molecule/SHCI-N2-1.10-ccpvdz/N2-1.10-dets.bin")
+    #     run_shci(mf, cas, det_file="./tmp/dets.bin", epsilon1=[0.0001])
     #     logger.info(e_lst)
     #     h1e, h2e, ci_space, ecore, sorb = read_integral(
     #         integral_file,
     #         nele,
     #         # save_onstate=True,
     #         # external_onstate="profiler/H12-1.50",
-    #         # ##given_sorb= (nele + 2),
+    #         given_sorb= (nele + 2),
     #         device=device,
     #         # prefix="test-onstate",
     #     )
@@ -120,11 +105,11 @@ if __name__ == "__main__":
     #             "ucisd_amp": ucisd_amp,
     #             "fci_amp": fci_amp,
     #         },
-    #         "./molecule/Hubbard_obc_2d_i2j4.pth",
+    #         "./molecule/H6-1.60.pth",
     #     )
     # breakpoint()
-    e_name = "Hubbard_obc_2d_22"
-    e = torch.load("./molecule/"+e_name+".pth", map_location="cpu")
+    from utils.pyscf_helper.dice_pyscf import read_dice_wf
+    e = torch.load("./molecule/H8-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -153,25 +138,26 @@ if __name__ == "__main__":
     ucisd_amp = e["ucisd_amp"]
     ucisd_wf = unpack_ucisd(ucisd_amp, sorb, nele, device=device)
     fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
+
+    x = onv_to_tensor(fci_wf.space, sorb)
+    e = fci_wf.energy(electron_info)
+    print(e)
+    breakpoint()
+
     # ucisd_fci_wf = ucisd_to_fci(ucisd_amp, ci_space, sorb, nele, device=device)
     pre_train_info = {"pre_max_iter": 20, "interval": 10, "loss_type": "sample"}
 
-    rnn = RNNWavefunction(
-        sorb,
-        nele,
-        num_hiddens=sorb * 2,
-        num_labels=2,
-        rnn_type="complex",
-        num_layers=1,
+    det_lut, select_CI = sort_det(
+        CI=ucisd_wf,
+        sorb=sorb,
+        nele=nele,
+        alpha=noa,
+        beta=nob,
         device=device,
-        common_linear=False,
-        combine_amp_phase=False,
-        phase_batch_norm=False,
-        phase_hidden_size=[128, 128],
-        n_out_phase=1,
-        nn_type="GRU",
-    ).to(device=device)
-    
+        end=1000,
+        descending=True,
+    )
+
     # rbm = RBMWavefunction(sorb, alpha=2, device=device, rbm_type="cos")
 
     # ar_rbm = RBMSites(
@@ -198,53 +184,42 @@ if __name__ == "__main__":
         device=device,
         d_model=d_model,
         n_heads=8,
-        phase_hidden_size=[128,128],
+        phase_hidden_size=[128, 128],
         n_out_phase=1,
         use_kv_cache=True,
         norm_method=0,
-        # det_lut=det_lut, # use det-LUT in CI-VMC
+        det_lut=det_lut, # use det-LUT in CI-VMC
     )
 
     # ansatz = transformer
-    dcut = 6
+    dcut = 20
     # breakpoint()
-    MPS_RNN_1D = MPS_RNN_1D(
-        use_symmetry=True,
-        nqubits=sorb,
-        nele=nele,
-        device=device,
-        dcut=dcut,
-        param_dtype = torch.complex128
-        # tensor=False,
-    )
     # print(sorb)
     # breakpoint()
     # params = None
     # for i in range(0,10,2):
-        # print(f"现在是第{i/2}次训练，训练的参数为{dcut+2*(i-2)}\n")
-        # print(f"现在的dcut为{dcut+i}，上一次为{dcut+i-2}\n")
-        # breakpoint()
+    # print(f"现在是第{i/2}次训练，训练的参数为{dcut+2*(i-2)}\n")
+    # print(f"现在的dcut为{dcut+i}，上一次为{dcut+i-2}\n")
+    # breakpoint()
     MPS_RNN_2D = MPS_RNN_2D(
         use_symmetry=False,
         nqubits=sorb,
         nele=nele,
         device=device,
         dcut=dcut,
-        param_dtype = torch.complex128,
-        tensor=False,
+        param_dtype=torch.complex128,
+        use_tensor=False,
         # 这两个是规定二维计算的长宽的。
-        M=4,
+        M=8,
         hilbert_local=4,
+        det_lut=det_lut,
         # dcut_params=params,
         # dcut_step=dcut+i-2,
     )
-    
-    ansatz = rnn
-    modelname = "RNN"
+
+    ansatz = MPS_RNN_2D
     # ansatz = transformer
     # modelname = "Transformer"
-    ansatz = MPS_RNN_1D
-    modelname = "MPS_RNN_1D"
 
     if rank == 0:
         net_param_num = lambda net: sum(p.numel() for p in net.parameters() if p.grad is None)
@@ -259,11 +234,11 @@ if __name__ == "__main__":
 
     sampler_param = {
         "n_sample": int(1.0e8),
-        "debug_exact": True,  # exact optimization
+        "debug_exact": False,  # exact optimization
         "therm_step": 10000,
         "seed": seed,
         "record_sample": False,
-        "max_memory": 0.4,
+        "max_memory": 3,
         "alpha": 0.15,
         "method_sample": "AR",
         "use_LUT": True,
@@ -272,10 +247,11 @@ if __name__ == "__main__":
         "use_sample_space": True,
         "eps": 1.0e-10,
         "only_AD": False,
-        # "use_same_tree": True,  # different rank-sample
-        # "min_batch": 2000,
-        # "min_tree_height": 4,  # different rank-sample
-        # "det_lut": det_lut, # only use in CI-NQS exact optimization
+        "use_same_tree": True,  # different rank-sample
+        "min_batch": 500,
+        "min_tree_height": 4,  # different rank-sample
+        "use_dfs_sample": True,
+        "det_lut": det_lut, # only use in CI-NQS exact optimization
     }
 
     # opt
@@ -297,9 +273,9 @@ if __name__ == "__main__":
     # preconditioner = KFACPreconditioner(model)
     # dtype = Dtype(dtype=torch.double, device=device)
     # print(f"rank: {dist.get_rank()}, size: {dist.get_world_size()}")
-    prefix = make_prefix(seed = seed,ansatz=modelname,no="dcut=rease"+"c_",e_name=e_name)
+    prefix = f"./tmp/test-{seed}"
     vmc_opt_params = {
-        "nqs": model, 
+        "nqs": model,
         "opt_type": opt_type,
         "opt_params": opt_params,
         "lr_scheduler": lr_scheduler,
@@ -309,7 +285,7 @@ if __name__ == "__main__":
         "sampler_param": sampler_param,
         "only_sample": False,
         "electron_info": electron_info,
-        "max_iter": 5000,
+        "max_iter": 300,
         "interval": 100,
         "MAX_AD_DIM": 5000,
         "pre_CI": ucisd_wf,
@@ -324,21 +300,22 @@ if __name__ == "__main__":
         "start_clip_grad": 4,
     }
     e_ref = e_lst[0]
-    opt_vmc = VMCOptimizer(**vmc_opt_params)
-    opt_vmc.run()
+    # opt_vmc = VMCOptimizer(**vmc_opt_params)
+    # opt_vmc.run()
     # params = model.state_dict()
-    # torch.save(params, 'params.pth') 
+    # torch.save(params, 'params.pth')
     # breakpoint()
 
-    opt_vmc.summary(e_ref, e_lst, prefix=prefix)
-    # semi = NqsCi(select_CI, 
-    #              cNqs_pow_min=0.01,
-    #              use_sample_space=False,
-    #              MAX_FP_DIM=-1,
-    #              grad_strategy = 1,
-    #              **vmc_opt_params)
-    # semi.run()
-    # semi.summary(e_ref, e_lst, prefix=f"./tmp/H6-1.60-CI-NQS-grad-3-{seed}")
+    # opt_vmc.summary(e_ref, e_lst, prefix=prefix)
+    semi = NqsCi(select_CI,
+                 cNqs_pow_min=0.01,
+                 use_sample_space=False,
+                 MAX_FP_DIM=-1,
+                 grad_strategy = 1,
+                 **vmc_opt_params)
+    semi.run()
+    semi.summary(e_ref, e_lst, prefix=f"./tmp/H6-1.60-CI-NQS-grad-3-{seed}")
+    from pyscf import fci
+    fci.spin_square()
     if rank == 0:
         logger.info(f"e-ref: {e_ref:.10f}, seed: {seed}")
-    

@@ -1,13 +1,13 @@
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <algorithm>
 
+#include "cuda_handle_error.h" // gcc 13 error, compile using gcc 11
 #include "excitation_cuda.h"
 #include "hamiltonian_cuda.h"
 #include "kernel.h"
 #include "onstate_cuda.h"
-#include "cuda_handle_error.h" // gcc 13 error, compile using gcc 11
 
 #include "../common/default.h"
 
@@ -202,26 +202,25 @@ __host__ void squant::get_comb_cuda(double *comb_bit, unsigned long *comb,
 }
 
 __global__ void permuate_sgn_kernel(const int64_t *image2,
-                                    const int64_t *onstate, 
-                                    int64_t *index,
-                                    int64_t *sgn,
-                                    const int size,
+                                    const int64_t *onstate, int64_t *index,
+                                    int64_t *sgn, const int size,
                                     const size_t nbatch) {
   int idm = blockIdx.x * blockDim.x + threadIdx.x;
   if (idm >= nbatch)
     return;
-  sgn[idm] = squant::permute_sgn_cuda(image2, &onstate[idm * size], &index[idm * size], size);
+  sgn[idm] = squant::permute_sgn_cuda(image2, &onstate[idm * size],
+                                      &index[idm * size], size);
 }
 
 __host__ void squant::permute_sng_batch_cuda(const int64_t *image2,
                                              const int64_t *onstate,
-                                             int64_t *index,
-                                             int64_t *sgn,
+                                             int64_t *index, int64_t *sgn,
                                              const int size,
                                              const int64_t nbatch) {
   dim3 blockDim(1024);
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
-  permuate_sgn_kernel<<<gridDim, blockDim>>>(image2, onstate, index, sgn, size, nbatch);
+  permuate_sgn_kernel<<<gridDim, blockDim>>>(image2, onstate, index, sgn, size,
+                                             nbatch);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
@@ -329,17 +328,14 @@ __host__ void swap_pointers_cuda(double **ptr_ptr, double **ptr_ptr_1) {
   swap_pointers_kernel<<<1, 1>>>(ptr_ptr, ptr_ptr_1);
 }
 
-__global__ void convert_sites_kernel(const int64_t *onstate, const int nphysical,
-                                 const int64_t *data_index,
-                                 const int64_t *qrow_qcol,
-                                 const int64_t *qrow_qcol_index,
-                                 const int64_t *qrow_qcol_shape,
-                                 const int64_t *ista, const int64_t *ista_index,
-                                 const int64_t *image2, const int64_t nbatch,
-                                 int64_t *data_info,
-                                 bool *sym_array){
+__global__ void convert_sites_kernel(
+    const int64_t *onstate, const int nphysical, const int64_t *data_index,
+    const int64_t *qrow_qcol, const int64_t *qrow_qcol_index,
+    const int64_t *qrow_qcol_shape, const int64_t *ista,
+    const int64_t *ista_index, const int64_t *image2, const int64_t nbatch,
+    int64_t *data_info, bool *sym_array) {
   int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idn >= nbatch) 
+  if (idn >= nbatch)
     return;
   // onstate: [nbatch, nphysical * 2]
   // data_info [nbatch, nphysical, 3]
@@ -347,8 +343,7 @@ __global__ void convert_sites_kernel(const int64_t *onstate, const int nphysical
                           qrow_qcol, qrow_qcol_index, qrow_qcol_shape, ista,
                           ista_index, image2, nbatch, &data_info[idn],
                           &sym_array[idn]);
-  }
-
+}
 
 __host__ void convert_sites_cuda(const int64_t *onstate, const int nphysical,
                                  const int64_t *data_index,
@@ -357,8 +352,7 @@ __host__ void convert_sites_cuda(const int64_t *onstate, const int nphysical,
                                  const int64_t *qrow_qcol_shape,
                                  const int64_t *ista, const int64_t *ista_index,
                                  const int64_t *image2, const int64_t nbatch,
-                                 int64_t *data_info,
-                                 bool *sym_array) {
+                                 int64_t *data_info, bool *sym_array) {
   // XXX: how to allocate blockDim???, register overflow if blockDim = 1024
   dim3 blockDim(256);
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
@@ -459,6 +453,19 @@ __host__ void constrain_lookup_table(const int64_t *sym_index, double *result,
 }
 
 template <typename IntType>
+__device__ inline int compare(const IntType *mid_element, const IntType *target,
+                              const int64_t target_length) {
+  for (int64_t i = target_length - 1; i >= 0; i--) {
+    if (mid_element[i] < target[i]) {
+      return -1;
+    } else if (mid_element[i] > target[i]) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+template <typename IntType>
 __device__ int64_t BigInteger_device(const IntType *arr, const IntType *target,
                                      const int64_t arr_length,
                                      const int64_t target_length = 1,
@@ -471,33 +478,11 @@ __device__ int64_t BigInteger_device(const IntType *arr, const IntType *target,
   int64_t left = 0;
   int64_t right = arr_length - 1;
 
-  auto compare = [&arr, &target, target_length,
-                  little_endian](const IntType *mid_element) -> int {
-    if (little_endian) {
-      for (int64_t i = target_length - 1; i >= 0; i--) {
-        if (mid_element[i] < target[i]) {
-          return -1;
-        } else if (mid_element[i] > target[i]) {
-          return 1;
-        }
-      }
-    } else {
-      for (int64_t i = 0; i < target_length; i--) {
-        if (mid_element[i] < target[i]) {
-          return -1;
-        } else if (mid_element[i] > target[i]) {
-          return 1;
-        }
-      }
-    }
-    return 0;
-  };
-
   while (left <= right) {
     int64_t mid = left + (right - left) / 2;
     int64_t mid_index = mid * target_length;
     const IntType *mid_element = &arr[mid_index];
-    int result = compare(mid_element);
+    int result = compare(mid_element, target, target_length);
 
     if (result == 0) {
       return mid;
@@ -511,28 +496,41 @@ __device__ int64_t BigInteger_device(const IntType *arr, const IntType *target,
   return -1;
 }
 
-__global__ void BigInteger_kernel(const unsigned long *arr, const unsigned long *target,
-                                  int64_t *result, const int64_t nbatch,
+__global__ void BigInteger_kernel(const unsigned long *arr,
+                                  const unsigned long *target, int64_t *result,
+                                  bool *mask,
+                                  const int64_t nbatch,
                                   const int64_t arr_length,
                                   const int64_t target_length,
                                   bool little_endian) {
   int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  // int tx = threadIdx.x;
+  // __shared__ unsigned long tmp[256][MAX_SORB_LEN];
   if (idn >= nbatch)
     return;
-  result[idn] =
-      BigInteger_device<unsigned long>(arr, &target[idn * target_length], arr_length,
-                                 target_length, little_endian);
+// #pragma unroll
+//   for (int i = 0; i < MAX_SORB_LEN; i++) {
+//     tmp[tx][i] = target[target_length * idn + i];
+//   }
+//   __syncthreads();
+//   // result[idn]
+  int64_t x = BigInteger_device<unsigned long>(arr, &target[idn * target_length], arr_length,
+                                               target_length, little_endian);
+  result[idn] = x;
+  if (x == -1) {
+    mask[idn] = false;
+  }
 };
 
 __host__ void binary_search_BigInteger_cuda(
-    const unsigned long *arr, const unsigned long *target, int64_t *result,
+    const unsigned long *arr, const unsigned long *target, int64_t *result, 
+    bool *mask,
     const int64_t nbatch, const int64_t arr_length,
     const int64_t target_length = 1, bool little_endian = true) {
-  dim3 blockDim(1024);
+  dim3 blockDim(256);
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
   BigInteger_kernel<<<gridDim, blockDim>>>(
-      arr, target, result, nbatch, arr_length, target_length, little_endian);
+      arr, target, result,mask, nbatch, arr_length, target_length, little_endian);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
-  cudaDeviceSynchronize();
 }
