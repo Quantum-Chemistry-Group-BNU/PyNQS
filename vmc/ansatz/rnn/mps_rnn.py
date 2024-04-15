@@ -1406,7 +1406,6 @@ class MPS_RNN_2D(nn.Module):
         )
 
         # the different rank sampling using the the same QuadTree or BinaryTree
-        logger.info(f"{self.rank_independent_sampling}")
         if not self.rank_independent_sampling:
             synchronize()
             dim = sample_unique.size(0)
