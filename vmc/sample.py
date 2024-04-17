@@ -223,13 +223,13 @@ class Sampler:
             self.h2e_spin = x[1].to(self.device)
 
         # Testing, not-sampling.
-        self.given_state = given_state
+        self.given_state: Tensor = None
         if self.method_sample == "RESTRICTED":
             if not isinstance(given_state, Tensor):
                 raise TypeError(f"Given-state muse be Tensor")
             if given_state.shape[1] != self.sorb:
                 raise TypeError(f"Given-state: {tuple(given_state)} must be (nbatch, sorb)")
-            self._init_restricted()
+            self._init_restricted(given_state=given_state)
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -330,9 +330,7 @@ class Sampler:
         n_sweep: int = None,
     ) -> tuple[Tensor, Tensor, tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
         # AR or MCMC sampling
-        sample_unique, sample_counts, sample_prob = self.sampling(
-            initial_state, epoch=epoch, n_sweep=n_sweep
-        )
+        sample_unique, _, sample_prob = self.sampling(initial_state, epoch=epoch, n_sweep=n_sweep)
         if self.method_sample == "MCMC":
             logger.debug(f"rank: {self.rank} Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
@@ -340,7 +338,6 @@ class Sampler:
         eloc, sloc, _ = self.calculate_energy(
             sample_unique,
             state_prob=sample_prob,
-            state_counts=sample_counts,
             WF_LUT=self.WF_LUT,
         )
 
@@ -360,17 +357,17 @@ class Sampler:
             sloc_mean = torch.zeros_like(eloc_mean)
 
         # Record sampling , only in MCMC.
-        self.time_sample += 1
-        if self.record_sample and self.rank == 0:
-            # If given space(not full space), this is error.
-            counts = sample_counts.to("cpu").numpy()
-            sample_str = state_to_string(sample_unique, self.sorb)
-            full_dict = dict.fromkeys(self.str_full, 0)
-            for s, i in zip(sample_str, counts):
-                full_dict[s] += i
-            new_df = pd.DataFrame({self.time_sample: full_dict.values()})
-            self.frame_sample = pd.concat([self.frame_sample, new_df], axis=1)
-            del full_dict
+        # self.time_sample += 1
+        # if self.record_sample and self.rank == 0:
+        #     # If given space(not full space), this is error.
+        #     counts = sample_counts.to("cpu").numpy()
+        #     sample_str = state_to_string(sample_unique, self.sorb)
+        #     full_dict = dict.fromkeys(self.str_full, 0)
+        #     for s, i in zip(sample_str, counts):
+        #         full_dict[s] += i
+        #     new_df = pd.DataFrame({self.time_sample: full_dict.values()})
+        #     self.frame_sample = pd.concat([self.frame_sample, new_df], axis=1)
+        #     del full_dict
 
         return sample_unique.detach(), sample_prob, (eloc, sloc), (eloc_mean, sloc_mean)
 
@@ -382,6 +379,13 @@ class Sampler:
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """
         prob is not real prob, prob = prob * world-size
+        Notice: samples counts is placeholders/empty-Tensor
+
+        Returns
+        -------
+            sample-unique: Tensor(Single-Rank)
+            sample_counts: only is placeholders/empty-Tensor
+            sample-prob: Tensor(Single-Rank)
         """
         self.change_n_sample(epoch=epoch)
         if self.method_sample == "MCMC":
@@ -394,6 +398,7 @@ class Sampler:
             raise NotImplementedError(f"Other sampling has not been implemented")
 
         self.WF_LUT = WF_LUT
+        # Notice: samples counts is placeholders/empty tensor
         return sample_unique, sample_counts, sample_prob
 
     def MCMC(
@@ -539,11 +544,6 @@ class Sampler:
 
         # Sample-comm, gather->merge->scatter
         return self.gather_scatter_sample(sample_unique, sample_counts, wf_value)
-        # sample_prob = sample_counts / sample_counts.sum()
-        # # convert to onv
-        # sample_unique = tensor_to_onv(sample_unique.to(torch.uint8), self.sorb)
-
-        # return sample_unique, sample_counts, sample_prob
 
     def gather_scatter_sample(
         self,
@@ -563,7 +563,7 @@ class Sampler:
         Returns
         -------
             unique_rank: Tensor
-            counts_rank: Tensor
+            placeholders: Tensor (remove counts-rank)
             prob_rank: Tensor, prob_rank = prob * world_size
             WF_LUT: wavefunction LookUP-Table about all-sample-unique and wf-value
         """
@@ -610,7 +610,7 @@ class Sampler:
         # FIXME:zbwu-24-04-17 remove counts-ranks
         # Scatter unique, counts
         unique_rank = scatter_tensor(merge_unique, self.device, torch.int64, self.world_size)
-        counts_rank = scatter_tensor(merge_counts, self.device, torch.int64, self.world_size)
+        # counts_rank = scatter_tensor(merge_counts, self.device, torch.int64, self.world_size)
         prob_rank = scatter_tensor(merge_prob, self.device, torch.double, self.world_size)
 
         t3 = time.time_ns()
@@ -648,25 +648,42 @@ class Sampler:
 
         del merge_counts, merge_prob, unique_all, count_all, wf_value_all
 
-        return (unique_rank, counts_rank, prob_rank * self.world_size, WF_LUT)
+        placeholders = torch.ones([], device=self.device, dtype=torch.int64)
+        return (unique_rank, placeholders, prob_rank * self.world_size, WF_LUT)
 
-    def _init_restricted(self) -> None:
+    def _init_restricted(self, given_state: Tensor) -> None:
+
+        # avoid prob/wf is zeros.
+        if self.det_lut is not None:
+            x = tensor_to_onv(given_state.to(torch.uint8), self.sorb)
+            array_idx = self.det_lut.lookup(x, is_onv=True)[0]
+            state = given_state[~array_idx.gt(-1)]
+            self.given_state = state
+            if self.rank == 0:
+                s = "Remove partial state avoid prob/wf is zeros, "
+                s += f"Given-state: {given_state.size(0)} -> {state.size(0)}"
+                logger.info(s, master=True)
+            del x
+        else:
+            self.given_state = given_state
+
         # split-rank
         dim = self.given_state.size(0)
         idx_lst = [0] + split_length_idx(dim, self.world_size)
         # logger.info(idx_lst)
         begin_rank = idx_lst[self.rank]
         end_rank = idx_lst[self.rank + 1]
-        unique_rank = self.given_state[begin_rank: end_rank]
+        unique_rank = self.given_state[begin_rank:end_rank]
 
         onv_all_rank = tensor_to_onv(self.given_state.to(torch.uint8), self.sorb)
-        onv_rank = onv_all_rank[begin_rank: end_rank]
+        onv_rank = onv_all_rank[begin_rank:end_rank]
 
         self.restricted_info = (unique_rank, onv_rank, onv_all_rank)
 
     def restricted_sample(self) -> tuple[Tensor, Tensor, Tensor, WavefunctionLUT]:
         """
         Given-state replace AR/MCMC sampling, only is testing.
+
         Returns
         -------
             unique_rank: Tensor
@@ -685,8 +702,8 @@ class Sampler:
                 begin = idx_lst[i]
                 end = idx_lst[i + 1]
                 wf_value[begin:end] = self.nqs(unique_rank[begin:end])
-        
-        wf_norm = wf_value.norm()**2 * self.world_size
+
+        wf_norm = wf_value.norm() ** 2 * self.world_size
         all_reduce_tensor(wf_norm, world_size=self.world_size)
         prob_rank = wf_value.abs().pow(2) / wf_norm
 
@@ -715,7 +732,6 @@ class Sampler:
         self,
         sample: Tensor,
         state_prob: Tensor = None,
-        state_counts: Tensor = None,
         WF_LUT: WavefunctionLUT = None,
     ) -> tuple[Tensor, Tensor, Tensor]:
         r"""
