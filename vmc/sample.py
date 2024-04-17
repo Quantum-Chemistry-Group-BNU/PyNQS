@@ -42,7 +42,12 @@ from utils.distributed import (
     synchronize,
     broadcast_tensor,
 )
-from utils.public_function import torch_unique_index, WavefunctionLUT
+from utils.public_function import (
+    torch_unique_index,
+    WavefunctionLUT,
+    split_length_idx,
+    split_batch_idx,
+)
 from utils.det_helper import DetLUT
 from utils.pyscf_helper.operator import spin_raising
 
@@ -55,7 +60,7 @@ class Sampler:
     using Markov chain Monte Carlo(MCMC) or Auto regressive(AR) algorithm
     """
 
-    METHOD_SAMPLE = ("MCMC", "AR")
+    METHOD_SAMPLE = ("MCMC", "AR", "RESTRICTED")
     n_accept: int
     str_full: List[str]
     frame_sample: DataFrame
@@ -90,6 +95,7 @@ class Sampler:
         use_dfs_sample: bool = False,
         use_spin_raising: bool = False,
         spin_raising_coeff: float = 1.0,
+        given_state: Tensor = None,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -215,6 +221,15 @@ class Sampler:
             x = spin_raising(self.sorb, c1=1.0)
             self.h1e_spin = x[0].to(self.device)
             self.h2e_spin = x[1].to(self.device)
+
+        # Testing, not-sampling.
+        self.given_state = given_state
+        if self.method_sample == "RESTRICTED":
+            if not isinstance(given_state, Tensor):
+                raise TypeError(f"Given-state muse be Tensor")
+            if given_state.shape[1] != self.sorb:
+                raise TypeError(f"Given-state: {tuple(given_state)} must be (nbatch, sorb)")
+            self._init_restricted()
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -373,6 +388,8 @@ class Sampler:
             sample_unique, sample_counts, sample_prob, WF_LUT = self.MCMC(initial_state, n_sweep)
         elif self.method_sample == "AR":
             (sample_unique, sample_counts, sample_prob, WF_LUT) = self.auto_regressive()
+        elif self.method_sample == "RESTRICTED":
+            (sample_unique, sample_counts, sample_prob, WF_LUT) = self.restricted_sample()
         else:
             raise NotImplementedError(f"Other sampling has not been implemented")
 
@@ -589,6 +606,8 @@ class Sampler:
             wf_value_unique: Tensor = None
 
         t2 = time.time_ns()
+
+        # FIXME:zbwu-24-04-17 remove counts-ranks
         # Scatter unique, counts
         unique_rank = scatter_tensor(merge_unique, self.device, torch.int64, self.world_size)
         counts_rank = scatter_tensor(merge_counts, self.device, torch.int64, self.world_size)
@@ -630,6 +649,65 @@ class Sampler:
         del merge_counts, merge_prob, unique_all, count_all, wf_value_all
 
         return (unique_rank, counts_rank, prob_rank * self.world_size, WF_LUT)
+
+    def _init_restricted(self) -> None:
+        # split-rank
+        dim = self.given_state.size(0)
+        idx_lst = [0] + split_length_idx(dim, self.world_size)
+        # logger.info(idx_lst)
+        begin_rank = idx_lst[self.rank]
+        end_rank = idx_lst[self.rank + 1]
+        unique_rank = self.given_state[begin_rank: end_rank]
+
+        onv_all_rank = tensor_to_onv(self.given_state.to(torch.uint8), self.sorb)
+        onv_rank = onv_all_rank[begin_rank: end_rank]
+
+        self.restricted_info = (unique_rank, onv_rank, onv_all_rank)
+
+    def restricted_sample(self) -> tuple[Tensor, Tensor, Tensor, WavefunctionLUT]:
+        """
+        Given-state replace AR/MCMC sampling, only is testing.
+        Returns
+        -------
+            unique_rank: Tensor
+            counts_rank: placeholders
+            prob_rank: Tensor, prob_rank = prob * world_size
+            WF_LUT: wavefunction LookUP-Table about all-sample-unique and wf-value
+        """
+        unique_rank = self.restricted_info[0]
+
+        # split-batch in single-rank
+        dim = unique_rank.size(0)
+        idx_lst = [0] + split_batch_idx(dim, min_batch=self.sample_min_sample_batch)
+        wf_value = torch.empty(dim, device=self.device, dtype=self.dtype)
+        with torch.no_grad():
+            for i in range(len(idx_lst) - 1):
+                begin = idx_lst[i]
+                end = idx_lst[i + 1]
+                wf_value[begin:end] = self.nqs(unique_rank[begin:end])
+        
+        wf_norm = wf_value.norm()**2 * self.world_size
+        all_reduce_tensor(wf_norm, world_size=self.world_size)
+        prob_rank = wf_value.abs().pow(2) / wf_norm
+
+        if self.use_LUT:
+            wf_value_all = all_gather_tensor(wf_value, self.device, self.world_size)
+            wf_value_all = torch.cat(wf_value_all)
+            WF_LUT = WavefunctionLUT(
+                # tensor_to_onv(self.given_state.to(torch.uint8), self.sorb),
+                self.restricted_info[2],
+                wf_value_all,
+                self.sorb,
+                self.device,
+            )
+        else:
+            WF_LUT: WavefunctionLUT = None
+
+        # convert to onv
+        # unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
+        unique_rank = self.restricted_info[1]
+        placeholders = torch.empty(0, device=self.device, dtype=self.dtype)
+        return (unique_rank, placeholders, prob_rank * self.world_size, WF_LUT)
 
     # TODO: how to calculate batch_size;
     # calculate the max nbatch for given Max Memory
@@ -673,13 +751,11 @@ class Sampler:
                 h1e=self.h1e,
                 h2e=self.h2e,
                 ansatz=self.nqs,
-                ecore=self.ecore,
                 sorb=self.sorb,
                 nele=self.nele,
                 noa=self.noa,
                 nob=self.nob,
                 state_prob=state_prob,
-                state_counts=state_counts,
                 use_spin_raising=use_spin_raising,
                 h1e_spin=self.h1e_spin,
                 h2e_spin=self.h2e_spin,
@@ -697,7 +773,9 @@ class Sampler:
             # spin_mean = 0.000
             eloc = torch.zeros(sample.size(0), device=self.device, dtype=self.dtype)
             sloc = torch.zeros_like(eloc)
-            placeholders = torch.ones(sample.size(0), device=self.device, dtype=torch.double)/sample.size(0)
+            placeholders = torch.ones(
+                sample.size(0), device=self.device, dtype=torch.double
+            ) / sample.size(0)
         return eloc, sloc, placeholders
 
     def __repr__(self) -> str:
