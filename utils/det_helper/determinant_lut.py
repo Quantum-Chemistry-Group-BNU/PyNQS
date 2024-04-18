@@ -12,6 +12,7 @@ from torch import Tensor
 
 from libs.C_extension import wavefunction_lut, tensor_to_onv, onv_to_tensor
 from utils.public_function import torch_sort_onv
+from utils.distributed import get_rank
 # from libs.bak.C_extension import wavefunction_lut
 
 __all__ = ["DetLUT"]
@@ -199,9 +200,10 @@ def get_all_orb_onv(
                 result2[i] = result2[i][idx]
                 result3[i] = result3[i][idx]
 
-    for p in result2:
-        if p is not None:
-            print(p.shape)
+    if get_rank() == 0:
+        for p in result2:
+            if p is not None:
+                print(p.shape)
 
     result = (result1, result2, result3)
     # breakpoint()

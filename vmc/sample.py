@@ -114,7 +114,8 @@ class Sampler:
             # exact optimization does not require sampling
             # the different rank sampling using the the same QuadTree or BinaryTree
             self.seed = seed
-        logger.info((self.seed, self.rank))
+        # logger.info(f"{(self.seed, self.rank)})
+        logger.info(f"sample-seed: {self.seed}")
 
         self.ele_info = ele_info
         self.read_electron_info(self.ele_info)
@@ -579,26 +580,35 @@ class Sampler:
         synchronize()
         t1 = time.time_ns()
         if self.rank == 0:
-            split_idx = [0] + [i.shape[0] for i in unique_all]
-            split_idx = torch.tensor(split_idx, dtype=torch.int64).cumsum(dim=0)
+            split_idx = torch.tensor([0] + [i.shape[0] for i in unique_all])
             unique_all = torch.cat(unique_all)
-            merge_unique, merge_inv, merge_idx = torch_unique_index(unique_all)[:3]
-            if self.use_LUT:
-                wf_value_all = torch.cat(wf_value_all)
-                wf_value_unique = wf_value_all[merge_idx]
-            # merge_unique, merge_
             count_all = torch.cat(count_all)
-            # nbatch = unique_all.shape[0]
-            # merge_counts = torch.zeros(merge_unique.shape[0], dtype=torch.int64, device=self.device)
+            if not self.use_same_tree:
+                # every-rank sample part is the same, so use 'torch.unique'
+                split_idx = split_idx.long().to(self.device).cumsum_(dim=0)
+                merge_unique, merge_inv, merge_idx = torch_unique_index(unique_all)[:3]
+                if self.use_LUT:
+                    wf_value_all = torch.cat(wf_value_all)
+                    wf_value_unique = wf_value_all[merge_idx]
+                # merge_unique, merge_
+                # nbatch = unique_all.shape[0]
+                # merge_counts = torch.zeros(merge_unique.shape[0], dtype=torch.int64, device=self.device)
 
-            # merge prob
-            length = merge_unique.shape[0]
-            merge_counts = merge_rank_sample(merge_inv, count_all, split_idx, length)
-            # for i in range(nbatch):
-            #     merge_counts[merge_idx[i]] += count_all[i]
-            merge_prob = merge_counts / merge_counts.sum()
-            # _, counts_test = torch.unique(torch.cat(sample_all), dim=0, return_counts=True)
-            # assert(torch.allclose(counts_test, merge_counts))
+                # merge prob
+                length = merge_unique.shape[0]
+                merge_counts = merge_rank_sample(merge_inv, count_all, split_idx, length)
+                # for i in range(nbatch):
+                #     merge_counts[merge_idx[i]] += count_all[i]
+                merge_prob = merge_counts / merge_counts.sum()
+                # _, counts_test = torch.unique(unique_all, dim=0, return_counts=True)
+                # assert(torch.allclose(counts_test, merge_counts))
+            else:
+                # every-rank sample is unique
+                merge_counts: Tensor = None
+                merge_prob = count_all / count_all.sum()
+                merge_unique = unique_all
+                if self.use_LUT:
+                    wf_value_unique = torch.cat(wf_value_all)
         else:
             merge_counts: Tensor = None
             merge_unique: Tensor = None
@@ -633,18 +643,28 @@ class Sampler:
             s = f"Sample-Comm, Gather: {delta1:.3E} s, Scatter: {delta2:.3E} s, merge: {delta3:.3E} s\n"
             s += f"All-Rank unique sample: {merge_unique.size(0)}, Broadcast LUT: {delta4:.3E} s"
             logger.info(s, master=True)
-        # convert to onv
-        unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
 
+        # # convert to onv
+        # unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
         if self.use_LUT:
+            dim = merge_unique.size(0)
+            bra_key = tensor_to_onv(merge_unique.to(torch.uint8), self.sorb)
             WF_LUT = WavefunctionLUT(
-                tensor_to_onv(merge_unique.to(torch.uint8), self.sorb),
+                bra_key,
                 wf_value_unique,
                 self.sorb,
                 self.device,
             )
+            idx_lst = [0] + split_length_idx(dim, self.world_size)
+            begin_rank = idx_lst[self.rank]
+            end_rank = idx_lst[self.rank + 1]
+            # unique_rank1 = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
+            unique_rank = bra_key[begin_rank:end_rank]
+            # assert torch.allclose(unique_rank1, unique_rank)
         else:
             WF_LUT: WavefunctionLUT = None
+            # convert to onv
+            unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
 
         del merge_counts, merge_prob, unique_all, count_all, wf_value_all
 

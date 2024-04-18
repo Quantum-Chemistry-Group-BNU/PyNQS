@@ -257,7 +257,8 @@ class NqsCi(BaseVMCOptimizer):
         forward model(x) with batch used in exact <phi_ci|H|phi_nqs>
         """
         dim = x.size(0)
-        logger.info(f"dim: {dim}")
+        if self.rank == 0:
+            logger.info(f"CI-NQS forward dim: {dim}", master=True)
         if dim == 0:
             placeholder = torch.empty(0, dtype=self.dtype, device=self.device)
             return placeholder
