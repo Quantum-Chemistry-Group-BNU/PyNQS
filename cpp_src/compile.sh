@@ -105,7 +105,7 @@ CPU_VERSION = CppExtension(\
 name=s,\
 sources=sources,\
 include_dirs=include_dirs,\
-extra_compile_args={"cxx": ["-O3", "-fopenmp" "-std=c++17", "-UGPU"]}\
+extra_compile_args={"cxx": ["-O3", "-fopenmp", "-std=c++17", "-UGPU"]}\
 )\
 ' setup.py
                 sed -i "s/COMPILE_MODE/CPU_VERSION/" setup.py

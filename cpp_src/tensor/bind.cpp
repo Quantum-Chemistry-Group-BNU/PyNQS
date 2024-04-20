@@ -253,7 +253,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "convert onv to bit (-1:unoccupied, 1: occupied) for given onv(1D, 2D) "
         "using CPU or GPU");
   m.def("spin_flip_rand", &spin_flip_rand,
-        "Flip the spin randomly in MCMC using CPU");
+        "Flip the spin randomly in MCMC using CPU", py::arg("bra"),
+        py::arg("sorb"), py::arg("nele"), py::arg("noA"), py::arg("noB"),
+        py::arg("seed"), py::arg("in_place") = false);
   m.def("tensor_to_onv", &tensor_to_onv, py::arg("bra"), py::arg("sorb"),
         "convert states (0:unoccupied, 1: occupied) to onv uint8");
   m.def("mps_vbatch", &mps_vbatch, py::arg("mps_data"), py::arg("data_index"),

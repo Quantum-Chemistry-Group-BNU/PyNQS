@@ -14,9 +14,9 @@ Tensor tensor_to_onv_tensor_cuda(const Tensor &bra_tensor, const int sorb);
 
 Tensor onv_to_tensor_tensor_cuda(const Tensor &bra_tensor, const int sorb);
 
-tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
-                               const int nele, const int noA, const int noB,
-                               const int seed);
+// tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
+//                                const int nele, const int noA, const int noB,
+//                                const int seed);
 
 Tensor get_merged_tensor_cuda(const Tensor bra, const int nele, const int sorb,
                               const int noA, const int noB);

@@ -134,22 +134,31 @@ def MCMC_sample(
     n_sweep: int,
     therm_step: int,
 ) -> float: ...
+
 def spin_flip_rand(
-    bra: Tensor, sorb: int, nele: int, noA: int, noB: int, seed: int
+    bra: Tensor,
+    sorb: int,
+    nele: int,
+    noA: int,
+    noB: int,
+    seed: int,
+    in_place: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     r"""
     Flip the spin randomly (restricted to SD excitation) in MCMC sample
+    seed-thread = seed + thread, if use OpenMP.
 
     Notes:
         only run in CPU, structure is similar to "get_comb_tensor"
 
     Args:
-        bra(Tensor): the occupied number vector(onv)(1D), dtype: torch.uint8
+        bra(Tensor): the occupied number vector(onv)(2D), dtype: torch.uint8
         sorb(Tensor): the number of spin orbital
         nele(int): the number of electron
         noA(int): the number of alpha spin orbital
         noB(int): the number of beta spin orbital
         seed: the seed of c++ std::mt19937 random
+        in_place(bool): flip bra in place, default: False 
 
     Returns:
         (Tensor, Tensor), A tuple of tensor containing
@@ -159,16 +168,16 @@ def spin_flip_rand(
     Example:
     >>> bra = torch.tensor([[0b1111, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8)
     >>> nele = 4; sorb = 8; noA = 2; noB = 2; seed = 2023
-    >>> states, onv = spin_flip_rand(bra, sorb, nele, sorb, noA, noB, seed)
+    >>> states, onv = spin_flip_rand(bra, sorb, nele, noA, noB, seed)
     >>> states
-    tensor([-1., 1., -1., 1., 1., -1., 1., -1.], dtype=torch.float64)
+    tensor([[-1., 1., -1., 1., 1., -1., 1., -1.]], dtype=torch.float64)
     >>> onv
-    tensor([90, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8) # bin(90): 0b01011010
-    >>> states, onv = spin_flip_rand(bra, sorb, nele, sorb, noA, noB, seed)
+    tensor([[90, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8) # bin(90): 0b01011010
+    >>> states, onv = spin_flip_rand(bra, sorb, nele, noA, noB, seed)
     >>> states
-    tensor([ 1., 1., -1., -1., 1., 1., -1., -1.], dtype=torch.float64)
+    tensor([[ 1., 1., -1., -1., 1., 1., -1., -1.]], dtype=torch.float64)
     >>> onv
-    tensor([51, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8) # bin(51): 0b00110011
+    tensor([[51, 0, 0, 0, 0, 0, 0, 0]], dtype=torch.uint8) # bin(51): 0b00110011
     """
     ...
 
