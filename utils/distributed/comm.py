@@ -30,8 +30,8 @@ def synchronize() -> None:
         return None
     if not dist.is_initialized():
         return None
-    word_size = dist.get_world_size()
-    if word_size == 1:
+    world_size = dist.get_world_size()
+    if world_size == 1:
         return None
     dist.barrier()
 
@@ -72,15 +72,20 @@ def all_reduce_tensor(
         return tensors_clone
 
 
-def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int = 0) -> Tensor:
+def scatter_tensor(
+    tensor: Tensor,
+    device: torch.device,
+    dtype: torch.dtype,
+    world_size: int,
+    master_rank: int = 0,
+) -> Tensor:
     """
     Gathers tensor(1D, 2D, ...) of different lengths across multiple gpus in master rank
     Notice: the others dims(>0) must be the same.
-    split batch: [k, k, k, ..., ]
-     k = (nbatch - 1 + word_size) // word_size, res = nbatch - k * (word_size - 1)
+    k, res = divmod(tensor.size(0), world_size)
     1. broadcast split batch/other_dim
     2. broadcast other shape
-    3. pad tensor to batch * word_size using zeros/constants.
+    3. pad tensor to batch * world_size using zeros/constants.
     4. scatter tensor
     5. Unpad the added zeros/constants using sizes found in step 1.
 
@@ -89,7 +94,7 @@ def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int =
         tensor : Tensor
         device : current gpu device
         dtype: the dtype of tensor
-        word_size : world size, default: 1
+        world_size : world size, default: 1
         master_rank: the master rank, default: 0
 
     Returns
@@ -103,10 +108,9 @@ def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int =
     split_batch = torch.ones(world_size, device=device, dtype=torch.int64)
     other_dim = torch.zeros(1, device=device, dtype=torch.int64)
     if get_rank() == master_rank:
-        k = (tensor.shape[0] - 1 + world_size) // world_size
-        res = tensor.shape[0] - k * (world_size - 1)
-        split_batch.mul_(k)
-        split_batch[-1] = res
+        k, res = divmod(tensor.shape[0], world_size)
+        split_batch.fill_(k)
+        split_batch[:res].add_(1)
         other_dim[0] = tensor[0].dim()
     dist.broadcast(other_dim, src=master_rank, async_op=True)
     dist.broadcast(split_batch, src=master_rank, async_op=True)
@@ -126,14 +130,24 @@ def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int =
     else:
         data = torch.zeros(split_batch[0], *other_shape, dtype=dtype, device=device)
     if get_rank() == master_rank:
-        size_diff = k - res
-        if size_diff:
+        # size_diff = res
+        if res:
+            size_diff = world_size - res
             if len(other_shape) == 0:
-                padding = torch.zeros(size_diff, device=device, dtype=tensor.dtype)
+                padding = torch.zeros(1, device=device, dtype=tensor.dtype)
             else:
-                padding = torch.zeros(size_diff, *other_shape, device=device, dtype=tensor.dtype)
-            tensor = torch.cat((tensor, padding))
-        scatter_data = list(tensor.split(k, dim=0))
+                padding = torch.zeros(1, *other_shape, device=device, dtype=tensor.dtype)
+            # tensor = torch.cat((tensor, padding))
+            tmp = tensor.split(split_size=split_batch.tolist(), dim=0)
+            scatter_data = []
+            for i in range(world_size):
+                if i < res:
+                    scatter_data.append(tmp[i])
+                else:
+                    scatter_data.append(torch.cat((tmp[i], padding)))
+            del tmp
+        else:
+            scatter_data = list(tensor.split(split_batch[0], dim=0))
     else:
         scatter_data = None
 
@@ -143,10 +157,15 @@ def scatter_tensor(tensor: Tensor, device, dtype, world_size, master_rank: int =
     return data
 
 
-def broadcast_tensor(tensor: Union[Tensor, None], device, dtype, master_rank: int = 0) -> Tensor:
+def broadcast_tensor(
+    tensor: Union[Tensor, None],
+    device: torch.device,
+    dtype: torch.dtype,
+    master_rank: int = 0,
+) -> Tensor:
     """
     Broadcast tensor, support complex-tensor(complex128, complex64)
-    
+
     Returns
     -------
         tensor: Tensor, convert to dtype
@@ -188,7 +207,10 @@ def broadcast_tensor(tensor: Union[Tensor, None], device, dtype, master_rank: in
 
 
 def gather_tensor(
-    tensor: Tensor, device, world_size: int, master_rank: int = 0
+    tensor: Tensor,
+    device: torch.device,
+    world_size: int,
+    master_rank: int = 0,
 ) -> Union[List[Tensor], None]:
     """
     Gathers tensor(1D, 2D, ...) of different lengths across multiple gpus in master rank
@@ -200,7 +222,7 @@ def gather_tensor(
     ----------
         tensor : Tensor
         device : current gpu device
-        word_size : world size, default: 1
+        world_size : world size, default: 1
         master_rank: the master rank, default: 0
 
     Returns
@@ -251,7 +273,11 @@ def gather_tensor(
     return all_tensor
 
 
-def all_gather_tensor(tensor: Tensor, device, world_size: int) -> List[Tensor]:
+def all_gather_tensor(
+    tensor: Tensor,
+    device: torch.device,
+    world_size: int,
+) -> List[Tensor]:
     """
     All_Gathers tensor(1D, 2D, ...) of different lengths across multiple gpus
     Notice: the others dims(>0) must be the same.
@@ -267,7 +293,7 @@ def all_gather_tensor(tensor: Tensor, device, world_size: int) -> List[Tensor]:
     Parameters
     ----------
         tensor : Tensor
-        word_size : world size, default: 1
+        world_size : world size, default: 1
         device : current gpu device
 
     Returns

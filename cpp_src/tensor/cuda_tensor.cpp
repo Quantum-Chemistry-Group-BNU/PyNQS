@@ -317,6 +317,10 @@ Tensor constrain_make_charts_cuda(const Tensor &sym_index) {
                      .device(sym_index.device())
                      .requires_grad(false);
 
+  if (nbatch == 0){
+    return torch::zeros({0, 4}, options);
+  }
+
   Tensor result = torch::zeros({nbatch, 4}, options);
   double *result_ptr = result.data_ptr<double>();
 

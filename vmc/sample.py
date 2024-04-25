@@ -47,6 +47,7 @@ from utils.public_function import (
     WavefunctionLUT,
     split_length_idx,
     split_batch_idx,
+    setup_seed,
 )
 from utils.det_helper import DetLUT
 from utils.pyscf_helper.operator import spin_raising
@@ -88,6 +89,7 @@ class Sampler:
         reduce_psi: bool = False,
         eps: float = 1e-12,
         only_AD: bool = False,
+        only_sample: bool = False,
         use_sample_space: bool = False,
         min_batch: int = 10000,
         min_tree_height: int = None,
@@ -183,6 +185,9 @@ class Sampler:
 
         # only sampling not calculations local-energy, applies to test AD memory
         self.only_AD = only_AD
+
+        # only sampling not backward
+        self.only_sample = only_sample
 
         # only use x' in n_unique sample not SD, dose not support exact-opt
         # psi(x') can be looked from WaveFunction look-up table
@@ -389,6 +394,7 @@ class Sampler:
             sample-prob: Tensor(Single-Rank)
         """
         self.change_n_sample(epoch=epoch)
+        self.epoch = epoch
         if self.method_sample == "MCMC":
             sample_unique, sample_counts, sample_prob, WF_LUT = self.MCMC(initial_state, n_sweep)
         elif self.method_sample == "AR":
@@ -498,6 +504,12 @@ class Sampler:
         Auto regressive sampling
         """
         t0 = time.time_ns()
+        # if using 'only-sample', seed should been changed
+        if self.only_sample:
+            seed = self.epoch + self.seed
+        else:
+            seed = self.seed
+        setup_seed(seed)
         while True:
             #  0/1
             if not self.sampling_batch_rank:
@@ -576,8 +588,15 @@ class Sampler:
             wf_value_all = gather_tensor(wf_value, self.device, self.world_size, master_rank=0)
         else:
             wf_value_all = None
-        # sample_all = gather_tensor(sample, self.device, self.word_size, master_rank=0)
         synchronize()
+
+        # check unique and counts
+        if self.rank == 0:
+            unique_length = [i.size(0) for i in unique_all]
+            count_length = [i.sum().item() for i in count_all]
+            s = f"Single-rank: unique: {sum(unique_length)}, counts: {sum(count_length)}"
+            logger.debug(s, master=True)
+
         t1 = time.time_ns()
         if self.rank == 0:
             split_idx = torch.tensor([0] + [i.shape[0] for i in unique_all])
@@ -634,6 +653,19 @@ class Sampler:
             )
         synchronize()
         t4 = time.time_ns()
+
+        # Testing prob
+        use_subpsace = False
+        if use_subpsace:
+            if not self.use_LUT:
+                raise NotImplementedError
+            else:
+                prob1 = wf_value_unique.abs() ** 2 / wf_value_unique.norm() ** 2
+                dim = merge_unique.size(0)
+                idx_lst = [0] + split_length_idx(dim, self.world_size)
+                begin_rank = idx_lst[self.rank]
+                end_rank = idx_lst[self.rank + 1]
+                prob_rank = prob1[begin_rank:end_rank]
 
         if self.rank == 0:
             delta1 = (t1 - t0) / 1.0e09

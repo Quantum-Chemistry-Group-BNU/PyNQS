@@ -163,6 +163,7 @@ class BaseVMCOptimizer(ABC):
             dtype=self.dtype,
             use_spin_raising=use_spin_raising,
             spin_raising_coeff=spin_raising_coeff,
+            only_sample=only_sample,
             **self.sampler_param,
         )
         self.record_sample = self.sampler_param.get("record_sample", False)

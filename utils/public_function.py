@@ -699,10 +699,10 @@ def split_length_idx(dim: int, length: int) -> List[int]:
     >>> idx_lst
     [4, 8, 11]
     """
-    nbatch = (dim - 1 + length) // length
-    res = dim - nbatch * (length - 1) 
+    nbatch, res = divmod(dim, length)
     idx_lst = torch.empty(length, dtype=torch.int64).fill_(nbatch)
-    idx_lst[-1] = res
+    # res = dim - nbatch * length
+    idx_lst[:res].add_(1)
     idx_lst = idx_lst.cumsum(dim=0).tolist()
     return idx_lst
 

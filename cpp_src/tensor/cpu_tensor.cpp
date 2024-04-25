@@ -489,6 +489,11 @@ Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
 
 Tensor constrain_make_charts_cpu(const Tensor &sym_index) {
   const int64_t nbatch = sym_index.size(0);
+  
+  if(nbatch == 0){
+    return torch::zeros({0, 4}).to(torch::kDouble);
+  }
+
   const int64_t *sym_ptr = sym_index.data_ptr<int64_t>();
   auto result = std::vector<double>(nbatch * 4, 0.0);
 
