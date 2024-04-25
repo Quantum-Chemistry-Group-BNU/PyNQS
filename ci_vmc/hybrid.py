@@ -4,12 +4,10 @@ import time
 import os
 import warnings
 import torch
-import torch.distributed as dist
 import numpy as np
 import scipy
 
 from dataclasses import dataclass
-from typing import Union, Tuple, List
 from loguru import logger
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -581,6 +579,10 @@ class NqsCi(BaseVMCOptimizer):
                 not_idx, phi_nqs = WF_LUT.lookup(state)[1:]
                 assert not_idx.size(0) == 0
 
+            # change spin-raising-coeff
+            if self.spin_raising_scheduler is not None:
+                c0 = self.initial_spin_spin_coeff
+                self.spin_raising_coeff = self.spin_raising_scheduler(epoch) * c0
             self.make_ci_nqs()  # <phi_i|H|phi_nqs>
             self.make_nqs_nqs(phi_nqs, eloc_mean, sloc_mean)  # <phi_nqs|H|phi_nqs>
             E0, e_spin = self.solve_eigh()  # solve HC = εC, C0({ci},c_N)

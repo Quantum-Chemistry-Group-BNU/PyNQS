@@ -12,6 +12,7 @@ import torch.distributed as dist
 import numpy as np
 import matplotlib.pyplot as plt
 
+from typing import Callable
 from dataclasses import dataclass
 from memory_profiler import profile
 from line_profiler import LineProfiler
@@ -77,9 +78,11 @@ class VMCOptimizer(BaseVMCOptimizer):
         use_clip_grad: bool = False,
         max_grad_norm: float = 0.01,
         start_clip_grad: int = None,
+        clip_grad_scheduler: Callable[[int], float] = None,
         use_spin_raising: bool = False,
         spin_raising_coeff: float = 1.0,
         only_output_spin_raising: bool = False,
+        spin_raising_scheduler: Callable[[int], float] = None,
     ) -> None:
         super().__init__(
             nqs=nqs,
@@ -105,10 +108,12 @@ class VMCOptimizer(BaseVMCOptimizer):
             kfac=kfac,
             use_clip_grad=use_clip_grad,
             max_grad_norm=max_grad_norm,
+            clip_grad_scheduler=clip_grad_scheduler,
             start_clip_grad=start_clip_grad,
             use_spin_raising=use_spin_raising,
             spin_raising_coeff=spin_raising_coeff,
             only_output_spin_raising=only_output_spin_raising,
+            spin_raising_scheduler=spin_raising_scheduler,
         )
 
         # pre-train CI wavefunction
@@ -149,6 +154,9 @@ class VMCOptimizer(BaseVMCOptimizer):
 
             sample_state = onv_to_tensor(state, self.sorb)  # -1:unoccupied, 1: occupied
 
+            if self.spin_raising_scheduler is not None:
+                c0 = self.initial_spin_spin_coeff
+                self.spin_raising_coeff = self.spin_raising_scheduler(epoch) * c0
             # calculate model grad
             t1 = time.time_ns()
             if self.sr:

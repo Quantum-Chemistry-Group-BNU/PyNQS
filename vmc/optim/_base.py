@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Callable
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -111,9 +111,11 @@ class BaseVMCOptimizer(ABC):
         use_clip_grad: bool = False,
         max_grad_norm: float = 0.01,
         start_clip_grad: int = None,
+        clip_grad_scheduler: Callable[[int], float] = None,
         use_spin_raising: bool = False,
         spin_raising_coeff: float = 1.0,
         only_output_spin_raising: bool = False,
+        spin_raising_scheduler: Callable[[int], float] = None,
     ) -> None:
         if dtype is None:
             dtype = Dtype()
@@ -176,6 +178,8 @@ class BaseVMCOptimizer(ABC):
         self.only_output_spin_raising = only_output_spin_raising
         self.h1e_spin = self.sampler.h1e_spin
         self.h2e_spin = self.sampler.h2e_spin
+        self.spin_raising_scheduler = spin_raising_scheduler
+        self.initial_spin_spin_coeff = spin_raising_coeff
 
         # electronic structure information
         self.read_electron_info(self.sampler.ele_info)
@@ -192,6 +196,8 @@ class BaseVMCOptimizer(ABC):
                 raise ValueError(f"start-clip-grad:{start_clip_grad} must be in (0, {max_iter})")
         self.start_clip_grad: int = start_clip_grad
         self.max_grad_norm = max_grad_norm
+        self.initial_g0 = max_grad_norm
+        self.clip_grad_scheduler = clip_grad_scheduler
 
         if self.rank == 0:
             params_num = sum(map(torch.numel, self.model.parameters()))
@@ -323,12 +329,15 @@ class BaseVMCOptimizer(ABC):
         """
         clip model grad use 2-norm
         """
+        # change max clip-grad
+        if self.clip_grad_scheduler is not None:
+            g0 = self.clip_grad_scheduler(epoch) * self.initial_g0
+        else:
+            g0 = self.initial_g0
         if self.use_clip_grad and epoch > self.start_clip_grad:
-            x = nn.utils.clip_grad_norm_(
-                self.model.parameters(), max_norm=self.max_grad_norm, foreach=True
-            )
+            x = nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=g0, foreach=True)
             if self.rank == 0:
-                logger.info(f"Clip-grad, g: {x:.4E}, g0: {self.max_grad_norm:4E}", master=True)
+                logger.info(f"Clip-grad, g: {x:.4E}, g0: {g0:4E}", master=True)
 
     def update_param(self, epoch: int) -> None:
         """
