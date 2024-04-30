@@ -485,7 +485,7 @@ class MPS_RNN_2D(nn.Module):
                         2,
                         **self.factory_kwargs_real,
                     )
-                    * self.iscale
+                    * 1e-7
                 )
                 self.parm_M_v_r = (
                     torch.zeros(
@@ -493,7 +493,6 @@ class MPS_RNN_2D(nn.Module):
                         2,
                         device=self.device,
                     )
-                    * self.iscale
                 )
                 self.parm_v_r = (
                     torch.randn(
@@ -501,7 +500,7 @@ class MPS_RNN_2D(nn.Module):
                         2,
                         **self.factory_kwargs_real,
                     )
-                    * self.iscale
+                    * 1e-7
                 )
                 if self.use_tensor:
                     self.parm_T_r = (
@@ -516,7 +515,7 @@ class MPS_RNN_2D(nn.Module):
                             2,
                             **self.factory_kwargs_real,
                         )
-                        * self.iscale
+                        * 1e-7
                     )
                 self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(
                     self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut
@@ -537,9 +536,10 @@ class MPS_RNN_2D(nn.Module):
                     params["module.parm_M_h_r"]
                 ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
                 self.parm_M_v = self.parm_M_v.clone()
-                self.parm_M_v[..., : self.dcut_before, : self.dcut_before] = torch.view_as_complex(
-                    params["module.parm_M_v_r"]
-                ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
+                if self.nqubits != self.M: 
+                    self.parm_M_v[..., : self.dcut_before, : self.dcut_before] = torch.view_as_complex(
+                        params["module.parm_M_v_r"]
+                    ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
                 self.parm_v = self.parm_v.clone()
                 self.parm_v[..., : self.dcut_before] = torch.view_as_complex(
                     params["module.parm_v_r"]
@@ -558,13 +558,25 @@ class MPS_RNN_2D(nn.Module):
                     )
 
                 self.parm_M_h = torch.view_as_real(self.parm_M_h).view(-1, 2)
-                self.parm_M_v = torch.view_as_real(self.parm_M_v).view(-1, 2)
+                if self.nqubits != self.M: 
+                    self.parm_M_v = torch.view_as_real(self.parm_M_v).view(-1, 2)
                 self.parm_v = torch.view_as_real(self.parm_v).view(-1, 2)
                 if self.use_tensor:
                     self.parm_T = torch.view_as_real(self.parm_T).view(-1, 2)
 
                 self.parm_M_h_r = nn.Parameter(self.parm_M_h)
-                self.parm_M_v_r = nn.Parameter(self.parm_M_v)
+                if self.nqubits == self.M: 
+                    self.parm_M_v = torch.zeros(
+                                self.L,
+                                self.M // 2,
+                                self.hilbert_local,
+                                self.dcut,
+                                self.dcut,
+                                device=self.device,
+                            ) + 0*1j
+                    self.parm_M_v_r = torch.view_as_real(self.parm_M_v).view(-1, 2)
+                else:
+                    self.parm_M_v_r = nn.Parameter(self.parm_M_v)
                 self.parm_v_r = nn.Parameter(self.parm_v)
                 if self.use_tensor:
                     self.parm_T_r = nn.Parameter(self.parm_T)
@@ -585,7 +597,7 @@ class MPS_RNN_2D(nn.Module):
 
                 self.parm_eta_r = (
                     torch.rand((self.M * self.L * self.dcut // 2, 2), **self.factory_kwargs_real)
-                    * self.iscale
+                    * 1e-7
                 )
                 self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(
                     self.L, self.M // 2, self.dcut
@@ -605,7 +617,7 @@ class MPS_RNN_2D(nn.Module):
                         torch.rand(
                             (self.M * self.L * self.dcut // 2, 2), **self.factory_kwargs_real
                         )
-                        * self.iscale
+                        * 1e-7
                     )
                     self.parm_w = torch.view_as_complex(self.parm_w_r).view(
                         self.L, self.M // 2, self.dcut
@@ -639,14 +651,21 @@ class MPS_RNN_2D(nn.Module):
                     )
                     * self.iscale
                 )
-                self.parm_M_v_r = nn.Parameter(
-                    torch.zeros(
-                        self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
-                        2,
-                        device=self.device,
-                    )
-                    * self.iscale
-                )
+                if self.nqubits == self.M: 
+                    self.parm_M_v_r = torch.zeros(
+                            self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
+                            2,
+                            device=self.device,
+                        )
+                else:
+                    self.parm_M_v_r = nn.Parameter(
+                            torch.zeros(
+                                self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
+                                2,
+                                device=self.device,
+                            )
+                            * self.iscale
+                        )
                 self.parm_v_r = nn.Parameter(
                     torch.randn(
                         self.M * self.L * self.hilbert_local * self.dcut // 2,
@@ -778,7 +797,17 @@ class MPS_RNN_2D(nn.Module):
                         self.dcut_before,
                     )
                 self.parm_M_h = nn.Parameter(self.parm_M_h_r)
-                self.parm_M_v = nn.Parameter(self.parm_M_v_r)
+                if self.nqubits == self.M: 
+                    self.parm_M_v = torch.zeros(
+                                self.L,
+                                self.M // 2,
+                                self.hilbert_local,
+                                self.dcut,
+                                self.dcut,
+                                device=self.device,
+                            )
+                else:
+                    self.parm_M_v = nn.Parameter(self.parm_M_v_r)
                 self.parm_v = nn.Parameter(self.parm_v_r)
                 if self.use_tensor:
                     self.parm_T = nn.Parameter(self.parm_T_r)
@@ -817,17 +846,27 @@ class MPS_RNN_2D(nn.Module):
                     )
                     * self.iscale
                 )
-                self.parm_M_v = nn.Parameter(
-                    torch.zeros(
-                        self.L,
-                        self.M // 2,
-                        self.hilbert_local,
-                        self.dcut,
-                        self.dcut,
-                        device=self.device,
+                if self.nqubits == self.M: 
+                    self.parm_M_v = torch.zeros(
+                                self.L,
+                                self.M // 2,
+                                self.hilbert_local,
+                                self.dcut,
+                                self.dcut,
+                                device=self.device,
+                            )
+                else:
+                    self.parm_M_v = nn.Parameter(
+                        torch.zeros(
+                            self.L,
+                            self.M // 2,
+                            self.hilbert_local,
+                            self.dcut,
+                            self.dcut,
+                            device=self.device,
+                        )
+                        * self.iscale
                     )
-                    * self.iscale
-                )
 
                 self.parm_v = nn.Parameter(
                     torch.randn(
@@ -1494,8 +1533,8 @@ if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
     device = "cuda"
-    sorb = 20
-    nele = 10
+    sorb = 16
+    nele = 16
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     length = fock_space.shape[0]
     fci_space = onv_to_tensor(
@@ -1514,18 +1553,19 @@ if __name__ == "__main__":
     # )
     model = MPS_RNN_2D(
         use_symmetry=True,
-        param_dtype=torch.complex128,
+        param_dtype=torch.float64,
         hilbert_local=4,
         nqubits=sorb,
         nele=nele,
         device=device,
-        dcut=10,
+        dcut=6,
         # tensor=False,
-        M=10,
-        graph_type="snake",
-        phase_type="regular",
-        phase_batch_norm=False,
-        phase_hidden_size=[128, 128],
+        M=16,
+        
+        # graph_type="snake",
+        # phase_type="regular",
+        # phase_batch_norm=False,
+        # phase_hidden_size=[128, 128],
         n_out_phase=1,
     )
     logger.info(hasattr(model, "min_batch"))
