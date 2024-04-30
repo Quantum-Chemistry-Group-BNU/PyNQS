@@ -34,6 +34,7 @@ class RNNWavefunction(nn.Module):
         phase_norm_momentum=0.1,
         n_out_phase: int = 1,
         nn_type="GRU",
+        sites_rnn: bool = False,
     ) -> None:
         super(RNNWavefunction, self).__init__()
         self.device = device
@@ -45,6 +46,9 @@ class RNNWavefunction(nn.Module):
         self.symmetry = symmetry
         self.rnn_type = rnn_type
         self.nn_type = nn_type
+
+        # sites_rnn = False
+        self.sites_rnn = sites_rnn
         if rnn_type == "complex":
             self.compute_phase = True
         elif rnn_type == "real":
@@ -53,7 +57,7 @@ class RNNWavefunction(nn.Module):
             raise TypeError(f"RNN-nqs types{rnn_type} must be in ('complex', 'real')")
         if self.nn_type == "GRU":
             # input_size: spin 1/2
-            model = nn.GRU(
+            model = lambda: nn.GRU(
                 input_size=2,
                 hidden_size=num_hiddens,
                 num_layers=num_layers,
@@ -63,7 +67,7 @@ class RNNWavefunction(nn.Module):
             )
             # self.GRU = nn.GRUCell(input_size=2, hidden_size=num_hiddens, **self.factory_kwargs)
         elif self.nn_type == "RNN":
-            model = nn.RNN(
+            model = lambda: nn.RNN(
                 input_size=2,
                 hidden_size=num_hiddens,
                 num_layers=num_layers,
@@ -72,7 +76,7 @@ class RNNWavefunction(nn.Module):
                 **self.factory_kwargs,
             )
         elif self.nn_type == "LSTM":
-            raise NotImplementedError("Waring! This type of RNN is not aviable now.")
+            raise NotImplementedError("Waring! This type of RNN is not available now.")
             model = nn.LSTM(
                 input_size=2,
                 hidden_size=num_hiddens,
@@ -86,15 +90,26 @@ class RNNWavefunction(nn.Module):
             )
         else:
             raise TypeError(f"This ansatz is only attribute to RNN, GRU, LSTM")
-        self.RNNnn = model
 
-        self.linear_amp = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
+        if self.sites_rnn:
+            self.RNNnn = nn.ModuleList([model() for _ in range(sorb)])
+        else:
+            self.RNNnn = nn.ModuleList([model()])
+
+        linear = lambda: nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
+        if self.sites_rnn:
+            self.linear_amp = nn.ModuleList([linear() for _ in range(sorb)])
+        else:
+            self.linear_amp = nn.ModuleList([linear()])
 
         self.common_linear = common_linear
         self.combine_amp_phase = combine_amp_phase
         if self.compute_phase and self.combine_amp_phase:
             if not self.common_linear:
-                self.linear_phase = nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
+                if self.sites_rnn:
+                    self.linear_phase = nn.ModuleList([linear() for _ in range(sorb)])
+                else:
+                    self.linear_phase = nn.ModuleList([linear])
             else:
                 self.linear_phase = self.linear_amp
 
@@ -136,21 +151,28 @@ class RNNWavefunction(nn.Module):
         s += f"amplitude and phase common Linear: {self.common_linear}, "
         s += f"combined amplitude and phase layers: {self.combine_amp_phase}\n"
         net_param_num = lambda net: sum(p.numel() for p in net.parameters())
-        gru_num = net_param_num(self.RNNnn)
-        amp_num = net_param_num(self.linear_amp)
-        s += f"params: GRU: {gru_num}, amp: {amp_num}, "
+        rnn_num = sum([net_param_num(m) for m in self.RNNnn])
+        # gru_num = net_param_num(self.RNNnn)
+        # amp_num = net_param_num(self.linear_amp)
+        amp_num = sum([net_param_num(m) for m in self.linear_amp])
+        s += f"params: {self.nn_type}: {rnn_num}, amp: {amp_num}, "
         if self.compute_phase:
             if not self.combine_amp_phase:
                 impl = self.phase_layers[0]
+                phase_num = net_param_num(impl)
                 # phase_num = sum(p.numel() for p in self.phase_layers[0].parameters() if p.grad is None)
             else:
                 impl = self.linear_phase
-            phase_num = net_param_num(impl)
+                phase_num = sum([net_param_num(m) for m in impl])
+                # phase_num = net_param_num(impl)
             s += f"phase: {phase_num}"
         return s
 
-    def rnn(self, x: Tensor, hidden_state: Tensor) -> Tuple[Tensor, Tensor]:
-        output, hidden_state = self.RNNnn(x, hidden_state)
+    def rnn(self, x: Tensor, hidden_state: Tensor, i_th: int) -> Tuple[Tensor, Tensor]:
+        if self.sites_rnn:
+            output, hidden_state = self.RNNnn[i_th](x, hidden_state)
+        else:
+            output, hidden_state = self.RNNnn[0](x, hidden_state)
         # output: (nbatch, 1, sorb)
         return output.squeeze(1), hidden_state
 
@@ -160,13 +182,19 @@ class RNNWavefunction(nn.Module):
     #         with torch.no_grad():
     #             weights.uniform_(-stdv * 0.005, 0.005 * stdv)
 
-    def amp_impl(self, x: Tensor) -> Tensor:
+    def amp_impl(self, x: Tensor, i_th: int) -> Tensor:
         # x: (nbatch, 2)
-        return self.linear_amp(x).softmax(dim=1).sqrt()
+        if self.sites_rnn:
+            return self.linear_amp[i_th](x).softmax(dim=1).sqrt()
+        else:
+            return self.linear_amp[0](x).softmax(dim=1).sqrt()
 
-    def phase_impl(self, x: Tensor) -> Tensor:
+    def phase_impl(self, x: Tensor, i_th: int) -> Tensor:
         # x: (nbatch, 2)
-        return torch.pi * (F.softsign(self.linear_phase(x)))
+        if self.sites_rnn:
+            return torch.pi * (F.softsign(self.linear_phase[i_th](x)))
+        else:
+            return torch.pi * (F.softsign(self.linear_phase[0](x)))
 
     def heavy_side(self, x: Tensor) -> Tensor:
         sign = torch.sign(torch.sign(x) + 0.1)
@@ -270,17 +298,17 @@ class RNNWavefunction(nn.Module):
                 # change (n_layers, n_unique, n_hidden) => (n_layers, nbatch, n_hidden)
                 if i == unique_sorb + 1:
                     hidden_state = hidden_state[:, inverse_i]
-                y0, hidden_state = self.rnn(x0, hidden_state)
+                y0, hidden_state = self.rnn(x0, hidden_state, i_th=i)
                 if i <= unique_sorb:
                     y0 = y0[inverse_i]
             # not use unique
             else:
                 # x0: (nbatch, 1, 2)
-                y0, hidden_state = self.rnn(x0, hidden_state)  # (nbatch, 2)
+                y0, hidden_state = self.rnn(x0, hidden_state, i_th=i)  # (nbatch, 2)
 
-            y0_amp = self.amp_impl(y0)  # (nbatch, 2)
+            y0_amp = self.amp_impl(y0, i_th=i)  # (nbatch, 2)
             if self.compute_phase and self.combine_amp_phase:
-                y0_phase = self.phase_impl(y0)  # (nbatch, 2)
+                y0_phase = self.phase_impl(y0, i_th=i)  # (nbatch, 2)
 
             # Constraints Fock space -> FCI space, and the prob of the last two orbital must be is 1.0
             if self.symmetry and i >= min_i:
@@ -363,10 +391,10 @@ class RNNWavefunction(nn.Module):
             # x0: (n_unique, 1, 2)
             # hidden_state: (num_layers, n_unique, num_hiddens)
             # y0: (n_unique, 2)
-            y0, hidden_state = self.rnn(x0, hidden_state)
-            y0_amp = self.amp_impl(y0)  # (n_unique, 2)
+            y0, hidden_state = self.rnn(x0, hidden_state, i_th=i)
+            y0_amp = self.amp_impl(y0, i_th=i)  # (n_unique, 2)
             if self.compute_phase and self.combine_amp_phase:
-                y0_phase = self.phase_impl(y0)  # (n_unique, 2)
+                y0_phase = self.phase_impl(y0, i_th=i)  # (n_unique, 2)
             lower_up = baseline_up + i // 2
             lower_down = baseline_down + i // 2
 
