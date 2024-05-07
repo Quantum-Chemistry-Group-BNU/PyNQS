@@ -3,7 +3,7 @@ import numpy as np
 from pyscf import scf, ci, gto, fci
 from torch import Tensor
 from typing import Tuple, List
-from numpy import ndarray
+from numpy.typing import NDArray
 
 from ci.wavefunction import CIWavefunction
 from utils import ONV, convert_onv
@@ -11,7 +11,7 @@ from libs.C_extension import onv_to_tensor
 
 
 def unpack_ucisd(
-    cisd_amp: ndarray[np.float64],
+    cisd_amp: NDArray[np.float64],
     sorb: int,
     nele: int,
     device=None,
@@ -128,7 +128,7 @@ def unpack_ucisd(
 
 
 def ucisd_to_fci(
-    cisd_amp: ndarray[np.float64],
+    cisd_amp: NDArray[np.float64],
     full_space: Tensor,
     sorb: int,
     nele: int,
@@ -142,7 +142,7 @@ def ucisd_to_fci(
 
 
 def fci_revise(
-    fci_amp: ndarray[np.float64],
+    fci_amp: NDArray[np.float64],
     full_space: Tensor,
     sorb: int,
     device=None,

@@ -109,7 +109,7 @@ class RNNWavefunction(nn.Module):
                 if self.sites_rnn:
                     self.linear_phase = nn.ModuleList([linear() for _ in range(sorb)])
                 else:
-                    self.linear_phase = nn.ModuleList([linear])
+                    self.linear_phase = nn.ModuleList([linear()])
             else:
                 self.linear_phase = self.linear_amp
 

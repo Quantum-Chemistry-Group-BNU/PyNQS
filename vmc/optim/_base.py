@@ -314,16 +314,18 @@ class BaseVMCOptimizer(ABC):
         Save L2-grad, max-grad and energy to list in each iteration, for plotting.
         """
         if self.rank == 0:
-            x: List[np.ndarray] = []
+            x1: List[Tensor] = []
+            x2: List[Tensor] = []
             for param in self.model.parameters():
                 if param.grad is not None:
-                    x.append(param.grad.reshape(-1).detach().to("cpu").numpy())
-            x = np.concatenate(x)
-            l2_grad = np.linalg.norm(x)
-            max_grad = np.abs(x).max()
+                    x1.append(param.grad.detach().norm().reshape(-1))
+                    x2.append(param.grad.detach().abs().max().reshape(-1))
+            l2_grad = torch.cat(x1).norm().item()
+            max_grad = torch.cat(x2).max().item()
             self.e_lst.append(e_total)
             self.grad_e_lst[0].append(l2_grad)
             self.grad_e_lst[1].append(max_grad)
+            del x1, x2
 
     def clip_grad(self, epoch: int) -> None:
         """
