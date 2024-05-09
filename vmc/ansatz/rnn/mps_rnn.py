@@ -479,6 +479,7 @@ class MPS_RNN_2D(nn.Module):
         if self.param_dtype == torch.complex128:
             if self.params_file is not None:
                 params = torch.load(self.params_file, map_location=self.device)["model"]
+                self.dcut_before = 2*int((params["module.parm_v_r"].shape[0]/(self.hilbert_local*self.nqubits)))
                 self.parm_M_h_r = (
                     torch.randn(
                         self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
@@ -819,7 +820,7 @@ class MPS_RNN_2D(nn.Module):
                 self.parm_eta_r[..., : self.dcut_before] = params["module.parm_eta"]
                 self.parm_eta = nn.Parameter(self.parm_eta_r)
 
-                if self.param_dtype == "regular":
+                if self.phase_type == "regular":
                     self.parm_c = (params["module.parm_c"].to(self.device)).view(
                         self.L, self.M // 2
                     )
@@ -887,7 +888,7 @@ class MPS_RNN_2D(nn.Module):
                         )
                         * self.iscale
                     )
-                if self.param_dtype == "regular":
+                if self.phase_type == "regular":
                     self.parm_w = nn.Parameter(
                         torch.randn(self.L, self.M // 2, self.dcut, **self.factory_kwargs_real)
                         * self.iscale

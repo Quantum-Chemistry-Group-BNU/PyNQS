@@ -331,6 +331,8 @@ class BaseVMCOptimizer(ABC):
         """
         clip model grad use 2-norm
         """
+        if self.lr_scheduler is not None:
+            epoch = self.lr_scheduler.last_epoch
         # change max clip-grad
         if self.clip_grad_scheduler is not None:
             g0 = self.clip_grad_scheduler(epoch) * self.initial_g0
