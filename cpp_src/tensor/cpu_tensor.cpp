@@ -192,21 +192,23 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
   // merged: (nbatch, ncomb)
   Tensor merged = get_merged_tensor_cpu(bra_tensor, nele, sorb, noA, noB);
   int *merged_ptr = merged.data_ptr<int32_t>();
-  for (int i = 0; i < nbatch; i++) {
-    for (int j = 1; j < ncomb; j++) {
-      if (flag_bit) {
-        // comb[i, j], comb_bit[i, j], merged[i]
-        squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
-                            &comb_bit_ptr[i * ncomb * sorb + j * sorb],
-                            &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
-                            noB);
-      } else {
-        squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
-                            &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
-                            noB);
+  at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+    for (const auto i : c10::irange(begin, end)) {
+      for (int j = 1; j < ncomb; j++) {
+        if (flag_bit) {
+          // comb[i, j], comb_bit[i, j], merged[i]
+          squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
+                              &comb_bit_ptr[i * ncomb * sorb + j * sorb],
+                              &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
+                              noB);
+        } else {
+          squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
+                              &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
+                              noB);
+        }
       }
     }
-  }
+  });
   return std::make_tuple(comb, comb_bit);
 }
 
@@ -243,26 +245,18 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
       reinterpret_cast<unsigned long *>(ket_tensor.data_ptr<uint8_t>());
   double *Hmat_ptr = Hmat.data_ptr<double>();
 
-  if (flag_eloc) {
-    for (int i = 0; i < n; i++) {
+  at::parallel_for(0, n, 0, [&](int64_t begin, int64_t end) {
+    for (const auto i : c10::irange(begin, end)) {
       for (int j = 0; j < m; j++) {
-        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[i, j])
-        Hmat_ptr[i * m + j] = squant::get_Hij_cpu(
-            &bra_ptr[i * bra_len], &ket_ptr[i * m * bra_len + j * bra_len],
-            h1e_ptr, h2e_ptr, sorb, nele, bra_len);
-      }
-    }
-  } else {
-    for (int i = 0; i < n; i++) {
-      for (int j = 0; j < m; j++) {
+        auto offset = flag_eloc * i * m * bra_len + j * bra_len;
+        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[i, j]), flag-eloc == True
         // Hmat[i, j] = get_Hij_cpu(bra[i], ket[m])
         Hmat_ptr[i * m + j] =
-            squant::get_Hij_cpu(&bra_ptr[i * bra_len], &ket_ptr[j * bra_len],
+            squant::get_Hij_cpu(&bra_ptr[i * bra_len], &ket_ptr[offset],
                                 h1e_ptr, h2e_ptr, sorb, nele, bra_len);
       }
     }
-  }
-
+  });
   return Hmat;
 }
 

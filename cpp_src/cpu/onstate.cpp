@@ -186,12 +186,14 @@ void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
       idx++;
     }
   }
-  const int reset = sorb % block;
+  int reset = sorb % block;
+  reset = reset > 0 ? reset:64;
   for (int j = 1; j <= reset; j++) {
     // if (idx >= sorb) break;
     lst[idx] = num_parity_cpu(bra[bra_len - 1], j);
     idx++;
   }
+  assert(idx == sorb);
 }
 
 int64_t permute_sgn_cpu(const int64_t *image2, const int64_t *onstate,
