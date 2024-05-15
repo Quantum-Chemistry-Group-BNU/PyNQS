@@ -143,7 +143,7 @@ def get_order(
 
 def calculate_p(h: Tensor, gamma: Tensor):
     """
-    The function to caculate the prob. per site
+    The function to calculate the prob. per site
     (local_hilbert_dim, dcut, n_batch) (local_hilbert_dim, dcut, n_batch) (dcut,dcut) -> (local_hilbert_dim, n_batch)
     where local_hilbert_dim is the number of conditions in one site
     dcut is the bond dim
@@ -157,19 +157,22 @@ def calculate_p(h: Tensor, gamma: Tensor):
     assert (gamma >= 0).sum() == (gamma.view(-1)).shape[0]
     return torch.einsum("iac,iac,a->ic", h.conj(), h, gamma)
 
+
 class FrozeSites(nn.Module):
     """
     Froze sites and swap like DMRG optimization
       'Left(Froze) -> Mid(Opt) -> Right(Froze)' and
       'Right(Froze) -> Mid(Opt) -> Left(Froze)'
     """
-    def __init__(self,
-                parameters: Tensor,
-                froze: bool = False,
-                opt_index: list[int] | int = None, 
-                view_complex: bool = True,
-                dim: int = 1,
-                ) -> None:
+
+    def __init__(
+        self,
+        parameters: Tensor,
+        froze: bool = False,
+        opt_index: list[int] | int = None,
+        view_complex: bool = True,
+        dim: int = 1,
+    ) -> None:
         super(FrozeSites, self).__init__()
         """
         opt_index(list[int]|int): ones-sites or [star, end)
@@ -194,12 +197,13 @@ class FrozeSites(nn.Module):
 
             split_size = [start, end - start, self._shape[dim] - end]
 
-            self.data = list(torch.split(parameters, split_size, dim=dim))
+            # using 'torch.split_with_sizes' and clone, memory-format maybe is unreasonable
+            self.data = list(torch.split_with_sizes_copy(parameters, split_size, dim))
             self._start = start
             self._end = end
-            self.data[0] = self.data[0].clone()
-            self.data[1] = self.data[1].clone()
-            self.data[2] = self.data[2].clone()
+            self.data[0] = self.data[0]
+            self.data[1] = self.data[1]
+            self.data[2] = self.data[2]
 
             self.register_buffer("left_sites", self.data[0])
             self.register_buffer("right_sites", self.data[2])
@@ -209,7 +213,7 @@ class FrozeSites(nn.Module):
             self.data: List[Tensor] = [None]
             self.data[0] = nn.Parameter(parameters)
             self.register_parameter("all_sites", self.data[0])
-        
+
         if view_complex:
             if self._shape[-1] != 2:
                 raise ValueError(f"Last dim must be 2")
@@ -271,6 +275,7 @@ class FrozeSites(nn.Module):
             s = f"Not-Froze, size:{tuple(self.data[0].size())}"
 
         return s
+
 
 class MPS_RNN_2D(nn.Module):
     """
@@ -459,12 +464,13 @@ class MPS_RNN_2D(nn.Module):
             self.det_lut = det_lut
 
     def extra_repr(self) -> str:
+        net_param_num = lambda net: sum(p.numel() for p in net.parameters())
         s = f"The MPS_RNN_2D is working on {self.device}.\n"
         s += f"The graph of this molecular is {self.M} * {self.L}.\n"
         s += f"The order is(Spatial orbital).\n"
         s += f"{torch.flip(self.order, dims=[0])}.\n"
         s += f"And the params dtype(JUST THE W AND v) is {self.param_dtype}.\n"
-        s += f"The number of params is {sum(p.numel() for p in self.parameters())}.\n"
+        s += f"The number of opt-params is {net_param_num(self)}.\n"
         if self.params_file is not None:
             s += f"Old-params-files: {self.params_file}, dcut-before: {self.dcut_before}.\n"
         if self.param_dtype == torch.complex128:
@@ -480,7 +486,6 @@ class MPS_RNN_2D(nn.Module):
             s += f"The number of phase is {(self.parm_w.numel())+(self.parm_c.numel())}.\n"
         if self.phase_type == "mlp":
             phase_num = 0
-            net_param_num = lambda net: sum(p.numel() for p in net.parameters())
             for i in range(len(self.phase_layers)):
                 phase_num += net_param_num(self.phase_layers[i])
             s += f"The number of phase is {phase_num}\n"
@@ -608,7 +613,9 @@ class MPS_RNN_2D(nn.Module):
             shape3 = (self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut, 2)
 
             if self.params_file is not None:
-                params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
+                params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)[
+                    "model"
+                ]
                 if "module.parm_v.mid_sites" in params:
                     froze_sites = True
                 elif "module.parm_v.all_sites" in params:
@@ -616,13 +623,14 @@ class MPS_RNN_2D(nn.Module):
 
                 # (self.L, self.M // 2, self.hilbert_local, self.dcut, 2)
                 if froze_sites:
-                    self.dcut_before = params["module.parm_v.mid_sites"].size(-2)
+                    dcut_before = params["module.parm_v.mid_sites"].size(-2)
                     start = params["module.parm_v.left_sites"].size(1)
                     end = start + params["module.parm_v.mid_sites"].size(1)
                     # opt_pos_before = [start, end]
                 else:
-                    self.dcut_before = params["module.parm_v.all_sites"].size(-2)
+                    dcut_before = params["module.parm_v.all_sites"].size(-2)
 
+                self.dcut_before = dcut_before
                 # self.dcut_before = 2*int((params["module.parm_v_r"].shape[0]/(self.hilbert_local*self.nqubits)))
                 # self.parm_M_h_r = (
                 #     torch.randn(
@@ -689,7 +697,7 @@ class MPS_RNN_2D(nn.Module):
                 #     params["module.parm_M_h_r"]
                 # ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
                 left2right = self.left2right
-                
+
                 # Fill M_h
                 if froze_sites:
                     # (L, fill-pos, hilbert_local, dcut_before, dcut_before)
@@ -697,21 +705,21 @@ class MPS_RNN_2D(nn.Module):
                         # left(Froze-opt) -> mid(opt) -> right(not-opt)
                         _M_h_left = torch.view_as_complex(params["module.parm_M_h.left_sites"])
                         _M_h_mid = torch.view_as_complex(params["module.parm_M_h.mid_sites"])
-                        M_h[..., :start, :, :self.dcut_before, :self.dcut_before] = _M_h_left
-                        M_h[..., start: end, :, :self.dcut_before, :self.dcut_before] = _M_h_mid
+                        M_h[..., :start, :, :dcut_before, :dcut_before] = _M_h_left
+                        M_h[..., start:end, :, :dcut_before, :dcut_before] = _M_h_mid
                     else:
                         # left(not-opt) <- mid(opt) <- right(froze-opt)
                         _M_h_mid = torch.view_as_complex(params["module.parm_M_h.mid_sites"])
                         _M_h_right = torch.view_as_complex(params["module.parm_M_h.right_sites"])
-                        M_h[..., start: end, :, :self.dcut_before, :self.dcut_before] = _M_h_mid
-                        M_h[..., end:, :, :self.dcut_before, :self.dcut_before] = _M_h_right
+                        M_h[..., start:end, :, :dcut_before, :dcut_before] = _M_h_mid
+                        M_h[..., end:, :, :dcut_before, :dcut_before] = _M_h_right
                 else:
                     # (L, M//2, hilbert_local, dcut_before, dcut_before)
                     _M_h = torch.view_as_complex(params["module.parm_M_h.all_sites"])
-                    M_h[..., : self.dcut_before, : self.dcut_before] = _M_h
+                    M_h[..., :dcut_before, :dcut_before] = _M_h
 
                 # self.parm_M_v = self.parm_M_v.clone()
-                # if self.nqubits != self.M: 
+                # if self.nqubits != self.M:
                 #     self.parm_M_v[..., : self.dcut_before, : self.dcut_before] = torch.view_as_complex(
                 #         params["module.parm_M_v_r"]
                 #     ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
@@ -724,19 +732,20 @@ class MPS_RNN_2D(nn.Module):
                             # left(Froze-opt) -> mid(opt) -> right(not-opt)
                             _M_v_left = torch.view_as_complex(params["module.parm_M_v.left_sites"])
                             _M_v_mid = torch.view_as_complex(params["module.parm_M_v.mid_sites"])
-                            M_v[..., :start, :, :self.dcut_before, :self.dcut_before] = _M_v_left
-                            M_v[..., start: end, :, :self.dcut_before, :self.dcut_before] = _M_v_mid
+                            M_v[..., :start, :, :dcut_before, :dcut_before] = _M_v_left
+                            M_v[..., start:end, :, :dcut_before, :dcut_before] = _M_v_mid
                         else:
                             # left(not-opt) <- mid(opt) <- right(froze-opt)
                             _M_v_mid = torch.view_as_complex(params["module.parm_M_v.mid_sites"])
-                            _M_v_right = torch.view_as_complex(params["module.parm_M_v.right_sites"])
-                            M_v[..., start: end, :, :self.dcut_before, :self.dcut_before] = _M_v_mid
-                            M_v[..., end:, :, :self.dcut_before, :self.dcut_before] = _M_v_right
+                            _M_v_right = torch.view_as_complex(
+                                params["module.parm_M_v.right_sites"]
+                            )
+                            M_v[..., start:end, :, :dcut_before, :dcut_before] = _M_v_mid
+                            M_v[..., end:, :, :dcut_before, :dcut_before] = _M_v_right
                     else:
                         # (L, M//2, hilbert_local, dcut_before, dcut_before)
                         _M_v = torch.view_as_complex(params["module.parm_M_v.all_sites"])
-                        M_v[..., : self.dcut_before, : self.dcut_before] = _M_v
-
+                        M_v[..., :dcut_before, :dcut_before] = _M_v
 
                 # self.parm_v = self.parm_v.clone()
                 # self.parm_v[..., : self.dcut_before] = torch.view_as_complex(
@@ -750,19 +759,18 @@ class MPS_RNN_2D(nn.Module):
                         # left(Froze-opt) -> mid(opt) -> right(not-opt)
                         _v_left = torch.view_as_complex(params["module.parm_v.left_sites"])
                         _v_mid = torch.view_as_complex(params["module.parm_v.mid_sites"])
-                        v[..., :start, :, :self.dcut_before] = _v_left
-                        v[..., start: end, :, :self.dcut_before] = _v_mid
+                        v[..., :start, :, :dcut_before] = _v_left
+                        v[..., start:end, :, :dcut_before] = _v_mid
                     else:
                         # left(not-opt) <- mid(opt) <- right(froze-opt)
                         _v_mid = torch.view_as_complex(params["module.parm_v.mid_sites"])
                         _v_right = torch.view_as_complex(params["module.parm_v.right_sites"])
-                        v[..., start: end, :, self.dcut_before] = _v_mid
-                        v[..., end:, :, :self.dcut_before] = _v_right
+                        v[..., start:end, :, :dcut_before] = _v_mid
+                        v[..., end:, :, :dcut_before] = _v_right
                 else:
                     # (L, M//2, hilbert_local, dcut_before, dcut_before)
                     _v = torch.view_as_complex(params["module.parm_v.all_sites"])
-                    v[...,: self.dcut_before] = _v
-
+                    v[..., : self.dcut_before] = _v
 
                 if self.use_tensor:
                     # self.parm_T = self.parm_T.clone()
@@ -784,21 +792,20 @@ class MPS_RNN_2D(nn.Module):
                             # left(Froze-opt) -> mid(opt) -> right(not-opt)
                             _T_left = torch.view_as_complex(params["module.parm_T.left_sites"])
                             _T_mid = torch.view_as_complex(params["module.parm_T.mid_sites"])
-                            T[..., :start, :, :self.dcut_before, :self.dcut_before, :self.dcut_before] = _T_left
-                            T[..., start: end, :, self.dcut_before, :self.dcut_before, :self.dcut_before] = _T_mid
+                            T[..., :start, :, :dcut_before, :dcut_before, :dcut_before] = _T_left
+                            T[..., start:end, :, :dcut_before, :dcut_before, :dcut_before] = _T_mid
                         else:
                             # left(not-opt) <- mid(opt) <- right(froze-opt)
                             _T_mid = torch.view_as_complex(params["module.parm_T.mid_sites"])
                             _T_right = torch.view_as_complex(params["module.parm_T.right_sites"])
-                            T[..., start: end, :, :self.dcut_before, :self.dcut_before, :self.dcut_before] = _T_mid
-                            T[..., :end, :, :self.dcut_before, :self.dcut_before, :self.dcut_before] = _T_right
+                            T[..., start:end, :, :dcut_before, :dcut_before, :dcut_before] = _T_mid
+                            T[..., end:, :, :dcut_before, :dcut_before, :dcut_before] = _T_right
                     else:
                         _T = torch.view_as_complex(params["module.parm_v.all_sites"])
-                        T[..., self.dcut_before, :self.dcut_before, :self.dcut_before] = _T
-
+                        T[..., :dcut_before, :dcut_before, :dcut_before] = _T
 
                 # self.parm_M_h = torch.view_as_real(self.parm_M_h).view(-1, 2)
-                # if self.nqubits != self.M: 
+                # if self.nqubits != self.M:
                 #     self.parm_M_v = torch.view_as_real(self.parm_M_v).view(-1, 2)
                 # self.parm_v = torch.view_as_real(self.parm_v).view(-1, 2)
                 # if self.use_tensor:
@@ -871,20 +878,19 @@ class MPS_RNN_2D(nn.Module):
                         # left(Froze-opt) -> mid(opt) -> right(not-opt)
                         _eta_left = torch.view_as_complex(params["module.parm_eta.left_sites"])
                         _eta_mid = torch.view_as_complex(params["module.parm_eta.mid_sites"])
-                        eta[..., :start,:self.dcut_before] = _eta_left
-                        eta[..., start: end, :self.dcut_before] = _eta_mid
+                        eta[..., :start, :dcut_before] = _eta_left
+                        eta[..., start:end, :dcut_before] = _eta_mid
                     else:
                         # left(not-opt) <- mid(opt) <- right(froze-opt)
                         _eta_mid = torch.view_as_complex(params["module.parm_eta.mid_sites"])
                         _eta_right = torch.view_as_complex(params["module.parm_eta.right_sites"])
-                        eta[..., start: end, :self.dcut_before] = _eta_mid
-                        eta[..., end:, : self.dcut_before] = _eta_right
+                        eta[..., start:end, :dcut_before] = _eta_mid
+                        eta[..., end:, :dcut_before] = _eta_right
                 else:
                     # (L, M//2, dcut_before)
                     _eta = torch.view_as_complex(params["module.parm_eta.all_sites"])
-                    eta[..., : self.dcut_before] = _eta
+                    eta[..., :dcut_before] = _eta
                 self.parm_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos)
-
 
                 if self.phase_type == "regular":
                     # self.parm_w_r = (
@@ -905,14 +911,14 @@ class MPS_RNN_2D(nn.Module):
                             # left(Froze-opt) -> mid(opt) -> right(not-opt)
                             _w_left = torch.view_as_complex(params["module.parm_w.left_sites"])
                             _w_mid = torch.view_as_complex(params["module.parm_w.mid_sites"])
-                            w[..., :start,:self.dcut_before] = _w_left
-                            w[..., start: end, :self.dcut_before] = _w_mid
+                            w[..., :start, :dcut_before] = _w_left
+                            w[..., start:end, :dcut_before] = _w_mid
                         else:
                             # left(not-opt) <- mid(opt) <- right(froze-opt)
                             _w_mid = torch.view_as_complex(params["module.parm_w.mid_sites"])
                             _w_right = torch.view_as_complex(params["module.parm_w.right_sites"])
-                            w[..., start: end, :self.dcut_before] = _w_mid
-                            w[..., end:, : self.dcut_before] = _w_right
+                            w[..., start:end, :dcut_before] = _w_mid
+                            w[..., end:, :dcut_before] = _w_right
                     else:
                         # (L, M//2, dcut_before)
                         _w = torch.view_as_complex(params["module.parm_w.all_sites"])
@@ -926,9 +932,8 @@ class MPS_RNN_2D(nn.Module):
                         c_r = torch.cat([_c_left, _c_mid, _c_right], dim=1)
                     else:
                         c_r = params["module.parm_c.all_sites"]
-                    
-                    self.parm_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos)
 
+                    self.parm_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos)
 
                     # self.parm_c = (params["module.parm_c_r"].to(self.device)).view(
                     #     self.L, self.M // 2, 2
@@ -1028,7 +1033,10 @@ class MPS_RNN_2D(nn.Module):
                     #     * self.iscale
                     # )
                     w_r = torch.randn(shape, **self.factory_kwargs_real) * self.iscale
-                    c_r = torch.randn(self.L, self.M//2, 2, **self.factory_kwargs_real) * self.iscale
+                    c_r = (
+                        torch.randn(self.L, self.M // 2, 2, **self.factory_kwargs_real)
+                        * self.iscale
+                    )
                     self.parm_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos)
                     self.parm_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos)
 
@@ -1039,7 +1047,6 @@ class MPS_RNN_2D(nn.Module):
                     #     self.L, self.M // 2, self.dcut
                     # )
                     # self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.L, self.M // 2)
-
 
                 # self.parm_eta_r = nn.Parameter(
                 #     torch.randn(self.M * self.L * self.dcut // 2, 2, **self.factory_kwargs_real)
@@ -1123,15 +1130,15 @@ class MPS_RNN_2D(nn.Module):
                         self.dcut_before,
                     )
                 self.parm_M_h = nn.Parameter(self.parm_M_h_r)
-                if self.nqubits == self.M: 
+                if self.nqubits == self.M:
                     self.parm_M_v = torch.zeros(
-                                self.L,
-                                self.M // 2,
-                                self.hilbert_local,
-                                self.dcut,
-                                self.dcut,
-                                device=self.device,
-                            )
+                        self.L,
+                        self.M // 2,
+                        self.hilbert_local,
+                        self.dcut,
+                        self.dcut,
+                        device=self.device,
+                    )
                 else:
                     self.parm_M_v = nn.Parameter(self.parm_M_v_r)
                 self.parm_v = nn.Parameter(self.parm_v_r)
@@ -1171,15 +1178,15 @@ class MPS_RNN_2D(nn.Module):
                     )
                     * self.iscale
                 )
-                if self.nqubits == self.M: 
+                if self.nqubits == self.M:
                     self.parm_M_v = torch.zeros(
-                                self.L,
-                                self.M // 2,
-                                self.hilbert_local,
-                                self.dcut,
-                                self.dcut,
-                                device=self.device,
-                            )
+                        self.L,
+                        self.M // 2,
+                        self.hilbert_local,
+                        self.dcut,
+                        self.dcut,
+                        device=self.device,
+                    )
                 else:
                     self.parm_M_v = nn.Parameter(
                         torch.zeros(
@@ -1505,7 +1512,6 @@ class MPS_RNN_2D(nn.Module):
         # 计算概率（振幅部分） 并归一化
         eta = torch.abs(self.parm_eta[a, b]) ** 2
 
-
         # "iac, a -> ic" # (4/2, nbatch)
         P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
         # P = torch.einsum(
@@ -1683,7 +1689,6 @@ class MPS_RNN_2D(nn.Module):
         else:
             for i in range(0, self.nqubits // 2):
                 P, h, h_ud, a, b = self.calculate_two_site(h, target, n_batch, i, sampling=False)
-
                 # logger.info(f"h: {h.shape}, h_ud: {h_ud.shape}")
                 # symmetry
                 psi_mask = self.symmetry_mask(2 * i, num_up, num_down)
@@ -1695,7 +1700,8 @@ class MPS_RNN_2D(nn.Module):
                 P = P / P.max(dim=0, keepdim=True)[0]
                 P = F.normalize(P, dim=0, eps=1e-15)
                 index = self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).reshape(1, -1)
-                amp = amp * P.gather(0, index).reshape(-1)  # (local_hilbert_dim, n_batch) -> (n_batch)
+                # (local_hilbert_dim, n_batch) -> (n_batch)
+                amp = amp * P.gather(0, index).reshape(-1)
 
                 # calculate phase
                 if self.phase_type == "regular":
@@ -1886,7 +1892,6 @@ if __name__ == "__main__":
         dcut=6,
         # tensor=False,
         M=16,
-        
         # graph_type="snake",
         # phase_type="regular",
         # phase_batch_norm=False,
@@ -1909,7 +1914,10 @@ if __name__ == "__main__":
     print(f"Psi^2 in AR-Sampling")
     print("--------------------------------")
     sample, counts, wf = model.ar_sampling(
-        n_sample=int(1e14), min_tree_height=9, use_dfs_sample=True, min_batch=1000,
+        n_sample=int(1e14),
+        min_tree_height=9,
+        use_dfs_sample=True,
+        min_batch=1000,
     )
     sample = (sample * 2 - 1).double()
     wf1 = model(sample)
