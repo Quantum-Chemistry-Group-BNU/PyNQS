@@ -45,9 +45,7 @@ class HiddenStates:
         self.use_list = use_list
         self.MTensor: MTensor | Tensor = None
         if self.use_list:
-            self.MTensor: MTensor = [
-                [torch.tensor([], device=device) for _ in range(L)] for _ in range(M)
-            ]
+            self.MTensor: MTensor = [[torch.tensor([], device=device) for _ in range(L)] for _ in range(M)]
             for i in range(M):
                 for j in range(L):
                     self.MTensor[i][j] = values.clone()
@@ -143,7 +141,7 @@ def get_order(
 
 def calculate_p(h: Tensor, gamma: Tensor):
     """
-    The function to caculate the prob. per site
+    The function to calculate the prob. per site
     (local_hilbert_dim, dcut, n_batch) (local_hilbert_dim, dcut, n_batch) (dcut,dcut) -> (local_hilbert_dim, n_batch)
     where local_hilbert_dim is the number of conditions in one site
     dcut is the bond dim
@@ -156,6 +154,126 @@ def calculate_p(h: Tensor, gamma: Tensor):
     """
     assert (gamma >= 0).sum() == (gamma.view(-1)).shape[0]
     return torch.einsum("iac,iac,a->ic", h.conj(), h, gamma)
+
+
+class FrozeSites(nn.Module):
+    """
+    Froze sites and swap like DMRG optimization
+      'Left(Froze) -> Mid(Opt) -> Right(Froze)' and
+      'Right(Froze) -> Mid(Opt) -> Left(Froze)'
+    """
+
+    def __init__(
+        self,
+        parameters: Tensor,
+        froze: bool = False,
+        opt_index: list[int] | int = None,
+        view_complex: bool = True,
+        dim: int = 1,
+    ) -> None:
+        super(FrozeSites, self).__init__()
+        """
+        opt_index(list[int]|int): ones-sites or [star, end)
+        dim(int): Froze dim
+        view_complex(bool): view Real to Complex, dose not change memory
+        """
+        self.froze = froze
+        self.opt_index = opt_index
+        self.dim = dim
+        self._shape = parameters.shape
+        assert not torch.is_complex(parameters)
+
+        if self.froze:
+            if isinstance(opt_index, int):
+                start = opt_index
+                end = opt_index + 1
+            elif isinstance(opt_index, list):
+                start, end = tuple(opt_index)
+                assert end > start
+            else:
+                raise NotImplementedError(f"Not support {opt_index}")
+
+            assert end <= self._shape[dim]
+            split_size = [start, end - start, self._shape[dim] - end]
+
+            # using 'torch.split_with_sizes' and clone, memory-format maybe is unreasonable
+            self.data = list(torch.split_with_sizes_copy(parameters, split_size, dim))
+            self._start = start
+            self._end = end
+            self.data[0] = self.data[0]
+            self.data[1] = self.data[1]
+            self.data[2] = self.data[2]
+
+            self.register_buffer("left_sites", self.data[0])
+            self.register_buffer("right_sites", self.data[2])
+            self.data[1] = nn.Parameter(self.data[1])
+            self.register_parameter("mid_sites", self.data[1])
+        else:
+            self.data: List[Tensor] = [None]
+            self.data[0] = nn.Parameter(parameters)
+            self.register_parameter("all_sites", self.data[0])
+
+        if view_complex:
+            if self._shape[-1] != 2:
+                raise ValueError(f"Last dim must be 2")
+            self.view_as_complex()
+
+    def __getitem__(self, idx: tuple | int) -> Tensor:
+        # only support [i, j, ...] or [i, j]
+        if not self.froze:
+            return self.data[0][idx]
+        else:
+            if isinstance(idx, tuple):
+                assert len(idx) == 2 or 3
+                i, j, *k = idx
+                if len(k) == 0 or k == [Ellipsis]:
+                    if self.dim == 1:
+                        return self._select_site(j)[i]
+                    elif self.dim == 0:
+                        return self._select_site(i)[j]
+                else:
+                    raise NotImplementedError(f"Not support slice: {idx}")
+            else:
+                raise NotImplementedError(f"Not support slice: {idx}")
+
+    def _select_site(self, pos: int) -> Tensor:
+        #  left-site, mid-site, right-site
+        if pos < self._start:
+            return torch.select(self.data[0], self.dim, pos)
+        elif pos < self._end:
+            return torch.select(self.data[1], self.dim, pos - self._start)
+        else:
+            return torch.select(self.data[2], self.dim, pos - self._end)
+
+    def view_as_complex(self) -> None:
+        if self.froze:
+            self.data[0] = torch.view_as_complex(self.data[0])
+            self.data[1] = torch.view_as_complex(self.data[1])
+            self.data[2] = torch.view_as_complex(self.data[2])
+        else:
+            self.data[0] = torch.view_as_complex(self.data[0])
+
+    def view_as_real(self) -> None:
+        if self.froze:
+            self.data[0] = torch.view_as_real(self.data[0])
+            self.data[1] = torch.view_as_real(self.data[1])
+            self.data[2] = torch.view_as_real(self.data[2])
+        else:
+            self.data[0] = torch.view_as_real(self.data[0])
+
+    def numel(self) -> int:
+        return sum(map(torch.numel, self.data))
+
+    def __repr__(self) -> str:
+        if self.froze:
+            s = "Left(Froze)->Mid->Right(Froze): "
+            s += f"{tuple(self.data[0].size())}->"
+            s += f"{tuple(self.data[1].size())}->"
+            s += f"{tuple(self.data[2].size())}"
+        else:
+            s = f"Not-Froze, size:{tuple(self.data[0].size())}"
+
+        return s
 
 
 class MPS_RNN_2D(nn.Module):
@@ -203,6 +321,11 @@ class MPS_RNN_2D(nn.Module):
         sample_order: Tensor | list[int] = None,
         det_lut: DetLUT = None,
         rank_independent_sampling: bool = False,
+        # swap Opt mid-sites.
+        froze_sites: bool = False,
+        opt_sites_pos: list[int] | int = None,
+        left2right: bool = True,  # No using
+        froze_dim: int = 1,  # No using
     ) -> None:
         super(MPS_RNN_2D, self).__init__()
         # 模型输入参数
@@ -232,6 +355,12 @@ class MPS_RNN_2D(nn.Module):
         self.min_batch: int = None
         self.min_tree_height: int = None
         self.rank_independent_sampling = rank_independent_sampling
+
+        # Left->Mid-Right
+        self.opt_sites_pos = opt_sites_pos
+        self.froze_sites = froze_sites
+        self.left2right = left2right
+        self.froze_dim = froze_dim
 
         if self.phase_type == "mlp":
             self.n_out_phase = n_out_phase
@@ -334,12 +463,13 @@ class MPS_RNN_2D(nn.Module):
             self.det_lut = det_lut
 
     def extra_repr(self) -> str:
+        net_param_num = lambda net: sum(p.numel() for p in net.parameters())
         s = f"The MPS_RNN_2D is working on {self.device}.\n"
         s += f"The graph of this molecular is {self.M} * {self.L}.\n"
         s += f"The order is(Spatial orbital).\n"
         s += f"{torch.flip(self.order, dims=[0])}.\n"
         s += f"And the params dtype(JUST THE W AND v) is {self.param_dtype}.\n"
-        s += f"The number of params is {sum(p.numel() for p in self.parameters())}.\n"
+        s += f"The number of opt-params is {net_param_num(self)}.\n"
         if self.params_file is not None:
             s += f"Old-params-files: {self.params_file}, dcut-before: {self.dcut_before}.\n"
         if self.param_dtype == torch.complex128:
@@ -355,7 +485,6 @@ class MPS_RNN_2D(nn.Module):
             s += f"The number of phase is {(self.parm_w.numel())+(self.parm_c.numel())}.\n"
         if self.phase_type == "mlp":
             phase_num = 0
-            net_param_num = lambda net: sum(p.numel() for p in net.parameters())
             for i in range(len(self.phase_layers)):
                 phase_num += net_param_num(self.phase_layers[i])
             s += f"The number of phase is {phase_num}\n"
@@ -391,14 +520,10 @@ class MPS_RNN_2D(nn.Module):
             )
 
             self.parm_v_r = nn.Parameter(
-                torch.randn(
-                    self.M * self.L * self.hilbert_local * self.dcut, 2, **self.factory_kwargs_real
-                )
+                torch.randn(self.M * self.L * self.hilbert_local * self.dcut, 2, **self.factory_kwargs_real)
                 * self.iscale
             )
-            self.parm_v = torch.view_as_complex(self.parm_v_r).view(
-                self.L, self.M, self.hilbert_local, self.dcut
-            )
+            self.parm_v = torch.view_as_complex(self.parm_v_r).view(self.L, self.M, self.hilbert_local, self.dcut)
             if self.use_tensor:
                 self.parm_T_r = nn.Parameter(
                     torch.randn(
@@ -412,19 +537,14 @@ class MPS_RNN_2D(nn.Module):
                     self.L, self.M, self.hilbert_local, self.dcut, self.dcut, self.dcut
                 )
             self.parm_w_r = nn.Parameter(
-                torch.randn(self.M * self.L * self.dcut, 2, **self.factory_kwargs_real)
-                * self.iscale
+                torch.randn(self.M * self.L * self.dcut, 2, **self.factory_kwargs_real) * self.iscale
             )
             self.parm_w = torch.view_as_complex(self.parm_w_r).view(self.L, self.M, self.dcut)
 
-            self.parm_c_r = nn.Parameter(
-                torch.zeros(self.M * self.L, 2, device=self.device) * self.iscale
-            )
+            self.parm_c_r = nn.Parameter(torch.zeros(self.M * self.L, 2, device=self.device) * self.iscale)
             self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.L, self.M)
 
-            self.parm_eta_r = nn.Parameter(
-                torch.randn(self.M * self.L * self.dcut, 2, **self.factory_kwargs_real)
-            )
+            self.parm_eta_r = nn.Parameter(torch.randn(self.M * self.L * self.dcut, 2, **self.factory_kwargs_real))
             self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(self.L, self.M, self.dcut)
 
         else:
@@ -440,15 +560,11 @@ class MPS_RNN_2D(nn.Module):
                 * self.iscale
             )
             self.parm_M_v = nn.Parameter(
-                torch.zeros(
-                    self.L, self.M, self.hilbert_local, self.dcut, self.dcut, device=self.device
-                )
-                * self.iscale
+                torch.zeros(self.L, self.M, self.hilbert_local, self.dcut, self.dcut, device=self.device) * self.iscale
             )
 
             self.parm_v = nn.Parameter(
-                torch.randn(self.L, self.M, self.hilbert_local, self.dcut, **self.factory_kwargs)
-                * self.iscale
+                torch.randn(self.L, self.M, self.hilbert_local, self.dcut, **self.factory_kwargs) * self.iscale
             )
             if self.use_tensor:
                 self.parm_T = nn.Parameter(
@@ -464,268 +580,244 @@ class MPS_RNN_2D(nn.Module):
                     * self.iscale
                 )
 
-            self.parm_w = nn.Parameter(
-                torch.randn(self.L, self.M, self.dcut, **self.factory_kwargs_real) * self.iscale
-            )
-            self.parm_c = nn.Parameter(
-                torch.zeros(self.L, self.M, device=self.device) * self.iscale
-            )
+            self.parm_w = nn.Parameter(torch.randn(self.L, self.M, self.dcut, **self.factory_kwargs_real) * self.iscale)
+            self.parm_c = nn.Parameter(torch.zeros(self.L, self.M, device=self.device) * self.iscale)
 
-            self.parm_eta = nn.Parameter(
-                torch.randn(self.L, self.M, self.dcut, **self.factory_kwargs_real)
-            )
+            self.parm_eta = nn.Parameter(torch.randn(self.L, self.M, self.dcut, **self.factory_kwargs_real))
 
     def param_init_two_site(self):
         if self.param_dtype == torch.complex128:
+            shape = (self.L, self.M // 2, self.dcut, 2)
+            shape1 = (self.L, self.M // 2, self.hilbert_local, self.dcut, 2)
+            shape2 = (self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut, 2)
+            shape3 = (self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut, 2)
+
+            # No random re-fill
+            fill_other = True
+
             if self.params_file is not None:
-                params = torch.load(self.params_file, map_location=self.device)["model"]
-                self.dcut_before = 2*int((params["module.parm_v_r"].shape[0]/(self.hilbert_local*self.nqubits)))
-                self.parm_M_h_r = (
-                    torch.randn(
-                        self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
-                        2,
-                        **self.factory_kwargs_real,
-                    )
-                    * 1e-7
-                )
-                self.parm_M_v_r = (
-                    torch.zeros(
-                        self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
-                        2,
-                        device=self.device,
-                    )
-                )
-                self.parm_v_r = (
-                    torch.randn(
-                        self.M * self.L * self.hilbert_local * self.dcut // 2,
-                        2,
-                        **self.factory_kwargs_real,
-                    )
-                    * 1e-7
-                )
-                if self.use_tensor:
-                    self.parm_T_r = (
-                        torch.randn(
-                            self.M
-                            * self.L
-                            * self.hilbert_local
-                            * self.dcut
-                            * self.dcut
-                            * self.dcut
-                            // 2,
-                            2,
-                            **self.factory_kwargs_real,
-                        )
-                        * 1e-7
-                    )
-                self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut
-                )
-                self.parm_M_v = torch.view_as_complex(self.parm_M_v_r).view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut
-                )
-                self.parm_v = torch.view_as_complex(self.parm_v_r).view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut
-                )
-                if self.use_tensor:
-                    self.parm_T = torch.view_as_complex(self.parm_T_r).view(
-                        self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut
-                    )
+                params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
+                if "module.parm_v.mid_sites" in params:
+                    froze_sites = True
+                elif "module.parm_v.all_sites" in params:
+                    froze_sites = False
 
-                self.parm_M_h = self.parm_M_h.clone()
-                self.parm_M_h[..., : self.dcut_before, : self.dcut_before] = torch.view_as_complex(
-                    params["module.parm_M_h_r"]
-                ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
-                self.parm_M_v = self.parm_M_v.clone()
-                if self.nqubits != self.M: 
-                    self.parm_M_v[..., : self.dcut_before, : self.dcut_before] = torch.view_as_complex(
-                        params["module.parm_M_v_r"]
-                    ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
-                self.parm_v = self.parm_v.clone()
-                self.parm_v[..., : self.dcut_before] = torch.view_as_complex(
-                    params["module.parm_v_r"]
-                ).view(self.L, self.M // 2, self.hilbert_local, self.dcut_before)
-                if self.use_tensor:
-                    self.parm_T = self.parm_T.clone()
-                    self.parm_T[
-                        ..., : self.dcut_before, : self.dcut_before, : self.dcut_before
-                    ] = torch.view_as_complex(params["module.parm_T_r"]).view(
-                        self.L,
-                        self.M // 2,
-                        self.hilbert_local,
-                        self.dcut_before,
-                        self.dcut_before,
-                        self.dcut_before,
-                    )
-
-                self.parm_M_h = torch.view_as_real(self.parm_M_h).view(-1, 2)
-                if self.nqubits != self.M: 
-                    self.parm_M_v = torch.view_as_real(self.parm_M_v).view(-1, 2)
-                self.parm_v = torch.view_as_real(self.parm_v).view(-1, 2)
-                if self.use_tensor:
-                    self.parm_T = torch.view_as_real(self.parm_T).view(-1, 2)
-
-                self.parm_M_h_r = nn.Parameter(self.parm_M_h)
-                if self.nqubits == self.M: 
-                    self.parm_M_v = torch.zeros(
-                                self.L,
-                                self.M // 2,
-                                self.hilbert_local,
-                                self.dcut,
-                                self.dcut,
-                                device=self.device,
-                            ) + 0*1j
-                    self.parm_M_v_r = torch.view_as_real(self.parm_M_v).view(-1, 2)
+                # (L, M // 2, hilbert_local, dcut, 2)
+                if froze_sites:
+                    dcut_before = params["module.parm_v.mid_sites"].size(-2)
+                    start = params["module.parm_v.left_sites"].size(1)
+                    end = start + params["module.parm_v.mid_sites"].size(1)
+                    # opt_pos_before = [start, end]
                 else:
-                    self.parm_M_v_r = nn.Parameter(self.parm_M_v)
-                self.parm_v_r = nn.Parameter(self.parm_v)
-                if self.use_tensor:
-                    self.parm_T_r = nn.Parameter(self.parm_T)
+                    dcut_before = params["module.parm_v.all_sites"].size(-2)
 
-                self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut
-                )
-                self.parm_M_v = torch.view_as_complex(self.parm_M_v_r).view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut
-                )
-                self.parm_v = torch.view_as_complex(self.parm_v_r).view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut
-                )
-                if self.use_tensor:
-                    self.parm_T = torch.view_as_complex(self.parm_T_r).view(
-                        self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut
-                    )
+                self.dcut_before = dcut_before
 
-                self.parm_eta_r = (
-                    torch.rand((self.M * self.L * self.dcut // 2, 2), **self.factory_kwargs_real)
-                    * 1e-7
-                )
-                self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(
-                    self.L, self.M // 2, self.dcut
-                )
-                self.parm_eta = self.parm_eta.clone()
-                self.parm_eta[..., : self.dcut_before] = torch.view_as_complex(
-                    params["module.parm_eta_r"]
-                ).view(self.L, self.M // 2, self.dcut_before)
-                self.parm_eta = torch.view_as_real(self.parm_eta).view(-1, 2)
-                self.parm_eta_r = nn.Parameter(self.parm_eta)
-                self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(
-                    self.L, self.M // 2, self.dcut
-                )
+                M_h_r = torch.randn(shape2, **self.factory_kwargs_real) * 1e-7
+                M_v_r = torch.zeros(shape2, **self.factory_kwargs_real)
+
+                v_r = torch.randn(shape1, **self.factory_kwargs_real) * 1e-7
+                if self.use_tensor:
+                    T_r = torch.randn(shape3, **self.factory_kwargs_real) * 1e-7
+
+                M_h = torch.view_as_complex(M_h_r)
+                M_v = torch.view_as_complex(M_v_r)
+                v = torch.view_as_complex(v_r)
+                if self.use_tensor:
+                    T = torch.view_as_complex(T_r)
+
+                left2right = self.left2right
+
+                # Fill M_h
+                if froze_sites:
+                    # (L, fill-pos, hilbert_local, dcut_before, dcut_before)
+                    _M_h_left = torch.view_as_complex(params["module.parm_M_h.left_sites"])
+                    _M_h_mid = torch.view_as_complex(params["module.parm_M_h.mid_sites"])
+                    _M_h_right = torch.view_as_complex(params["module.parm_M_h.right_sites"])
+                    M_h[..., start:end, :, :dcut_before, :dcut_before] = _M_h_mid
+                    if not fill_other:
+                        if left2right:
+                            # left(Froze-opt) -> mid(opt) -> right(not-opt)
+                            M_h[..., :start, :, :dcut_before, :dcut_before] = _M_h_left
+                        else:
+                            # left(not-opt) <- mid(opt) <- right(froze-opt)
+                            M_h[..., end:, :, :dcut_before, :dcut_before] = _M_h_right
+                    else:
+                        M_h[..., :start, :, :dcut_before, :dcut_before] = _M_h_left
+                        M_h[..., end:, :, :dcut_before, :dcut_before] = _M_h_right
+                else:
+                    # (L, M//2, hilbert_local, dcut_before, dcut_before)
+                    _M_h = torch.view_as_complex(params["module.parm_M_h.all_sites"])
+                    M_h[..., :dcut_before, :dcut_before] = _M_h
+
+                # Fill M_v
+                if self.nqubits != self.M:
+                    # (L, fill-pos, hilbert_local, dcut_before, dcut_before)
+                    if froze_sites:
+                        _M_v_left = torch.view_as_complex(params["module.parm_M_v.left_sites"])
+                        _M_v_mid = torch.view_as_complex(params["module.parm_M_v.mid_sites"])
+                        _M_v_right = torch.view_as_complex(params["module.parm_M_v.right_sites"])
+                        M_v[..., start:end, :, :dcut_before, :dcut_before] = _M_v_mid
+                        if not fill_other:
+                            if left2right:
+                                # left(Froze-opt) -> mid(opt) -> right(not-opt)
+                                M_v[..., :start, :, :dcut_before, :dcut_before] = _M_v_left
+                            else:
+                                # left(not-opt) <- mid(opt) <- right(froze-opt)
+                                M_v[..., end:, :, :dcut_before, :dcut_before] = _M_v_right
+                        else:
+                            M_v[..., :start, :, :dcut_before, :dcut_before] = _M_v_left
+                            M_v[..., end:, :, :dcut_before, :dcut_before] = _M_v_right
+                    else:
+                        # (L, M//2, hilbert_local, dcut_before, dcut_before)
+                        _M_v = torch.view_as_complex(params["module.parm_M_v.all_sites"])
+                        M_v[..., :dcut_before, :dcut_before] = _M_v
+
+                # Fill v:
+                if froze_sites:
+                    # (L, fill-pos, hilbert_local, dcut-before)
+                    _v_left = torch.view_as_complex(params["module.parm_v.left_sites"])
+                    _v_mid = torch.view_as_complex(params["module.parm_v.mid_sites"])
+                    _v_right = torch.view_as_complex(params["module.parm_v.right_sites"])
+                    v[..., start:end, :, :dcut_before] = _v_mid
+                    if not fill_other:
+                        if left2right:
+                            # left(Froze-opt) -> mid(opt) -> right(not-opt)
+                            v[..., :start, :, :dcut_before] = _v_left
+                        else:
+                            # left(not-opt) <- mid(opt) <- right(froze-opt)
+                            v[..., end:, :, :dcut_before] = _v_right
+                    else:
+                        v[..., :start, :, :dcut_before] = _v_left
+                        v[..., end:, :, :dcut_before] = _v_right
+                else:
+                    # (L, M//2, hilbert_local, dcut_before, dcut_before)
+                    _v = torch.view_as_complex(params["module.parm_v.all_sites"])
+                    v[..., : self.dcut_before] = _v
+
+                # Fill T
+                if self.use_tensor:
+                    if froze_sites:
+                        # (L, fill-pos, hilbert_local, dcut-before, dcut-before, dcut-before)
+                        _T_left = torch.view_as_complex(params["module.parm_T.left_sites"])
+                        _T_mid = torch.view_as_complex(params["module.parm_T.mid_sites"])
+                        _T_right = torch.view_as_complex(params["module.parm_T.right_sites"])
+                        T[..., start:end, :, :dcut_before, :dcut_before, :dcut_before] = _T_mid
+                        if not fill_other:
+                            if left2right:
+                                # left(Froze-opt) -> mid(opt) -> right(not-opt)
+                                T[..., :start, :, :dcut_before, :dcut_before, :dcut_before] = _T_left
+                            else:
+                                # left(not-opt) <- mid(opt) <- right(froze-opt)
+                                T[..., end:, :, :dcut_before, :dcut_before, :dcut_before] = _T_right
+                        else:
+                            T[..., :start, :, :dcut_before, :dcut_before, :dcut_before] = _T_left
+                            T[..., end:, :, :dcut_before, :dcut_before, :dcut_before] = _T_right
+                    else:
+                        _T = torch.view_as_complex(params["module.parm_v.all_sites"])
+                        T[..., :dcut_before, :dcut_before, :dcut_before] = _T
+
+                if self.nqubits == self.M:
+                    self.parm_M_v = torch.view_as_complex(M_v_r)
+
+                self.parm_M_h = FrozeSites(M_h_r, self.froze_sites, self.opt_sites_pos)
+                self.parm_M_v = FrozeSites(M_v_r, self.froze_sites, self.opt_sites_pos)
+                self.parm_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos)
+
+                if self.use_tensor:
+                    self.parm_T = FrozeSites(T_r, self.froze_sites, self.opt_sites_pos)
+
+                # (L, M//2, dcut)
+                eta_r = torch.rand(shape, **self.factory_kwargs_real) * 1e-7
+                eta = torch.view_as_complex(eta_r)
+                # Fill eta
+                if froze_sites:
+                    # (L, fill-pos, dcut_before)
+                    _eta_left = torch.view_as_complex(params["module.parm_eta.left_sites"])
+                    _eta_mid = torch.view_as_complex(params["module.parm_eta.mid_sites"])
+                    _eta_right = torch.view_as_complex(params["module.parm_eta.right_sites"])
+                    eta[..., start:end, :dcut_before] = _eta_mid
+                    if not fill_other:
+                        if left2right:
+                            # left(Froze-opt) -> mid(opt) -> right(not-opt)
+                            eta[..., :start, :dcut_before] = _eta_left
+                        else:
+                            # left(not-opt) <- mid(opt) <- right(froze-opt)
+                            eta[..., end:, :dcut_before] = _eta_right
+                    else:
+                        eta[..., end:, :dcut_before] = _eta_right
+                        eta[..., :start, :dcut_before] = _eta_left
+                else:
+                    # (L, M//2, dcut_before)
+                    _eta = torch.view_as_complex(params["module.parm_eta.all_sites"])
+                    eta[..., :dcut_before] = _eta
+                self.parm_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos)
 
                 if self.phase_type == "regular":
-                    self.parm_w_r = (
-                        torch.rand(
-                            (self.M * self.L * self.dcut // 2, 2), **self.factory_kwargs_real
-                        )
-                        * 1e-7
-                    )
-                    self.parm_w = torch.view_as_complex(self.parm_w_r).view(
-                        self.L, self.M // 2, self.dcut
-                    )
-                    self.parm_c = (params["module.parm_c_r"].to(self.device)).view(
-                        self.L, self.M // 2, 2
-                    )
-                    self.parm_c = torch.view_as_complex(self.parm_c)
-                    self.parm_w = self.parm_w.clone()
-                    self.parm_w[..., : self.dcut_before] = torch.view_as_complex(
-                        params["module.parm_w_r"]
-                    ).view(self.L, self.M // 2, self.dcut_before)
+                    w_r = torch.randn(shape, **self.factory_kwargs_real) * 1e-7
+                    w = torch.view_as_complex(w_r)
 
-                    self.parm_w = torch.view_as_real(self.parm_w).view(-1, 2)
-                    self.parm_c = torch.view_as_real(self.parm_c).view(-1, 2)
+                    # Fill eta
+                    if froze_sites:
+                        # (L, fill-pos, dcut_before)
+                        _w_left = torch.view_as_complex(params["module.parm_w.left_sites"])
+                        _w_mid = torch.view_as_complex(params["module.parm_w.mid_sites"])
+                        _w_right = torch.view_as_complex(params["module.parm_w.right_sites"])
+                        w[..., start:end, :dcut_before] = _w_mid
+                        if not fill_other:
+                            if left2right:
+                                # left(Froze-opt) -> mid(opt) -> right(not-opt)
+                                w[..., :start, :dcut_before] = _w_left
+                            else:
+                                # left(not-opt) <- mid(opt) <- right(froze-opt)
+                                w[..., end:, :dcut_before] = _w_right
+                        else:
+                            w[..., :start, :dcut_before] = _w_left
+                            w[..., end:, :dcut_before] = _w_right
+                    else:
+                        # (L, M//2, dcut_before)
+                        _w = torch.view_as_complex(params["module.parm_w.all_sites"])
+                        w[..., : self.dcut_before] = _w
+                    self.parm_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos)
 
-                    self.parm_w_r = nn.Parameter(self.parm_w)
-                    self.parm_c_r = nn.Parameter(self.parm_c)
+                    if froze_sites:
+                        _c_left = params["module.parm_c.left_sites"]
+                        _c_mid = params["module.parm_c.mid_sites"]
+                        _c_right = params["module.parm_c.right_sites"]
+                        c_r = torch.cat([_c_left, _c_mid, _c_right], dim=1)
+                    else:
+                        c_r = params["module.parm_c.all_sites"]
 
-                    self.parm_w = torch.view_as_complex(self.parm_w_r).view(
-                        self.L, self.M // 2, self.dcut
-                    )
-                    self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.L, self.M // 2)
-
+                    self.parm_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos)
             else:
-                self.parm_M_h_r = nn.Parameter(
-                    torch.randn(
-                        self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
-                        2,
-                        **self.factory_kwargs_real,
-                    )
-                    * self.iscale
-                )
-                if self.nqubits == self.M: 
-                    self.parm_M_v_r = torch.zeros(
-                            self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
-                            2,
-                            device=self.device,
-                        )
+                M_h_r = torch.randn(shape2, **self.factory_kwargs_real) * self.iscale
+                self.parm_M_h = FrozeSites(M_h_r, self.froze_sites, self.opt_sites_pos)
+
+                M_v_r = torch.zeros(shape2, **self.factory_kwargs_real)
+                if self.nqubits == self.M:
+                    # FIXME: one-dim does not add in model
+                    self.parm_M_v = torch.view_as_complex(M_v_r)
                 else:
-                    self.parm_M_v_r = nn.Parameter(
-                            torch.zeros(
-                                self.M * self.L * self.hilbert_local * self.dcut * self.dcut // 2,
-                                2,
-                                device=self.device,
-                            )
-                            * self.iscale
-                        )
-                self.parm_v_r = nn.Parameter(
-                    torch.randn(
-                        self.M * self.L * self.hilbert_local * self.dcut // 2,
-                        2,
-                        **self.factory_kwargs_real,
-                    )
-                    * self.iscale
-                )
-                if self.use_tensor:
-                    self.parm_T_r = nn.Parameter(
-                        torch.randn(
-                            self.M
-                            * self.L
-                            * self.hilbert_local
-                            * self.dcut
-                            * self.dcut
-                            * self.dcut
-                            // 2,
-                            2,
-                            **self.factory_kwargs_real,
-                        )
-                        * self.iscale
-                    )
+                    self.parm_M_v = FrozeSites(M_v_r, self.froze_sites, self.opt_sites_pos)
 
-                self.parm_M_h = torch.view_as_complex(self.parm_M_h_r).view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut
-                )
-                self.parm_M_v = torch.view_as_complex(self.parm_M_v_r).view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut
-                )
-                self.parm_v = torch.view_as_complex(self.parm_v_r).view(
-                    self.L, self.M // 2, self.hilbert_local, self.dcut
-                )
+                v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
+                self.parm_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos)
+
                 if self.use_tensor:
-                    self.parm_T = torch.view_as_complex(self.parm_T_r).view(
-                        self.L, self.M // 2, self.hilbert_local, self.dcut, self.dcut, self.dcut
-                    )
+                    # (M, L, hilbert_local, dcut, dcut, dcut, 2)
+                    T_r = torch.randn(shape3, **self.factory_kwargs_real) * self.iscale
+                    self.parm_T = FrozeSites(T_r, self.froze_sites, self.opt_sites_pos)
+
                 if self.phase_type == "regular":
-                    self.parm_w_r = nn.Parameter(
-                        torch.randn(self.M * self.L * self.dcut // 2, 2, **self.factory_kwargs_real)
-                        * self.iscale
-                    )
-                    self.parm_c_r = nn.Parameter(
-                        torch.zeros(self.M * self.L // 2, 2, device=self.device) * self.iscale
-                    )
-                    self.parm_w = torch.view_as_complex(self.parm_w_r).view(
-                        self.L, self.M // 2, self.dcut
-                    )
-                    self.parm_c = torch.view_as_complex(self.parm_c_r).view(self.L, self.M // 2)
+                    w_r = torch.randn(shape, **self.factory_kwargs_real) * self.iscale
+                    c_r = torch.randn(self.L, self.M // 2, 2, **self.factory_kwargs_real) * self.iscale
+                    self.parm_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos)
+                    self.parm_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos)
+                # (M, L, dcut, 2)
+                eta_r = torch.randn(shape, **self.factory_kwargs_real) * self.iscale
+                self.parm_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos)
 
-                self.parm_eta_r = nn.Parameter(
-                    torch.randn(self.M * self.L * self.dcut // 2, 2, **self.factory_kwargs_real)
-                )
-
-                self.parm_eta = torch.view_as_complex(self.parm_eta_r).view(
-                    self.L, self.M // 2, self.dcut
-                )
-
-        else:
+        elif self.param_dtype == torch.double:
             if self.params_file is not None:
                 params = torch.load(self.params_file, map_location=self.device)["model"]
                 self.parm_M_h = (
@@ -774,22 +866,22 @@ class MPS_RNN_2D(nn.Module):
                         * self.iscale
                     )
                 self.parm_M_h_r = self.parm_M_h.clone()
-                self.parm_M_h_r[..., : self.dcut_before, : self.dcut_before] = params[
-                    "module.parm_M_h"
-                ].view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
+                self.parm_M_h_r[..., : self.dcut_before, : self.dcut_before] = params["module.parm_M_h"].view(
+                    self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before
+                )
                 self.parm_M_v_r = self.parm_M_v.clone()
-                self.parm_M_v_r[..., : self.dcut_before, : self.dcut_before] = params[
-                    "module.parm_M_v"
-                ].view(self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before)
+                self.parm_M_v_r[..., : self.dcut_before, : self.dcut_before] = params["module.parm_M_v"].view(
+                    self.L, self.M // 2, self.hilbert_local, self.dcut_before, self.dcut_before
+                )
                 self.parm_v_r = self.parm_v.clone()
                 self.parm_v_r[..., : self.dcut_before] = params["module.parm_v"].view(
                     self.L, self.M // 2, self.hilbert_local, self.dcut_before
                 )
                 if self.use_tensor:
                     self.parm_T_r = self.parm_T.clone()
-                    self.parm_T_r[
-                        ..., : self.dcut_before, : self.dcut_before, : self.dcut_before
-                    ] = params["module.parm_T"].view(
+                    self.parm_T_r[..., : self.dcut_before, : self.dcut_before, : self.dcut_before] = params[
+                        "module.parm_T"
+                    ].view(
                         self.L,
                         self.M // 2,
                         self.hilbert_local,
@@ -798,35 +890,31 @@ class MPS_RNN_2D(nn.Module):
                         self.dcut_before,
                     )
                 self.parm_M_h = nn.Parameter(self.parm_M_h_r)
-                if self.nqubits == self.M: 
+                if self.nqubits == self.M:
                     self.parm_M_v = torch.zeros(
-                                self.L,
-                                self.M // 2,
-                                self.hilbert_local,
-                                self.dcut,
-                                self.dcut,
-                                device=self.device,
-                            )
+                        self.L,
+                        self.M // 2,
+                        self.hilbert_local,
+                        self.dcut,
+                        self.dcut,
+                        device=self.device,
+                    )
                 else:
                     self.parm_M_v = nn.Parameter(self.parm_M_v_r)
                 self.parm_v = nn.Parameter(self.parm_v_r)
                 if self.use_tensor:
                     self.parm_T = nn.Parameter(self.parm_T_r)
                 self.parm_eta_r = (
-                    torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real)
-                    * self.iscale
+                    torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real) * self.iscale
                 )
                 self.parm_eta_r = self.parm_eta_r.clone()
                 self.parm_eta_r[..., : self.dcut_before] = params["module.parm_eta"]
                 self.parm_eta = nn.Parameter(self.parm_eta_r)
 
                 if self.phase_type == "regular":
-                    self.parm_c = (params["module.parm_c"].to(self.device)).view(
-                        self.L, self.M // 2
-                    )
+                    self.parm_c = (params["module.parm_c"].to(self.device)).view(self.L, self.M // 2)
                     self.parm_w_r = (
-                        torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real)
-                        * self.iscale
+                        torch.randn((self.L, self.M // 2, self.dcut), **self.factory_kwargs_real) * self.iscale
                     )
 
                     self.parm_w_r = self.parm_w_r.clone()
@@ -834,7 +922,6 @@ class MPS_RNN_2D(nn.Module):
 
                     self.parm_w = nn.Parameter(self.parm_w_r)
                     self.parm_c = nn.Parameter(self.parm_c_r)
-
             else:
                 self.parm_M_h = nn.Parameter(
                     torch.randn(
@@ -847,15 +934,15 @@ class MPS_RNN_2D(nn.Module):
                     )
                     * self.iscale
                 )
-                if self.nqubits == self.M: 
+                if self.nqubits == self.M:
                     self.parm_M_v = torch.zeros(
-                                self.L,
-                                self.M // 2,
-                                self.hilbert_local,
-                                self.dcut,
-                                self.dcut,
-                                device=self.device,
-                            )
+                        self.L,
+                        self.M // 2,
+                        self.hilbert_local,
+                        self.dcut,
+                        self.dcut,
+                        device=self.device,
+                    )
                 else:
                     self.parm_M_v = nn.Parameter(
                         torch.zeros(
@@ -870,10 +957,7 @@ class MPS_RNN_2D(nn.Module):
                     )
 
                 self.parm_v = nn.Parameter(
-                    torch.randn(
-                        self.L, self.M // 2, self.hilbert_local, self.dcut, **self.factory_kwargs
-                    )
-                    * self.iscale
+                    torch.randn(self.L, self.M // 2, self.hilbert_local, self.dcut, **self.factory_kwargs) * self.iscale
                 )
                 if self.use_tensor:
                     self.parm_T = nn.Parameter(
@@ -890,15 +974,10 @@ class MPS_RNN_2D(nn.Module):
                     )
                 if self.phase_type == "regular":
                     self.parm_w = nn.Parameter(
-                        torch.randn(self.L, self.M // 2, self.dcut, **self.factory_kwargs_real)
-                        * self.iscale
+                        torch.randn(self.L, self.M // 2, self.dcut, **self.factory_kwargs_real) * self.iscale
                     )
-                    self.parm_c = nn.Parameter(
-                        torch.zeros(self.L, self.M // 2, device=self.device) * self.iscale
-                    )
-                self.parm_eta = nn.Parameter(
-                    torch.randn(self.L, self.M // 2, self.dcut, **self.factory_kwargs_real)
-                )
+                    self.parm_c = nn.Parameter(torch.zeros(self.L, self.M // 2, device=self.device) * self.iscale)
+                self.parm_eta = nn.Parameter(torch.randn(self.L, self.M // 2, self.dcut, **self.factory_kwargs_real))
 
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
         """
@@ -1012,58 +1091,44 @@ class MPS_RNN_2D(nn.Module):
             q_l = self.state_to_int(target[:, l], sites=1)  # 第i-1个site的具体sigma (n_batch)
             q_l = (q_l.view(1, 1, -1)).repeat(1, self.dcut, 1)
 
-            h_h = h_h.gather(0, q_k).view(
-                self.dcut, n_batch
-            )  # (dcut ,n_batch) 这个直接取“一维”附近，即可
-            h_v = h_v.gather(0, q_l).view(
-                self.dcut, n_batch
-            )  # (dcut ,n_batch) 这个要取竖着的附近才行（“二维”附近）
+            h_h = h_h.gather(0, q_k).view(self.dcut, n_batch)  # (dcut ,n_batch) 这个直接取“一维”附近，即可
+            h_v = h_v.gather(0, q_l).view(self.dcut, n_batch)  # (dcut ,n_batch) 这个要取竖着的附近才行（“二维”附近）
             if self.use_tensor:
                 T = torch.einsum("iabc,an,bn->icn", self.parm_T[a, b, ...], h_h, h_v)
 
             M_cat = torch.cat([self.parm_M_h[a, b, ...], self.parm_M_v[a, b, ...]], -1)
             h_cat = torch.cat([h_h, h_v], 0)
-            h_ud = torch.einsum("acb,bd->acd", M_cat, h_cat) + (
-                torch.unsqueeze(self.parm_v[a, b], -1)
-            ).repeat(1, 1, n_batch)
+            h_ud = torch.einsum("acb,bd->acd", M_cat, h_cat) + (torch.unsqueeze(self.parm_v[a, b], -1)).repeat(
+                1, 1, n_batch
+            )
             if self.use_tensor:
                 h_ud = h_ud + T
             # 确保数值稳定性的操作
-            normal = torch.einsum(
-                "ijk,ijk->ijk", h_ud.conj(), h_ud
-            ).real  # 分母上sqrt里面 n_banth应该是一样的
+            normal = torch.einsum("ijk,ijk->ijk", h_ud.conj(), h_ud).real  # 分母上sqrt里面 n_banth应该是一样的
             normal = torch.mean(normal, dim=(0, 1))
             normal = torch.sqrt(normal)
             normal = (normal.view(1, 1, -1)).repeat(self.hilbert_local, self.dcut, 1)
-            h_ud = (
-                h_ud / normal
-            )  # 确保数值稳定性的归一化（是按照(S5)归一化，计算矩阵Frobenius二范数）
+            h_ud = h_ud / normal  # 确保数值稳定性的归一化（是按照(S5)归一化，计算矩阵Frobenius二范数）
             h = h.clone()
             h[a, b] = h_ud  # 更新h
             # 计算概率（振幅部分） 并归一化
             eta = torch.abs(self.parm_eta[a, b]) ** 2
             if self.param_dtype == torch.complex128:
                 eta = eta + 0 * 1j
-            P = torch.einsum(
-                "iac,iac,a->ic", h_ud.conj(), h_ud, eta
-            )  # -> (local_hilbert_dim, n_batch)
+            P = torch.einsum("iac,iac,a->ic", h_ud.conj(), h_ud, eta)  # -> (local_hilbert_dim, n_batch)
             P = P / torch.sum(P, dim=0)
             # print(P)
             P = torch.sqrt(P)
             index = self.state_to_int(target[:, i], sites=1).view(1, -1)
             amp = amp * P.gather(0, index).view(-1)  # (local_hilbert_dim, n_batch) -> (n_batch)
 
-            index_phi = (self.state_to_int(target[:, i], sites=1).view(1, 1, n_batch)).repeat(
-                1, self.dcut, 1
-            )
+            index_phi = (self.state_to_int(target[:, i], sites=1).view(1, 1, n_batch)).repeat(1, self.dcut, 1)
             h_i = h_ud.gather(0, index_phi).view(self.dcut, n_batch)
             # h_i = h[a, b].gather(0, q_k).view(self.dcut, n_batch)
             if self.param_dtype == torch.complex128:
                 h_i = h_i.to(torch.complex128)
             # 计算相位
-            phi_i = (
-                self.parm_w[a, b] @ h_i + self.parm_c[a, b]
-            )  # (dcut) (dcut, n_batch)  -> (n_batch)
+            phi_i = self.parm_w[a, b] @ h_i + self.parm_c[a, b]  # (dcut) (dcut, n_batch)  -> (n_batch)
             phi = phi + torch.angle(phi_i)
         return amp, phi
 
@@ -1123,7 +1188,6 @@ class MPS_RNN_2D(nn.Module):
             k = k - 1
         # 第i-1个site的具体sigma (n_batch)
         q_k = self.state_to_int(target[:, 2 * k : 2 * k + 2], sites=2)
-        # breakpoint()
         # q_k = (torch.unsqueeze(q_k.view(-1,n_batch),0)).repeat(1, self.dcut, 1)
         q_k = (q_k.view(1, 1, -1)).repeat(1, self.dcut, 1)
 
@@ -1136,17 +1200,16 @@ class MPS_RNN_2D(nn.Module):
             l = 0
         # 第i-1个site的具体sigma (n_batch)
         q_l = self.state_to_int(target[:, 2 * l : 2 * l + 2], sites=2)
-        q_l = (q_l.view(1, 1, -1)).repeat(1, self.dcut, 1)
+        q_l = (q_l.reshape(1, 1, -1)).repeat(1, self.dcut, 1)
 
         if sampling:
             if i == 0:
                 q_k = torch.zeros(1, self.dcut, n_batch, device=self.device, dtype=torch.int64)
                 q_l = torch.zeros(1, self.dcut, n_batch, device=self.device, dtype=torch.int64)
-        # breakpoint()
         # (dcut ,n_batch) 这个直接取“一维”附近，即可
-        h_h = h_h.gather(0, q_k).view(self.dcut, n_batch)
+        h_h = h_h.gather(0, q_k).reshape(self.dcut, n_batch)
         # (dcut ,n_batch) 这个要取竖着的附近才行（“二维”附近）
-        h_v = h_v.gather(0, q_l).view(self.dcut, n_batch)
+        h_v = h_v.gather(0, q_l).reshape(self.dcut, n_batch)
         if self.use_tensor:
             T = torch.einsum("iabc,an,bn->icn", self.parm_T[a, b, ...], h_h, h_v)
         # 更新纵向 (hilbert_local,dcut,dcut) (dcut,n_batch) -> (hilbert_local,dcut,n_batch)
@@ -1180,7 +1243,6 @@ class MPS_RNN_2D(nn.Module):
         h[a, b] = h_ud
         # 计算概率（振幅部分） 并归一化
         eta = torch.abs(self.parm_eta[a, b]) ** 2
-
 
         # "iac, a -> ic" # (4/2, nbatch)
         P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
@@ -1218,9 +1280,7 @@ class MPS_RNN_2D(nn.Module):
             if self.hilbert_local == 4:
                 # h: (2, 4, 4, dcut, n-unique), h_ud: (4, dcut, n-unique)
                 with profiler.record_function("Update amp"):
-                    psi_amp_k, h, h_ud, a, b = self.calculate_two_site(
-                        h, x0, n_batch, i, sampling=True
-                    )
+                    psi_amp_k, h, h_ud, a, b = self.calculate_two_site(h, x0, n_batch, i, sampling=True)
             else:
                 raise NotImplementedError(f"Please use the 2-sites mode")
 
@@ -1246,9 +1306,7 @@ class MPS_RNN_2D(nn.Module):
                 sample_counts = counts_i[mask_count]  # (unique-next)
                 sample_unique = self.joint_next_samples(sample_unique, mask=mask_count)
                 repeat_nums = mask_count.sum(dim=1)  # bool in [0, 4]
-                amps_value = torch.mul(
-                    amps_value.repeat_interleave(repeat_nums, 0), psi_amp_k[mask_count]
-                )
+                amps_value = torch.mul(amps_value.repeat_interleave(repeat_nums, 0), psi_amp_k[mask_count])
                 h.repeat_interleave(repeat_nums, -1)
 
             # calculate phase
@@ -1359,7 +1417,6 @@ class MPS_RNN_2D(nn.Module):
         else:
             for i in range(0, self.nqubits // 2):
                 P, h, h_ud, a, b = self.calculate_two_site(h, target, n_batch, i, sampling=False)
-
                 # logger.info(f"h: {h.shape}, h_ud: {h_ud.shape}")
                 # symmetry
                 psi_mask = self.symmetry_mask(2 * i, num_up, num_down)
@@ -1370,14 +1427,15 @@ class MPS_RNN_2D(nn.Module):
                 # normalize, and avoid numerical error
                 P = P / P.max(dim=0, keepdim=True)[0]
                 P = F.normalize(P, dim=0, eps=1e-15)
-                index = self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).view(1, -1)
-                amp = amp * P.gather(0, index).view(-1)  # (local_hilbert_dim, n_batch) -> (n_batch)
+                index = self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).reshape(1, -1)
+                # (local_hilbert_dim, n_batch) -> (n_batch)
+                amp = amp * P.gather(0, index).reshape(-1)
 
                 # calculate phase
                 if self.phase_type == "regular":
                     # (dcut) (dcut, n_batch)  -> (n_batch)
-                    index_phi = index.view(1, 1, -1).repeat(1, self.dcut, 1)
-                    h_i = h_ud.gather(0, index_phi).view(self.dcut, n_batch)
+                    index_phi = index.reshape(1, 1, -1).repeat(1, self.dcut, 1)
+                    h_i = h_ud.gather(0, index_phi).reshape(self.dcut, n_batch)
                     if self.param_dtype == torch.complex128:
                         h_i = h_i.to(torch.complex128)
                     phi_i = self.parm_w[a, b] @ h_i + self.parm_c[a, b]
@@ -1403,9 +1461,7 @@ class MPS_RNN_2D(nn.Module):
         if self.det_lut is not None:
             psi = torch.where(psi.isnan(), torch.full_like(psi, 0), psi)
 
-        extra_phase = permute_sgn(
-            torch.arange(self.nqubits, device=self.device), target.long(), self.nqubits
-        )
+        extra_phase = permute_sgn(torch.arange(self.nqubits, device=self.device), target.long(), self.nqubits)
         psi = psi * extra_phase
         return psi
 
@@ -1538,9 +1594,7 @@ if __name__ == "__main__":
     nele = 16
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     length = fock_space.shape[0]
-    fci_space = onv_to_tensor(
-        get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb
-    )
+    fci_space = onv_to_tensor(get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb)
     dim = fci_space.size(0)
     # print(fock_space)
     # model = MPS_RNN_1D(
@@ -1562,7 +1616,6 @@ if __name__ == "__main__":
         dcut=6,
         # tensor=False,
         M=16,
-        
         # graph_type="snake",
         # phase_type="regular",
         # phase_batch_norm=False,
@@ -1585,7 +1638,10 @@ if __name__ == "__main__":
     print(f"Psi^2 in AR-Sampling")
     print("--------------------------------")
     sample, counts, wf = model.ar_sampling(
-        n_sample=int(1e14), min_tree_height=9, use_dfs_sample=True, min_batch=1000,
+        n_sample=int(1e14),
+        min_tree_height=9,
+        use_dfs_sample=True,
+        min_batch=1000,
     )
     sample = (sample * 2 - 1).double()
     wf1 = model(sample)
