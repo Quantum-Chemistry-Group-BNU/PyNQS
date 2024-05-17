@@ -375,3 +375,35 @@ tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
   // std::endl;
   return std::make_tuple(result, mask);
 }
+
+myHashTable test_hash_cuda(const Tensor &bra_key, const int sorb) {
+  // int64_t ele_num = 10000;
+
+  // (nbatch, bra_len * 8)
+  const int64_t ele_num = bra_key.size(0);
+  auto key_ptr = reinterpret_cast<unsigned long>(bra_key.clone().data_ptr<uint8_t>());
+  auto device = bra_key.device();
+  Tensor values = torch::arange(
+      ele_num, torch::TensorOptions().dtype(torch::kInt64).device(device));
+  auto value_ptr = values.data_ptr<int64_t>();
+
+  // hashTable setting
+  float avg2cacheline = 0.3;
+  float avg2bsize = 0.55;
+  int cacheline_size = 128 / sizeof(KeyT);               // 缓存行 8
+  int avg_size = cacheline_size * avg2cacheline;         // 平均容量 3.2
+  int bucket_size = avg_size / avg2bsize;                //  桶大小
+  int bucket_num = (ele_num + avg_size - 1) / avg_size;  // 桶的总数
+
+  myHashTable ht;
+  // std::cout << ptr[0] << "  " << ptr[1] << std::endl;
+  while (!build_hashtable(ht, (KeyT *)key_ptr, (ValueT *)value_ptr, bucket_num,
+                          bucket_size, ele_num)) {
+    bucket_size = 1.4 * bucket_size;
+    avg2bsize = (float)avg_size / bucket_size;
+    printf(
+        "Build hash table failed! The avg2bsize is %f now. Rebuilding... ...\n",
+        avg2bsize);
+  }
+  return ht;
+}

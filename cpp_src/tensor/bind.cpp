@@ -275,4 +275,23 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
   m.def("wavefunction_lut_map", &wavefunction_lut_map,
         "unordered map implement not binary search");
+  m.def("hash_test", &test_hash_cuda, "test_hash");
+
+#ifdef GPU
+  // TODO: 100000 cost: 727MiB memory?
+  py::class_<myHashTable>(m, "HashTable", "this is testing")
+      .def(py::init())
+      .def_readwrite("bucketNum", &myHashTable::bNum)
+      .def_readwrite("bucketSize", &myHashTable::bSize)
+      .def_property_readonly(
+          "memory",
+          [](myHashTable &ht) {
+            size_t total_size = ht.bNum * ht.bSize;
+            size_t memory_size =
+                (sizeof(KeyT) * total_size) + (sizeof(ValueT) * total_size) +
+                (sizeof(int) * ht.bNum) + (sizeof(BFT) * ht.bNum);
+            return memory_size;
+          })
+      .def("cleanMemory", [](myHashTable &ht) { return freeHashTable(ht); });
+#endif
 }
