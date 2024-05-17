@@ -1,6 +1,7 @@
 #include "cuda_handle_error.h"
 #include "hashTable_cuda.h"
 #include <iostream>
+#include "cuda_handle_error.h"
 
 __global__ void build_hashtable_kernel(myHashTable ht, KeyT *all_keys,
                                        ValueT *all_values, int ele_num,
@@ -19,8 +20,9 @@ __global__ void build_hashtable_kernel(myHashTable ht, KeyT *all_keys,
     int write_off = atomicAdd(bucket_count + hashed_value, 1);
     if (write_off >= bucket_size) {
       build_failure[0] = 1;
-      // printf("keyIdx is %d, hashed value is %d, now size is %d, bucket-size %d, error\n", i, hashed_value, write_off, bucket_size);
-      // overflow bucket_size
+      // printf("keyIdx is %d, hashed value is %d, now size is %d, bucket-size
+      // %d, error\n", i, hashed_value, write_off, bucket_size); overflow
+      // bucket_size
       break;
     }
     keys[hashed_value * bucket_size + write_off] = my_key;
@@ -50,6 +52,47 @@ __global__ void build_hashtable_bf_kernel(myHashTable ht) {
   return;
 }
 
+__global__ void hash_lookup_kerenl(myHashTable &ht, unsigned long *keys,
+                                   int64_t *values, const int64_t length) {
+  int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idn >= length)
+    return;
+
+  int64_t big_id[2];
+  big_id[0] = keys[2 * idn];
+  big_id[1] = keys[2 * idn + 1];
+  KeyT key(big_id[0], big_id[1]);
+  int64_t off = ht.search_key(key);
+  printf("num: %ld , %ld, idn: %ld\n", big_id[0], big_id[1], idn);
+  // if (off != -1) {
+  //   values[idn] = ht.values[off].data[0];
+  // } else {
+  //   values[idn] = -1;
+  // }
+}
+
+void hash_lookup(myHashTable &ht, unsigned long *keys, int64_t *values,
+                 const int64_t length) {
+  printf("Lookup length: %ld\n", length);
+  cudaEvent_t start, stop;
+  float esp_time_gpu;
+
+  dim3 blockDim(256);
+  dim3 gridDim((length + blockDim.x - 1) / blockDim.x);
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  cudaEventRecord(start, 0);
+
+  hash_lookup_kerenl<<<gridDim, blockDim>>>(ht, keys, values, length);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
+
+  (cudaEventRecord(stop, 0));
+  (cudaEventSynchronize(stop));
+  (cudaEventElapsedTime(&esp_time_gpu, start, stop));
+  printf("Time for build_hashtable_kernel is: %f ms\n", esp_time_gpu);
+}
+
 bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
                      int bucket_num, int bucket_size, int ele_num) {
 
@@ -68,9 +111,10 @@ bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
   int total_size = ht.bNum * ht.bSize;
   //. total memory:
   // 占用总内存
-  auto memory= sizeof(KeyT)*(total_size) + sizeof(ValueT)*total_size + sizeof(int)*bucket_num + sizeof(BFT)*bucket_num;
-  
-  std::cout << "Memory: " << memory/std::pow(2.0, 20) << " MiB " << std::endl;
+  auto memory = sizeof(KeyT) * (total_size) + sizeof(ValueT) * total_size +
+                sizeof(int) * bucket_num + sizeof(BFT) * bucket_num;
+
+  std::cout << "Memory: " << memory / std::pow(2.0, 20) << " MiB " << std::endl;
   CUDA_TRY(cudaMalloc((void **)&ht.keys, sizeof(KeyT) * total_size));
   CUDA_TRY(cudaMalloc((void **)&ht.values, sizeof(ValueT) * total_size));
   CUDA_TRY(cudaMalloc((void **)&ht.bCount, sizeof(int) * bucket_num));

@@ -113,7 +113,7 @@ __inline__ __device__ __host__ int myHashFunc(KeyT value, int threshold) {
     char v = (~values[len - 1]) * (len & 1) + (values[len - 1]) * (~(len & 1));
     hash = hash * seed + (v & 0xF);
   }
-  // printf("hash: %d threshold %d\n", hash & 0x7FFFFFFF, threshold);
+  // printf("BKDR hash: %d threshold %d\n", hash & 0x7FFFFFFF, threshold);
   return (hash & 0x7FFFFFFF) % threshold;
 }
 
@@ -173,24 +173,25 @@ struct myHashTable {
   BFT *bf;  // BloomFilter
   int bNum;
   int bSize;
-  __inline__ __device__ int64_t search_key(KeyT key) {
+  __inline__ __device__ __host__ int64_t search_key(KeyT key) {
     int hashvalue = myHashFunc(key, bNum);
-    int my_bucket_size = bCount[hashvalue];
-    KeyT *list = keys + (int64_t)hashvalue * bSize;
-    int threshold = sizeof(BFT) * 8;
-    BFT my_bf = bf[hashvalue];
-    // BloomFilter, false positive probabilistic
-    if (!((my_bf >> hashFunc2(key, threshold)) & 1) ||
-        !((my_bf >> hashFunc3(key, threshold)) & 1)) {
-      return -1;
-    }
-
-    for (int i = 0; i < my_bucket_size; i++) {
-      if (list[i] == key) {
-        return hashvalue * bSize + i;
-      }
-    }
-    return -1;
+    // int my_bucket_size = bCount[hashvalue];
+    // KeyT *list = keys + (int64_t)hashvalue * bSize;
+    // int threshold = sizeof(BFT) * 8;
+    // BFT my_bf = bf[hashvalue];
+    // // BloomFilter, false positive probabilistic
+    // if (!((my_bf >> hashFunc2(key, threshold)) & 1) ||
+    //     !((my_bf >> hashFunc3(key, threshold)) & 1)) {
+    //   return -1;
+    // }
+    // printf("hashvalue: %d, bucket-size: %d", hashvalue, 1211);
+  //   for (int i = 0; i < my_bucket_size; i++) {
+  //     if (list[i] == key) {
+  //       // printf("off: %d", hashvalue * bSize + i);
+  //       return hashvalue * bSize + i;
+  //     }
+  //   }
+  //   return -1;
   }
 };
 
@@ -217,3 +218,6 @@ __global__ void build_hashtable_bf_kernel(myHashTable ht);
 
 bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
                      int bucket_num, int bucket_size, int ele_num);
+
+void hash_lookup(myHashTable &ht, unsigned long *keys, int64_t *values,
+                 const int64_t length);

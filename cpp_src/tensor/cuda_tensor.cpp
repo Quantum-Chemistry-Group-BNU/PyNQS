@@ -381,7 +381,7 @@ myHashTable test_hash_cuda(const Tensor &bra_key, const int sorb) {
 
   // (nbatch, bra_len * 8)
   const int64_t ele_num = bra_key.size(0);
-  auto key_ptr = reinterpret_cast<unsigned long>(bra_key.clone().data_ptr<uint8_t>());
+  auto key_ptr = reinterpret_cast<unsigned long *>(bra_key.clone().data_ptr<uint8_t>());
   auto device = bra_key.device();
   Tensor values = torch::arange(
       ele_num, torch::TensorOptions().dtype(torch::kInt64).device(device));
@@ -405,5 +405,11 @@ myHashTable test_hash_cuda(const Tensor &bra_key, const int sorb) {
         "Build hash table failed! The avg2bsize is %f now. Rebuilding... ...\n",
         avg2bsize);
   }
+  // Tensor values1 = torch::empty_like(values);
+  // auto *val_ptr = values.data_ptr<int64_t>();
+  // unsigned long *key_ptr1 = reinterpret_cast<unsigned long *>(bra_key.clone().data_ptr<uint8_t>());
+  // std::cout << bra_key.is_cuda() << " " << "ptr: " << values1.is_cuda() << std::endl;
+  // hash_lookup(ht, key_ptr1, val_ptr, ele_num);
+
   return ht;
 }
