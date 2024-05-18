@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <numeric>
@@ -56,6 +57,7 @@ struct KeyT {
     ptr[1] = v1;
   }
   __device__ __host__ KeyT(int64_t v1, int64_t v2) {
+    // printf("v1: %ld, v2: %ld\n", v1, v2);
     int64_t *ptr = static_cast<int64_t *>((void *)data);
     ptr[0] = v1;
     ptr[1] = v2;
@@ -76,7 +78,7 @@ struct KeyT {
   }
 };
 struct ValueT {
-  int64_t data[1];
+  int64_t data[1] = {10};
 };
 
 #define _len 16
@@ -153,6 +155,7 @@ struct myHashTable {
   int bNum;
   int bSize;
   __inline__ __device__ __host__ int64_t search_key(KeyT key) {
+    // printf("key %ld, bNum: %ld", &key, bNum);
     int hashvalue = myHashFunc(key, bNum);
     int my_bucket_size = bCount[hashvalue];
     KeyT *list = keys + (int64_t)hashvalue * bSize;
@@ -163,14 +166,14 @@ struct myHashTable {
         !((my_bf >> hashFunc3(key, threshold)) & 1)) {
       return -1;
     }
-    // printf("hashvalue: %d, bucket-size: %d", hashvalue, 1211);
-      for (int i = 0; i < my_bucket_size; i++) {
-        if (list[i] == key) {
-          // printf("off: %d", hashvalue * bSize + i);
-          return hashvalue * bSize + i;
-        }
+    // printf("hashvalue: %d, bucket-size: %d", hashvalue, bSize);
+    for (int i = 0; i < my_bucket_size; i++) {
+      if (list[i] == key) {
+        // printf("off: %d", hashvalue * bSize + i);
+        return hashvalue * bSize + i;
       }
-      return -1;
+    }
+    return -1;
   }
 };
 
@@ -230,28 +233,29 @@ __global__ void build_hashtable_bf_kernel(myHashTable ht) {
   return;
 }
 
-__global__ void hash_lookup_kerenl(myHashTable &ht, unsigned long *keys,
+__global__ void hash_lookup_kerenl(myHashTable ht, unsigned long *keys,
                                    int64_t *values, const int64_t length) {
   int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn >= length)
     return;
 
-  int64_t big_id[2];
+  uint64_t big_id[2];
   big_id[0] = keys[2 * idn];
   big_id[1] = keys[2 * idn + 1];
   KeyT key(big_id[0], big_id[1]);
   int64_t off = ht.search_key(key);
-  printf("num: %ld , %ld, idn: %ld\n", big_id[0], big_id[1], idn);
-  // if (off != -1) {
-  //   values[idn] = ht.values[off].data[0];
-  // } else {
-  //   values[idn] = -1;
-  // }
+
+  if (off != -1) {
+    values[idn] = ht.values[off].data[0];
+  } else {
+    values[idn] = -1;
+  }
+  // printf("offset: %ld, values: %ld\n", off, values[idn]);
 }
 
-void hash_lookup(myHashTable &ht, unsigned long *keys, int64_t *values,
+void hash_lookup(myHashTable ht, unsigned long *keys, int64_t *values,
                  const int64_t length) {
-  printf("Lookup length: %ld\n", length);
+  // printf("Lookup length: %ld\n", length);
   cudaEvent_t start, stop;
   float esp_time_gpu;
 
@@ -268,22 +272,12 @@ void hash_lookup(myHashTable &ht, unsigned long *keys, int64_t *values,
   (cudaEventRecord(stop, 0));
   (cudaEventSynchronize(stop));
   (cudaEventElapsedTime(&esp_time_gpu, start, stop));
-  printf("Time for build_hashtable_kernel is: %f ms\n", esp_time_gpu);
+  printf("Time for lookup_kernel is: %f ms\n", esp_time_gpu);
 }
 
 bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
                      int bucket_num, int bucket_size, int ele_num) {
 
-  // ht.bNum = bucket_num;
-  // ht.bSize = bucket_size;
-  // // std::cout << "bucket-num: " << bucket_num << " bucket-size: " <<
-  // bucket_size
-  // //           << " ele-num: " << ele_num << std::endl;
-  // int total_size = ht.bNum * ht.bSize;
-  // int64_t *data = static_cast<int64_t *>((void *)all_keys);
-  // for (int64_t i = 0; i < 4; i=i+2){
-  //   printf("%ld,  %ld\n", data[i], data[i+1]);
-  // }
   ht.bNum = bucket_num;
   ht.bSize = bucket_size;
 
@@ -292,7 +286,6 @@ bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
 
   int total_size = ht.bNum * ht.bSize;
   //. total memory:
-  // 占用总内存
   auto memory = sizeof(KeyT) * (total_size) + sizeof(ValueT) * total_size +
                 sizeof(int) * bucket_num + sizeof(BFT) * bucket_num;
 
@@ -350,31 +343,33 @@ bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
 }
 
 int main() {
-  //  /opt/nvidia/bin/nvcc -L/opt/cuda/lib -lcudart -std=c++17 test_hash.cu -O3 && ./a.out 
-  const int ele_num = 1 << 24;
+  //  /opt/nvidia/bin/nvcc -L/opt/cuda/lib -lcudart -std=c++17 test_hash.cu -O3 && ./a.out
+  const int ele_num = 1 << 20;
   std::vector<unsigned long> key(ele_num * 2, 0);
 
   std::vector<unsigned long> value(ele_num);
   std::iota(value.begin(), value.end(), 0);
 
-  const bool random = true;
-  if (random){
-
-  std::random_device rd;
-  std::mt19937 rng(rd());
-  // std::mt19937 rng(2000);
-  std::uniform_int_distribution<int64_t> u0(0, 2<<30);
-  for (int i = 0; i < ele_num; ++i) {
-        key[i * 2] = u0(rng);
-   }
-  }else{
-  unsigned long key[ele_num * 2] = {0};
-  for(int64_t i = 0; i < ele_num ; i++){
-    key[i * 2] = i;
+  const bool random = false;
+  if (random) {
+    std::random_device rd;
+    // std::mt19937_64 rng(rd());
+    std::mt19937 rng(2000);
+    std::uniform_int_distribution<int64_t> u0(0, 1 << 31);
+    for (int i = 0; i < ele_num; ++i) {
+      key[i * 2] = u0(rng);
+    }
+  } else {
+    std::vector<unsigned long> _key(ele_num);
+    std::iota(_key.begin(), _key.end(), 0);
+    // std::mt19937 rng(2000);
+    // std::shuffle(_key.begin(), _key.end(), rng);
+    for (int64_t i = 0; i < ele_num; i++) {
+      key[i * 2] = _key[i];
+    }
   }
-  }
 
-  // for (auto &i : key) {
+  // for (auto &i : value) {
   //   std::cout << i << "\n";
   // }
   // std::cout << std::endl;
@@ -393,8 +388,10 @@ int main() {
 
   cudaMalloc((void **)&key_ptr, sizeof(unsigned long) * ele_num * 2);
   cudaMalloc((void **)&value_ptr, sizeof(unsigned long) * ele_num);
-  cudaMemcpy(key_ptr, key.data(), sizeof(unsigned long) * ele_num * 2, cudaMemcpyHostToDevice);
-  cudaMemcpy(value_ptr, value.data(), sizeof(unsigned long) * ele_num, cudaMemcpyHostToDevice);
+  cudaMemcpy(key_ptr, key.data(), sizeof(unsigned long) * ele_num * 2,
+             cudaMemcpyHostToDevice);
+  cudaMemcpy(value_ptr, value.data(), sizeof(unsigned long) * ele_num,
+             cudaMemcpyHostToDevice);
   cudaDeviceSynchronize();
 
   while (!build_hashtable(ht, (KeyT *)key_ptr, (ValueT *)value_ptr, bucket_num,
@@ -405,5 +402,36 @@ int main() {
         "Build hash table failed! The avg2bsize is %f now. Rebuilding... ...\n",
         avg2bsize);
   }
+
+  // hashlookup-test
+  std::vector<unsigned long> key1(ele_num * 2);
+  std::vector<int64_t> value1(ele_num);
+  for (int64_t i = 0; i < ele_num; i++) {
+    key1[i * 2] = i;
+  }
+
+  unsigned long *key1_ptr = nullptr;
+  int64_t *value1_ptr = nullptr;
+  cudaMalloc((void **)&key1_ptr, sizeof(unsigned long) * ele_num * 2);
+  cudaMalloc((void **)&value1_ptr, sizeof(int64_t) * ele_num);
+
+  // std::cout << "key: " << key1_ptr << " value: " << value1_ptr << std::endl;
+
+  cudaMemcpy(key1_ptr, key1.data(), sizeof(unsigned long) * ele_num * 2,
+             cudaMemcpyHostToDevice);
+  cudaMemcpy(value1_ptr, value1.data(), sizeof(int64_t) * ele_num,
+             cudaMemcpyHostToDevice);
+
+  cudaDeviceSynchronize();
+  hash_lookup(ht, key1_ptr, value1_ptr, ele_num);
+  cudaMemcpy(value1.data(), value1_ptr, sizeof(int64_t) * ele_num,
+             cudaMemcpyDeviceToHost);
+  cudaDeviceSynchronize();
+
+  // for(auto &i: value1){
+  //   std::cout << i << " ";
+  // }
+  // std::cout << std::endl;
+  freeHashTable(ht);
   return 0;
 }
