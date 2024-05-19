@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <random>
@@ -78,7 +79,7 @@ struct KeyT {
   }
 };
 struct ValueT {
-  int64_t data[1] = {10};
+  int64_t data[1];
 };
 
 #define _len 16
@@ -201,8 +202,7 @@ __global__ void build_hashtable_kernel(myHashTable ht, KeyT *all_keys,
     int write_off = atomicAdd(bucket_count + hashed_value, 1);
     if (write_off >= bucket_size) {
       build_failure[0] = 1;
-      // printf("keyIdx is %d, hashed value is %d, now size is %d, bucket-size
-      // %d, error\n", i, hashed_value, write_off, bucket_size); overflow
+      // printf("keyIdx is %d, hashed value is %d, now size is %d, bucket-size %d, error\n", i, hashed_value, write_off, bucket_size); 
       // bucket_size
       break;
     }
@@ -234,7 +234,8 @@ __global__ void build_hashtable_bf_kernel(myHashTable ht) {
 }
 
 __global__ void hash_lookup_kerenl(myHashTable ht, unsigned long *keys,
-                                   int64_t *values, const int64_t length) {
+                                   int64_t *values, bool *mask,
+                                   const int64_t length) {
   int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn >= length)
     return;
@@ -249,11 +250,13 @@ __global__ void hash_lookup_kerenl(myHashTable ht, unsigned long *keys,
     values[idn] = ht.values[off].data[0];
   } else {
     values[idn] = -1;
+    mask[idn] = false;
   }
   // printf("offset: %ld, values: %ld\n", off, values[idn]);
 }
 
 void hash_lookup(myHashTable ht, unsigned long *keys, int64_t *values,
+                 bool *mask,
                  const int64_t length) {
   // printf("Lookup length: %ld\n", length);
   cudaEvent_t start, stop;
@@ -265,7 +268,7 @@ void hash_lookup(myHashTable ht, unsigned long *keys, int64_t *values,
   cudaEventCreate(&stop);
   cudaEventRecord(start, 0);
 
-  hash_lookup_kerenl<<<gridDim, blockDim>>>(ht, keys, values, length);
+  hash_lookup_kerenl<<<gridDim, blockDim>>>(ht, keys, values, mask, length);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 
@@ -288,6 +291,13 @@ bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
   //. total memory:
   auto memory = sizeof(KeyT) * (total_size) + sizeof(ValueT) * total_size +
                 sizeof(int) * bucket_num + sizeof(BFT) * bucket_num;
+
+    int device_index = 0;
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, device_index);
+    auto max_memory = deviceProp.totalGlobalMem;
+    std::cout << "Memory: " << memory / std::pow(2.0, 20) << " MiB "
+              << "Cost: " << memory / (double)max_memory * 100 << " %" << std::endl;
 
   std::cout << "Memory: " << memory / std::pow(2.0, 20) << " MiB " << std::endl;
   CUDA_TRY(cudaMalloc((void **)&ht.keys, sizeof(KeyT) * total_size));
@@ -344,21 +354,31 @@ bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
 
 int main() {
   //  /opt/nvidia/bin/nvcc -L/opt/cuda/lib -lcudart -std=c++17 test_hash.cu -O3 && ./a.out
-  const int ele_num = 1 << 20;
+
+  for(int k = 0; k < 1; k++){
+  const int ele_num = 1<< 20;
   std::vector<unsigned long> key(ele_num * 2, 0);
 
   std::vector<unsigned long> value(ele_num);
   std::iota(value.begin(), value.end(), 0);
 
-  const bool random = false;
+  const bool random = true;
   if (random) {
     std::random_device rd;
     // std::mt19937_64 rng(rd());
-    std::mt19937 rng(2000);
+    std::mt19937 rng(2212);
     std::uniform_int_distribution<int64_t> u0(0, 1 << 31);
     for (int i = 0; i < ele_num; ++i) {
       key[i * 2] = u0(rng);
     }
+
+    std::vector<unsigned long> key_copy;
+    std::copy(key.begin(), key.end(), std::back_inserter(key_copy));
+    std::sort(key_copy.begin(), key_copy.end());
+    auto x = std::unique(key_copy.begin(), key_copy.end());
+    auto len = std::distance(key_copy.begin(), x);
+    std::cout << "unique length: " << len << std::endl;
+ 
   } else {
     std::vector<unsigned long> _key(ele_num);
     std::iota(_key.begin(), _key.end(), 0);
@@ -386,6 +406,12 @@ int main() {
   unsigned long *key_ptr = nullptr;
   unsigned long *value_ptr = nullptr;
 
+  int deviceCount;
+  cudaGetDeviceCount(&deviceCount);
+  cudaDeviceProp deviceProp;
+  cudaGetDeviceProperties(&deviceProp, 0);
+  std::cout << "  Total Global Memory (bytes): " << deviceProp.totalGlobalMem << std::endl;
+
   cudaMalloc((void **)&key_ptr, sizeof(unsigned long) * ele_num * 2);
   cudaMalloc((void **)&value_ptr, sizeof(unsigned long) * ele_num);
   cudaMemcpy(key_ptr, key.data(), sizeof(unsigned long) * ele_num * 2,
@@ -406,9 +432,7 @@ int main() {
   // hashlookup-test
   std::vector<unsigned long> key1(ele_num * 2);
   std::vector<int64_t> value1(ele_num);
-  for (int64_t i = 0; i < ele_num; i++) {
-    key1[i * 2] = i;
-  }
+  std::copy(key.begin(), key.end(), key1.begin());
 
   unsigned long *key1_ptr = nullptr;
   int64_t *value1_ptr = nullptr;
@@ -421,17 +445,30 @@ int main() {
              cudaMemcpyHostToDevice);
   cudaMemcpy(value1_ptr, value1.data(), sizeof(int64_t) * ele_num,
              cudaMemcpyHostToDevice);
+  
+  bool mask[ele_num];
+  for(int64_t i = 0; i < ele_num; i++){
+    mask[i] = true;
+  }
+  bool *mask_ptr = nullptr;
+  cudaMalloc((void **)&mask_ptr, sizeof(bool) * ele_num);
+  cudaMemcpy(mask_ptr, mask, sizeof(bool) * ele_num, cudaMemcpyHostToDevice);
 
   cudaDeviceSynchronize();
-  hash_lookup(ht, key1_ptr, value1_ptr, ele_num);
+  hash_lookup(ht, key1_ptr, value1_ptr, mask_ptr, ele_num);
   cudaMemcpy(value1.data(), value1_ptr, sizeof(int64_t) * ele_num,
+             cudaMemcpyDeviceToHost);
+  cudaMemcpy(mask, mask_ptr, sizeof(bool) * ele_num,
              cudaMemcpyDeviceToHost);
   cudaDeviceSynchronize();
 
-  // for(auto &i: value1){
-  //   std::cout << i << " ";
-  // }
-  // std::cout << std::endl;
+  for(size_t i = 0 ; i < ele_num; i++){
+    if(value1[i] != i && mask[i]){
+      std::cout << "False" << std::endl;
+    }
+  }
+  std::cout << std::endl;
   freeHashTable(ht);
+  }
   return 0;
 }

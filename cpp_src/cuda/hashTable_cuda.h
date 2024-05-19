@@ -71,6 +71,7 @@
 // };
 
 struct KeyT{
+    // TODO: data[MAX_SORB_LEN * 3]?
     char data[16];
     __device__ __host__ KeyT() {}
     __device__ __host__ KeyT(int64_t v1) {
@@ -102,6 +103,14 @@ struct ValueT{
     int64_t data[1];
 };
 
+
+#define CUDA_TRY(call)                                                          \
+  do {                                                                          \
+    cudaError_t const status = (call);                                          \
+    if (cudaSuccess != status) {                                                \
+      printf("%s %s %d\n", cudaGetErrorString(status), __FILE__, __LINE__);  \
+    }                                                                           \
+  } while (0)
 
 __inline__ __device__ __host__ int myHashFunc(KeyT value, int threshold) {
   // BKDR hash
@@ -175,23 +184,23 @@ struct myHashTable {
   int bSize;
   __inline__ __device__ __host__ int64_t search_key(KeyT key) {
     int hashvalue = myHashFunc(key, bNum);
-    // int my_bucket_size = bCount[hashvalue];
-    // KeyT *list = keys + (int64_t)hashvalue * bSize;
-    // int threshold = sizeof(BFT) * 8;
-    // BFT my_bf = bf[hashvalue];
-    // // BloomFilter, false positive probabilistic
-    // if (!((my_bf >> hashFunc2(key, threshold)) & 1) ||
-    //     !((my_bf >> hashFunc3(key, threshold)) & 1)) {
-    //   return -1;
-    // }
-    // printf("hashvalue: %d, bucket-size: %d", hashvalue, 1211);
-  //   for (int i = 0; i < my_bucket_size; i++) {
-  //     if (list[i] == key) {
-  //       // printf("off: %d", hashvalue * bSize + i);
-  //       return hashvalue * bSize + i;
-  //     }
-  //   }
-  //   return -1;
+    int my_bucket_size = bCount[hashvalue];
+    KeyT *list = keys + (int64_t)hashvalue * bSize;
+    int threshold = sizeof(BFT) * 8;
+    BFT my_bf = bf[hashvalue];
+    // BloomFilter, false positive probabilistic
+    if (!((my_bf >> hashFunc2(key, threshold)) & 1) ||
+        !((my_bf >> hashFunc3(key, threshold)) & 1)) {
+      return -1;
+    }
+    // printf("hashvalue: %d, bucket-size: %d", hashvalue, bSize);
+    for (int i = 0; i < my_bucket_size; i++) {
+      if (list[i] == key) {
+        // printf("off: %d", hashvalue * bSize + i);
+        return hashvalue * bSize + i;
+      }
+    }
+    return -1;
   }
 };
 
@@ -202,14 +211,6 @@ inline void freeHashTable(myHashTable ht) {
   (cudaFree(ht.bf));
 }
 
-#define CUDA_TRY(call)                                                          \
-  do {                                                                          \
-    cudaError_t const status = (call);                                          \
-    if (cudaSuccess != status) {                                                \
-      printf("%s %s %d\n", cudaGetErrorString(status), __FILE__, __LINE__);  \
-    }                                                                           \
-  } while (0)
-
 __global__ void build_hashtable_kernel(myHashTable ht, KeyT *all_keys,
                                        ValueT *all_values, int ele_num,
                                        int *build_failure);
@@ -217,7 +218,7 @@ __global__ void build_hashtable_kernel(myHashTable ht, KeyT *all_keys,
 __global__ void build_hashtable_bf_kernel(myHashTable ht);
 
 bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
-                     int bucket_num, int bucket_size, int ele_num);
+                     int bucket_num, int bucket_size, int ele_num, int device_index);
 
-void hash_lookup(myHashTable &ht, unsigned long *keys, int64_t *values,
+void hash_lookup(myHashTable ht, unsigned long *keys, int64_t *values, bool *mask,
                  const int64_t length);

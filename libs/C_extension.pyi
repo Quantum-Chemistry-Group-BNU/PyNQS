@@ -338,3 +338,56 @@ def wavefunction_lut(
     >>> print(info)
     tensor([2, 4, 1, 0, -1, 5], tensor([ True, True, True, True, False, True]))
     """
+
+class HashTable():
+    """
+    CUDA Hash-table
+    """
+    def __init__(self) -> None:
+        ...
+    
+    @property
+    def bucketNum(self) -> int:
+        ...
+    
+    @property
+    def bucketSize(self) -> int:
+        ...
+    
+    @property
+    def memory(self) -> int:
+        """
+        Hash-table cost memory
+        """
+        ...
+
+    def cleanMemory(self) -> None:
+        """
+        manual clean memory
+        """
+    
+    @staticmethod
+    def bitWidth() -> int:
+        """
+        sizeof(KeyT) / 8
+        """
+
+
+def hash_build(bra_key: Tensor, sorb: Tensor) -> HashTable:
+    """
+    build hash-table using CUDA with BKDR method.
+
+    notes:
+        [0, 2**20) (1048576 element) costing 3712 MiB memory in GTX1650.
+        random choice 2**20 element form [0, 1<<31) costing 148 MiB memory in GTX1650
+    """
+
+def hash_look(ht: HashTable, onv: Tensor) -> Tuple[Tensor, Tensor]:
+    """
+    using hash-lookup
+
+    Returns
+    -------
+        index: the index of onv in bra-key, if not find, set to -1. (torch.int64)
+        mask: bool array: if not find, set to False.
+    """

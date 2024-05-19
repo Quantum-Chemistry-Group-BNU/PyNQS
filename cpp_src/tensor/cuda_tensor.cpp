@@ -9,11 +9,11 @@
 #include <vector>
 
 #include "c10/cuda/CUDAFunctions.h"
+#include "common/utils.h"
 #include "cuda/kernel.h"
 #include "interface_magma.h"
 #include "torch/types.h"
 #include "utils_tensor.h"
-#include "common/utils.h"
 
 Tensor tensor_to_onv_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
   const int bra_len = (sorb - 1) / 64 + 1;
@@ -317,7 +317,7 @@ Tensor constrain_make_charts_cuda(const Tensor &sym_index) {
                      .device(sym_index.device())
                      .requires_grad(false);
 
-  if (nbatch == 0){
+  if (nbatch == 0) {
     return torch::zeros({0, 4}, options);
   }
 
@@ -376,12 +376,17 @@ tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
   return std::make_tuple(result, mask);
 }
 
-myHashTable test_hash_cuda(const Tensor &bra_key, const int sorb) {
-  // int64_t ele_num = 10000;
+myHashTable test_hash_tensor(const Tensor &bra_key, const int sorb) {
 
-  // (nbatch, bra_len * 8)
+  assert(bra_key.size(1) == sizeof(KeyT));
+  if (bra_key.size(1) != sizeof(KeyT)) {
+    std::cout << "key: shape[1] " << bra_key.size(1) << " != keyT size "
+              << sizeof(KeyT) << std::endl;
+    exit(1);
+  }
+
   const int64_t ele_num = bra_key.size(0);
-  auto key_ptr = reinterpret_cast<unsigned long *>(bra_key.clone().data_ptr<uint8_t>());
+  auto key_ptr = reinterpret_cast<unsigned long *>(bra_key.data_ptr<uint8_t>());
   auto device = bra_key.device();
   Tensor values = torch::arange(
       ele_num, torch::TensorOptions().dtype(torch::kInt64).device(device));
@@ -390,26 +395,56 @@ myHashTable test_hash_cuda(const Tensor &bra_key, const int sorb) {
   // hashTable setting
   float avg2cacheline = 0.3;
   float avg2bsize = 0.55;
-  int cacheline_size = 128 / sizeof(KeyT);               // 缓存行 8
-  int avg_size = cacheline_size * avg2cacheline;         // 平均容量 3.2
-  int bucket_size = avg_size / avg2bsize;                //  桶大小
-  int bucket_num = (ele_num + avg_size - 1) / avg_size;  // 桶的总数
+  int cacheline_size = 128 / sizeof(KeyT);
+  int avg_size = cacheline_size * avg2cacheline;
+  int bucket_size = avg_size / avg2bsize;
+  int bucket_num = (ele_num + avg_size - 1) / avg_size;
 
+  auto device_index = bra_key.device().index();
   myHashTable ht;
-  // std::cout << ptr[0] << "  " << ptr[1] << std::endl;
   while (!build_hashtable(ht, (KeyT *)key_ptr, (ValueT *)value_ptr, bucket_num,
-                          bucket_size, ele_num)) {
+                          bucket_size, ele_num, device_index)) {
     bucket_size = 1.4 * bucket_size;
     avg2bsize = (float)avg_size / bucket_size;
     printf(
         "Build hash table failed! The avg2bsize is %f now. Rebuilding... ...\n",
         avg2bsize);
   }
+
+  // Testing lookup-hashtable
   // Tensor values1 = torch::empty_like(values);
   // auto *val_ptr = values.data_ptr<int64_t>();
-  // unsigned long *key_ptr1 = reinterpret_cast<unsigned long *>(bra_key.clone().data_ptr<uint8_t>());
-  // std::cout << bra_key.is_cuda() << " " << "ptr: " << values1.is_cuda() << std::endl;
-  // hash_lookup(ht, key_ptr1, val_ptr, ele_num);
+  // unsigned long *key_ptr1 =
+  //     reinterpret_cast<unsigned long *>(bra_key.clone().data_ptr<uint8_t>());
+  // auto mask = torch::ones(ele_num,
+  // torch::TensorOptions().dtype(torch::kBool).device(device)); hash_lookup(ht,
+  // key_ptr1, val_ptr, mask.data_ptr<bool>(), ele_num); std::cout <<
+  // torch::allclose(values1, values) << std::endl;
 
   return ht;
+}
+
+tuple_tensor_2d hash_lut_tensor(const myHashTable ht, const Tensor onv) {
+  auto device = onv.device();
+  auto options = torch::TensorOptions().dtype(torch::kInt64).device(device);
+  auto options_bool = torch::TensorOptions().dtype(torch::kBool).device(device);
+
+  if (onv.numel() == 0) {
+    Tensor result = torch::zeros({0}, options);
+    Tensor mask = torch::zeros({0}, options_bool);
+    return std::make_tuple(result, mask);
+  }
+
+  auto length = onv.size(0);
+  Tensor result = torch::empty(length, options);
+  Tensor mask = torch::ones(length, options_bool);
+  int64_t *result_ptr = result.data_ptr<int64_t>();
+
+  unsigned long *key_ptr =
+      reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
+
+  hash_lookup(ht, key_ptr, result.data_ptr<int64_t>(), mask.data_ptr<bool>(),
+              length);
+
+  return std::make_tuple(result, mask);
 }
