@@ -239,6 +239,30 @@ tuple_tensor_2d wavefunction_lut_map(const Tensor &bra_key,
   return wavefunction_lut_hash(bra_key, wf_value, onv, sorb);
 }
 
+
+__inline__ int BKDR(unsigned long data) {
+  // BKDR hash
+  unsigned int seed = 31;
+  char *values = reinterpret_cast<char *>(&data);
+  int len = 8;
+  unsigned int hash = 171;
+  while (len--) {
+    char v = (~values[len - 1]) * (len & 1) + (values[len - 1]) * (~(len & 1));
+    hash = hash * seed + (v & 0xF);
+  }
+  return (hash & 0x7FFFFFFF);
+}
+
+std::vector<int64_t> BKDR_tensor(const Tensor onv){
+  auto ele_num = onv.size(0);
+  std::vector<int64_t> value1(ele_num);
+  unsigned long *ptr = reinterpret_cast<unsigned long*>(onv.data_ptr<uint8_t>());
+  for (const auto i : c10::irange(0, ele_num)){
+    value1.push_back(BKDR(ptr[i]) & 0x7FFFFFFF);
+  }
+  return value1;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
@@ -296,4 +320,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_static("bitWidth",[](){return sizeof(KeyT) / 8;})
       .def("cleanMemory", [](myHashTable &ht) { return freeHashTable(ht); });
 #endif
+
+  m.def("BKDR", &BKDR_tensor, "BKDR-method testing");
 }

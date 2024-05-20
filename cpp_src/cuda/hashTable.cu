@@ -41,9 +41,9 @@ __global__ void build_hashtable_bf_kernel(myHashTable ht) {
     BFT my_bf = 0;
     for (int e = 0; e < my_bsize; e++) {
       KeyT my_value = keys[bid * bucket_size + e];
-      int hv = hashFunc2(my_value, sizeof(BFT) * 8);
+      int hv = hashFunc2<MAX_SORB_LEN>(my_value, sizeof(BFT) * 8);
       my_bf |= (1 << hv);
-      hv = hashFunc3(my_value, sizeof(BFT) * 8);
+      hv = hashFunc3<MAX_SORB_LEN>(my_value, sizeof(BFT) * 8);
       my_bf |= (1 << hv);
     }
     ht.bf[bid] = my_bf;
@@ -51,6 +51,7 @@ __global__ void build_hashtable_bf_kernel(myHashTable ht) {
   return;
 }
 
+template<int _len>
 __global__ void hash_lookup_kerenl(myHashTable ht, unsigned long *keys,
                                    int64_t *values, bool *mask,
                                    const int64_t length) {
@@ -58,12 +59,29 @@ __global__ void hash_lookup_kerenl(myHashTable ht, unsigned long *keys,
   if (idn >= length)
     return;
 
-  // TODO: MAX_SORB_LEN
-  int64_t big_id[2];
-  big_id[0] = keys[2 * idn];
-  big_id[1] = keys[2 * idn + 1];
-  KeyT key(big_id[0], big_id[1]);
-  int64_t off = ht.search_key(key);
+  int64_t big_id[_len];
+  int64_t off;
+    // big_id[0] = keys[3 * idn];
+    // big_id[1] = keys[3 * idn + 1];
+    // big_id[2] = keys[3 * idn + 2];
+    // KeyT key(big_id[0], big_id[1], big_id[2]);
+    // off = ht.search_key(key);
+  if constexpr (_len == 1) {
+    big_id[0] = keys[idn];
+    KeyT key(big_id[0]);
+    off = ht.search_key(key);
+  } else if constexpr (_len == 2) {
+    big_id[0] = keys[2 * idn];
+    big_id[1] = keys[2 * idn + 1];
+    KeyT key(big_id[0], big_id[1]);
+    off = ht.search_key(key);
+  } else if constexpr (_len == 3) {
+    big_id[0] = keys[3 * idn];
+    big_id[1] = keys[3 * idn + 1];
+    big_id[2] = keys[3 * idn + 2];
+    KeyT key(big_id[0], big_id[1], big_id[2]);
+    off = ht.search_key(key);
+  }
   if (off != -1) {
     values[idn] = ht.values[off].data[0];
   } else {
@@ -83,7 +101,7 @@ void hash_lookup(myHashTable ht, unsigned long *keys, int64_t *values,
   cudaEventCreate(&stop);
   cudaEventRecord(start, 0);
 
-  hash_lookup_kerenl<<<gridDim, blockDim>>>(ht, keys, values, mask, length);
+  hash_lookup_kerenl<MAX_SORB_LEN><<<gridDim, blockDim>>>(ht, keys, values, mask, length);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 

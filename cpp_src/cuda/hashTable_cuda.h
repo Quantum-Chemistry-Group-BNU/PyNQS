@@ -6,110 +6,78 @@
 #include "../common/default.h"
 #include "utils_cuda.h"
 
-#define _len 16
-#define MAX_LEN 2
+struct KeyT {
+  char data[MAX_SORB_LEN * 8];
+  __device__ __host__ KeyT() {}
+  // __device__ __host__ KeyT(int64_t v1) {
+  //   int64_t *ptr = static_cast<int64_t *>((void *)data);
+  //   ptr[0] = v1;
+  // }
+  // __device__ __host__ KeyT(int64_t v1, int64_t v2) {
+  //   int64_t *ptr = static_cast<int64_t *>((void *)data);
+  //   ptr[0] = v1;
+  //   ptr[1] = v2;
+  // }
 
-// ref: https://github.com/linhu-nv/unitTestLocalEnergy
-// struct KeyT {
-//   char data[MAX_LEN * 8] = {0};
-//   __device__ __host__ KeyT() {}
-//   __device__ __host__ KeyT(unsigned long v1) {
-//     unsigned long *ptr = static_cast<unsigned long *>((void *)data);
-//     ptr[0] = v1;
-//     ptr[1] = v1;
-//   }
-//   __device__ __host__ KeyT(unsigned long v1, unsigned long v2) {
-//     if (MAX_LEN >= 2) {
-//       unsigned long *ptr = static_cast<unsigned long *>((void *)data);
-//       ptr[0] = v1;
-//       ptr[1] = v2;
-//     }
-//   }
+  // __device__ __host__ KeyT(int64_t v1, int64_t v2, int64_t v3) {
+  //   int64_t *ptr = static_cast<int64_t *>((void *)data);
+  //   ptr[0] = v1;
+  //   ptr[1] = v2;
+  //   ptr[2] = v3;
+  // }
 
-//   __device__ __host__ KeyT(unsigned long v1, unsigned long v2,
-//                            unsigned long v3) {
-//     if (MAX_LEN >= 3) {
-//       unsigned long *ptr = static_cast<unsigned long *>((void *)data);
-//       ptr[0] = v1;
-//       ptr[1] = v2;
-//       ptr[3] = v3;
-//     }
-//   }
+  template <typename... Args>
+  __device__ __host__ KeyT(Args... values) {
+    static_assert(std::conjunction_v<std::is_same<Args, int64_t>...>,
+                  "Arguments must be is int64_t");
+    static_assert(sizeof...(Args) == MAX_SORB_LEN & sizeof...(Args) <= 3,
+                  "Arguments error for KeyT constructor");
 
-//   __device__ __host__ KeyT(unsigned long *v, int len) {
-//     switch (len) {
-//       case 1: {
-//         (KeyT(v[0]));
-//       }
-//       case 2: {
-//         (KeyT(v[0], v[1]));
-//       }
-//       case 3: {
-//         (KeyT(v[0], v[1], v[2]));
-//       }
-//     }
-//   }
+    int64_t *ptr = reinterpret_cast<int64_t *>((void *)data);
+    size_t index = 0;
+    ((ptr[index++] = values), ...);
+  }
 
-//   __device__ __host__ bool operator==(const KeyT key) {
-//     unsigned long *d1 = (unsigned long *)key.data;
-//     unsigned long *d2 = (unsigned long *)(key.data + 8);
-//     unsigned long *_d1 = (unsigned long *)data;
-//     unsigned long *_d2 = (unsigned long *)(data + 8);
-//     bool flag = (d1[0] == _d1[0] && d2[0] == _d2[0]) ? true : false;
-//     if (MAX_LEN == 3) {
-//       unsigned long *d3 = (unsigned long *)(key.data + 16);
-//       unsigned long *_d3 = (unsigned long *)(data + 16);
-//       bool flag2 = (d3[0] == _d3[0] && d3[0] == _d3[0]) ? true : false;
-//       flag = flag && flag2;
-//     }
-//     return flag;
-//   }
-// };
-
-// struct ValueT {
-//   int64_t data[1];
-// };
-
-struct KeyT{
-    // TODO: data[MAX_SORB_LEN * 3]?
-    char data[16];
-    __device__ __host__ KeyT() {}
-    __device__ __host__ KeyT(int64_t v1) {
-        int64_t* ptr = static_cast<int64_t *>((void*)data);
-        ptr[0] = v1;
-        ptr[1] = v1;
+  __device__ __host__ bool operator==(const KeyT key) {
+    int64_t *d1 = (int64_t *)key.data;
+    int64_t *_d1 = (int64_t *)data;
+    bool flag = d1[0] == _d1[0];
+    if constexpr (MAX_SORB_LEN == 1) {
+      ;
+    } else if constexpr (MAX_SORB_LEN == 2) {
+      int64_t *d2 = (int64_t *)(key.data + 8);
+      int64_t *_d2 = (int64_t *)(data + 8);
+      flag &= d2[0] == _d2[0];
+    } else if constexpr (MAX_SORB_LEN == 3) {
+      int64_t *d2 = (int64_t *)(key.data + 8);
+      int64_t *_d2 = (int64_t *)(data + 8);
+      flag &= d2[0] == _d2[0];
+      ;
+      int64_t *d3 = (int64_t *)(key.data + 16);
+      int64_t *_d3 = (int64_t *)(data + 16);
+      flag &= d3[0] == _d3[0];
     }
-    __device__ __host__ KeyT(int64_t v1, int64_t v2) {
-        int64_t* ptr = static_cast<int64_t *>((void*)data);
-        ptr[0] = v1;
-        ptr[1] = v2;
-    }
-    __device__ __host__ bool operator == (const KeyT key) {
-        int64_t* d1 = (int64_t *)key.data;
-        int64_t* d2 = (int64_t *)(key.data + 8);
-        int64_t* _d1 = (int64_t *)data;
-        int64_t* _d2 = (int64_t *)(data + 8);
-        return (d1[0] == _d1[0] && d2[0] == _d2[0]) ? true : false;
-    }
-    __device__ __host__ bool operator < (const KeyT key) const {
-        int64_t* d1 = (int64_t *)key.data;
-        int64_t* d2 = (int64_t *)(key.data + 8);
-        int64_t* _d1 = (int64_t *)data;
-        int64_t* _d2 = (int64_t *)(data + 8);
-        return (_d1[0] < d1[0]) ||  (_d1[0] == d1[0] && _d2[0] < d2[0]);
-    }
+    return flag;
+  }
+  // __device__ __host__ bool operator<(const KeyT key) const {
+  //   // TODO:
+  //   int64_t *d1 = (int64_t *)key.data;
+  //   int64_t *_d1 = (int64_t *)data;
+  //   int64_t *d2 = (int64_t *)(key.data + 8);
+  //   int64_t *_d2 = (int64_t *)(data + 8);
+  //   return (_d1[0] < d1[0]) || (_d1[0] == d1[0] && _d2[0] < d2[0]);
+  // }
 };
-struct ValueT{
-    int64_t data[1];
+struct ValueT {
+  int64_t data[1];
 };
 
-
-#define CUDA_TRY(call)                                                          \
-  do {                                                                          \
-    cudaError_t const status = (call);                                          \
-    if (cudaSuccess != status) {                                                \
-      printf("%s %s %d\n", cudaGetErrorString(status), __FILE__, __LINE__);  \
-    }                                                                           \
+#define CUDA_TRY(call)                                                      \
+  do {                                                                      \
+    cudaError_t const status = (call);                                      \
+    if (cudaSuccess != status) {                                            \
+      printf("%s %s %d\n", cudaGetErrorString(status), __FILE__, __LINE__); \
+    }                                                                       \
   } while (0)
 
 __inline__ __device__ __host__ int myHashFunc(KeyT value, int threshold) {
@@ -126,12 +94,13 @@ __inline__ __device__ __host__ int myHashFunc(KeyT value, int threshold) {
   return (hash & 0x7FFFFFFF) % threshold;
 }
 
+template <int _len>
 __inline__ __device__ __host__ int hashFunc1(KeyT value, int threshold) {
   int p = 16777619;
   int hash = (int)216161L;
   char *values = static_cast<char *>(value.data);
 #pragma unroll
-  for (int i = 0; i < _len; i++) hash = (hash ^ values[i]) * p;
+  for (int i = 0; i < _len * 8; i++) hash = (hash ^ values[i]) * p;
   hash += hash << 13;
   hash ^= hash >> 7;
   hash += hash << 3;
@@ -140,6 +109,7 @@ __inline__ __device__ __host__ int hashFunc1(KeyT value, int threshold) {
   return (hash & 0x7FFFFFFF) % threshold;
 }
 
+template <int _len>
 __inline__ __device__ __host__ int hashFunc2(KeyT value, int threshold) {
   /*int len = sizeof(KeyT);
   char *values = static_cast<char*>(value.data);
@@ -153,13 +123,14 @@ __inline__ __device__ __host__ int hashFunc2(KeyT value, int threshold) {
   // int _len = sizeof(KeyT);
   unsigned int hash = 711371;
 #pragma unroll
-  for (int i = _len; i > 0; i--) {
+  for (int i = _len * 8; i > 0; i--) {
     char v = (~values[i - 1]) * (i & 1) + (values[i - 1]) * (~(i & 1));
     hash = hash * seed + (v & 0xF);
   }
   return (hash & 0x7FFFFFFF) % threshold;
 }
 
+template <int _len>
 __inline__ __device__ __host__ int hashFunc3(KeyT value, int threshold) {
   // RS hash
   char *values = static_cast<char *>(value.data);
@@ -167,7 +138,7 @@ __inline__ __device__ __host__ int hashFunc3(KeyT value, int threshold) {
   int a = 63689;
   int hash = 0;
 #pragma unroll
-  for (int i = 0; i < _len; i++) {
+  for (int i = 0; i < _len * 8; i++) {
     hash = hash * a + values[i];
     a = a * b;
   }
@@ -189,8 +160,8 @@ struct myHashTable {
     int threshold = sizeof(BFT) * 8;
     BFT my_bf = bf[hashvalue];
     // BloomFilter, false positive probabilistic
-    if (!((my_bf >> hashFunc2(key, threshold)) & 1) ||
-        !((my_bf >> hashFunc3(key, threshold)) & 1)) {
+    if (!((my_bf >> hashFunc2<MAX_SORB_LEN>(key, threshold)) & 1) ||
+        !((my_bf >> hashFunc3<MAX_SORB_LEN>(key, threshold)) & 1)) {
       return -1;
     }
     // printf("hashvalue: %d, bucket-size: %d", hashvalue, bSize);
@@ -218,7 +189,8 @@ __global__ void build_hashtable_kernel(myHashTable ht, KeyT *all_keys,
 __global__ void build_hashtable_bf_kernel(myHashTable ht);
 
 bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,
-                     int bucket_num, int bucket_size, int ele_num, int device_index);
+                     int bucket_num, int bucket_size, int ele_num,
+                     int device_index);
 
-void hash_lookup(myHashTable ht, unsigned long *keys, int64_t *values, bool *mask,
-                 const int64_t length);
+void hash_lookup(myHashTable ht, unsigned long *keys, int64_t *values,
+                 bool *mask, const int64_t length);
