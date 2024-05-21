@@ -1,6 +1,6 @@
 #pragma once
 
-#define MAX_SORB_LEN 2              // max spin orbital: 64 * 3
+#define MAX_SORB_LEN 1              // max spin orbital: 64 * 3
 #define MAX_NELE MAX_SORB_LEN * 40  // max electron: 140
 #define MAX_NO MAX_SORB_LEN * 40    // max occupied orbital
 #define MAX_NOA MAX_NO / 2          // alpha max occupied orbital / 2

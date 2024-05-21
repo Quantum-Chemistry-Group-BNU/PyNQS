@@ -9,22 +9,6 @@
 struct KeyT {
   char data[MAX_SORB_LEN * 8];
   __device__ __host__ KeyT() {}
-  // __device__ __host__ KeyT(int64_t v1) {
-  //   int64_t *ptr = static_cast<int64_t *>((void *)data);
-  //   ptr[0] = v1;
-  // }
-  // __device__ __host__ KeyT(int64_t v1, int64_t v2) {
-  //   int64_t *ptr = static_cast<int64_t *>((void *)data);
-  //   ptr[0] = v1;
-  //   ptr[1] = v2;
-  // }
-
-  // __device__ __host__ KeyT(int64_t v1, int64_t v2, int64_t v3) {
-  //   int64_t *ptr = static_cast<int64_t *>((void *)data);
-  //   ptr[0] = v1;
-  //   ptr[1] = v2;
-  //   ptr[2] = v3;
-  // }
 
   template <typename... Args>
   __device__ __host__ KeyT(Args... values) {
@@ -38,26 +22,15 @@ struct KeyT {
     ((ptr[index++] = values), ...);
   }
 
-  __device__ __host__ bool operator==(const KeyT key) {
-    int64_t *d1 = (int64_t *)key.data;
-    int64_t *_d1 = (int64_t *)data;
-    bool flag = d1[0] == _d1[0];
-    if constexpr (MAX_SORB_LEN == 1) {
-      ;
-    } else if constexpr (MAX_SORB_LEN == 2) {
-      int64_t *d2 = (int64_t *)(key.data + 8);
-      int64_t *_d2 = (int64_t *)(data + 8);
-      flag &= d2[0] == _d2[0];
-    } else if constexpr (MAX_SORB_LEN == 3) {
-      int64_t *d2 = (int64_t *)(key.data + 8);
-      int64_t *_d2 = (int64_t *)(data + 8);
-      flag &= d2[0] == _d2[0];
-      ;
-      int64_t *d3 = (int64_t *)(key.data + 16);
-      int64_t *_d3 = (int64_t *)(data + 16);
-      flag &= d3[0] == _d3[0];
-    }
-    return flag;
+  template <std::size_t N>
+  __device__ __host__ bool compareKeys(const KeyT key1, const KeyT key2) const {
+    int64_t *d = (int64_t *)(key1.data + (N - 1) * 8);
+    int64_t *_d = (int64_t *)(key2.data + (N - 1) * 8);
+    return d[0] == _d[0] && compareKeys<N - 1>(key1, key2);
+  }
+
+  __device__ __host__ bool operator==(const KeyT &key) const {
+    return compareKeys<MAX_SORB_LEN>(*this, key);
   }
   // __device__ __host__ bool operator<(const KeyT key) const {
   //   // TODO:
@@ -68,6 +41,13 @@ struct KeyT {
   //   return (_d1[0] < d1[0]) || (_d1[0] == d1[0] && _d2[0] < d2[0]);
   // }
 };
+
+template <>
+inline __device__ __host__ bool KeyT::compareKeys<0>(const KeyT key1,
+                                                     const KeyT key2) const {
+  return true;
+}
+
 struct ValueT {
   int64_t data[1];
 };

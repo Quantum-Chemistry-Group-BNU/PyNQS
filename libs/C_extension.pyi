@@ -339,7 +339,7 @@ def wavefunction_lut(
     tensor([2, 4, 1, 0, -1, 5], tensor([ True, True, True, True, False, True]))
     """
 
-class HashTable():
+class HashTable:
     """
     CUDA Hash-table
     """
@@ -382,7 +382,7 @@ def hash_build(bra_key: Tensor, sorb: Tensor) -> HashTable:
         random choice 2**20 element form [0, 1<<31) costing 148 MiB memory in GTX1650
     """
 
-def hash_look(ht: HashTable, onv: Tensor) -> Tuple[Tensor, Tensor]:
+def hash_lookup(ht: HashTable, onv: Tensor) -> Tuple[Tensor, Tensor]:
     """
     using hash-lookup
 
