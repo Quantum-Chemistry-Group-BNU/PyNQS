@@ -59,27 +59,22 @@ __global__ void hash_lookup_kerenl(myHashTable ht, unsigned long *keys,
   if (idn >= length)
     return;
 
-  int64_t big_id[_len];
-  int64_t off;
+  // uint64_t big_id[_len];
+  int64_t off = 0;
+  if constexpr (_len == 1) {
+    // big_id[0] = keys[idn];
+    KeyT key(keys[idn]);
+    off = ht.search_key(key);
+  } else if constexpr (_len == 2) {
+    // big_id[0] = keys[2 * idn];
+    // big_id[1] = keys[2 * idn + 1];
+    KeyT key(keys[2 * idn], keys[ 2* idn + 1]);
+    off = ht.search_key(key);
+  } else if constexpr (_len == 3) {
     // big_id[0] = keys[3 * idn];
     // big_id[1] = keys[3 * idn + 1];
     // big_id[2] = keys[3 * idn + 2];
-    // KeyT key(big_id[0], big_id[1], big_id[2]);
-    // off = ht.search_key(key);
-  if constexpr (_len == 1) {
-    big_id[0] = keys[idn];
-    KeyT key(big_id[0]);
-    off = ht.search_key(key);
-  } else if constexpr (_len == 2) {
-    big_id[0] = keys[2 * idn];
-    big_id[1] = keys[2 * idn + 1];
-    KeyT key(big_id[0], big_id[1]);
-    off = ht.search_key(key);
-  } else if constexpr (_len == 3) {
-    big_id[0] = keys[3 * idn];
-    big_id[1] = keys[3 * idn + 1];
-    big_id[2] = keys[3 * idn + 2];
-    KeyT key(big_id[0], big_id[1], big_id[2]);
+    KeyT key(keys[3 * idn], keys[3 * idn + 1], keys[3 * idn + 2]);
     off = ht.search_key(key);
   }
   if (off != -1) {
@@ -92,23 +87,23 @@ __global__ void hash_lookup_kerenl(myHashTable ht, unsigned long *keys,
 
 void hash_lookup(myHashTable ht, unsigned long *keys, int64_t *values,
                  bool *mask, const int64_t length) {
-  cudaEvent_t start, stop;
-  float esp_time_gpu;
+  // cudaEvent_t start, stop;
+  // float esp_time_gpu;
 
-  dim3 blockDim(256);
+  dim3 blockDim(128);
   dim3 gridDim((length + blockDim.x - 1) / blockDim.x);
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  cudaEventRecord(start, 0);
+  // cudaEventCreate(&start);
+  // cudaEventCreate(&stop);
+  // cudaEventRecord(start, 0);
 
   hash_lookup_kerenl<MAX_SORB_LEN><<<gridDim, blockDim>>>(ht, keys, values, mask, length);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 
-  cudaEventRecord(stop, 0);
-  cudaEventSynchronize(stop);
-  cudaEventElapsedTime(&esp_time_gpu, start, stop);
-  printf("Time for lookup_hashtable_kernel is: %f ms\n", esp_time_gpu);
+  // cudaEventRecord(stop, 0);
+  // cudaEventSynchronize(stop);
+  // cudaEventElapsedTime(&esp_time_gpu, start, stop);
+  // printf("Time for lookup_hashtable_kernel is: %f ms, num: %ld\n", esp_time_gpu, length);
 }
 
 bool build_hashtable(myHashTable &ht, KeyT *all_keys, ValueT *all_values,

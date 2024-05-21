@@ -13,25 +13,50 @@ struct KeyT {
 
   template <typename... Args>
   __device__ __host__ KeyT(Args... values) {
-    static_assert(std::conjunction_v<std::is_same<Args, int64_t>...>,
+    static_assert(std::conjunction_v<std::is_same<Args, uint64_t>...>,
                   "Arguments must be is int64_t");
     static_assert(sizeof...(Args) == MAX_SORB_LEN & sizeof...(Args) <= 3,
                   "Arguments error for KeyT constructor");
 
-    int64_t *ptr = reinterpret_cast<int64_t *>((void *)data);
+    uint64_t *ptr = reinterpret_cast<uint64_t *>((void *)data);
     size_t index = 0;
     ((ptr[index++] = values), ...);
   }
+  // template <std::size_t N>
+  // __device__ __host__ bool compareKeys(const KeyT key1, const KeyT key2) {
+  //   int64_t *d = (int64_t *)(key1.data + (N - 1) * 8);
+  //   int64_t *_d = (int64_t *)(key2.data + (N - 1) * 8);
+  //   return d[0] == _d[0] && compareKeys<N - 1>(key1, key2);
+  // }
 
-  template <std::size_t N>
-  __device__ __host__ bool compareKeys(const KeyT key1, const KeyT key2) const {
-    int64_t *d = (int64_t *)(key1.data + (N - 1) * 8);
-    int64_t *_d = (int64_t *)(key2.data + (N - 1) * 8);
-    return d[0] == _d[0] && compareKeys<N - 1>(key1, key2);
-  }
+  // __device__ __host__ bool operator==(const KeyT key){
+  //   return compareKeys<MAX_SORB_LEN>(*this, key);
+  // }
 
-  __device__ __host__ bool operator==(const KeyT &key) const {
-    return compareKeys<MAX_SORB_LEN>(*this, key);
+  // __device__ __host__ bool operator==(const KeyT &key) {
+  //   int64_t *d1 = (int64_t *)key.data;
+  //   int64_t *_d1 = (int64_t *)data;
+  //   return d1[0] == _d1[0];
+
+  __device__ __host__ bool operator==(const KeyT key) {
+    uint64_t *d1 = (uint64_t *)key.data;
+    uint64_t *_d1 = (uint64_t *)data;
+    bool flag = d1[0] == _d1[0];
+    if constexpr (MAX_SORB_LEN == 1) {
+      ;
+    } else if constexpr (MAX_SORB_LEN == 2) {
+      uint64_t *d2 = (uint64_t *)(key.data + 8);
+      uint64_t *_d2 = (uint64_t *)(data + 8);
+      flag &= (d2[0] == _d2[0]);
+    }else if constexpr(MAX_SORB_LEN == 3) {
+      uint64_t *d2 = (uint64_t *)(key.data + 8);
+      uint64_t *_d2 = (uint64_t *)(data + 8);
+      flag &= (d2[0] == _d2[0]);
+      uint64_t *d3 = (uint64_t *)(key.data + 16);
+      uint64_t *_d3 = (uint64_t *)(data + 16);
+      flag &= (d3[0] == _d3[0]);
+    }
+    return flag;
   }
   // __device__ __host__ bool operator<(const KeyT key) const {
   //   // TODO:
@@ -44,11 +69,11 @@ struct KeyT {
 };
 
 // explicit specialization in non-namespace scope
-template <>
-inline __device__ __host__ bool KeyT::compareKeys<0>(const KeyT key1,
-                                                     const KeyT key2) const {
-  return true;
-}
+// template <>
+// inline __device__ __host__ bool KeyT::compareKeys<0>(const KeyT key1,
+//                                                      const KeyT key2) {
+//   return true;
+// }
 
 struct ValueT {
   int64_t data[1];
@@ -146,7 +171,8 @@ struct myHashTable {
         !((my_bf >> hashFunc3<MAX_SORB_LEN>(key, threshold)) & 1)) {
       return -1;
     }
-    // printf("hashvalue: %d, bucket-size: %d", hashvalue, bSize);
+    // printf("hashvalue: %d, bucket-size: %d\n", hashvalue, my_bucket_size);
+    // FIXME: why is pretty lower
     for (int i = 0; i < my_bucket_size; i++) {
       if (list[i] == key) {
         // printf("off: %d", hashvalue * bSize + i);

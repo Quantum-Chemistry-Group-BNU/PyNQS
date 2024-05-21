@@ -19,7 +19,7 @@ from .onv import ONV
 from .distributed import get_rank, get_world_size
 # from libs.bak.C_extension import wavefunction_lut as v1
 
-USE_HASH = True
+USE_HASH = False
 try:
     # Using HashTable implementing in CUDA
     from libs.C_extension import hash_build, hash_lookup, HashTable
