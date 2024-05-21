@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <type_traits>
 
 #include "../common/default.h"
 #include "utils_cuda.h"
@@ -42,6 +43,7 @@ struct KeyT {
   // }
 };
 
+// explicit specialization in non-namespace scope
 template <>
 inline __device__ __host__ bool KeyT::compareKeys<0>(const KeyT key1,
                                                      const KeyT key2) const {

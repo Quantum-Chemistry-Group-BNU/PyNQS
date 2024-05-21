@@ -15,10 +15,17 @@ from dataclasses import dataclass
 from loguru import logger
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv, wavefunction_lut
-from libs.C_extension import hash_build, hash_lookup, HashTable
 from .onv import ONV
 from .distributed import get_rank, get_world_size
 # from libs.bak.C_extension import wavefunction_lut as v1
+
+USE_HASH = True
+try:
+    # Using HashTable implementing in CUDA
+    from libs.C_extension import hash_build, hash_lookup, HashTable
+except ImportError:
+    import warnings
+    warnings.warn("Not implement hashtable", UserWarning)
 
 def check_para(bra: Tensor):
     r"""
@@ -707,7 +714,6 @@ def split_length_idx(dim: int, length: int) -> List[int]:
     idx_lst = idx_lst.cumsum(dim=0).tolist()
     return idx_lst
 
-USE_HASH = False
 class WavefunctionLUT:
     r"""
     wavefunction Lookup-Table in order to reduce psi(x) calculation in local energy

@@ -253,7 +253,7 @@ __inline__ int BKDR(unsigned long data) {
   return (hash & 0x7FFFFFFF);
 }
 
-std::vector<int64_t> BKDR_tensor(const Tensor onv){
+std::vector<int64_t> BKDR_tensor(const Tensor &onv){
   auto ele_num = onv.size(0);
   std::vector<int64_t> value1(ele_num);
   unsigned long *ptr = reinterpret_cast<unsigned long*>(onv.data_ptr<uint8_t>());
