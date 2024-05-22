@@ -172,7 +172,7 @@ struct myHashTable {
       return -1;
     }
     // printf("hashvalue: %d, bucket-size: %d\n", hashvalue, my_bucket_size);
-    // FIXME: why is pretty lower
+    // FIXME:(zbwu-05-22`) why is pretty lower, Global memory
     for (int i = 0; i < my_bucket_size; i++) {
       if (list[i] == key) {
         // printf("off: %d", hashvalue * bSize + i);
