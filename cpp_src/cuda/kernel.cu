@@ -452,10 +452,10 @@ __host__ void constrain_lookup_table(const int64_t *sym_index, double *result,
   cudaDeviceSynchronize();
 }
 
-template <typename IntType>
-__device__ inline int compare(const IntType *mid_element, const IntType *target,
-                              const int64_t target_length) {
-  for (int64_t i = target_length - 1; i >= 0; i--) {
+template <typename IntType, int _len>
+__device__ inline int compare(const IntType *mid_element, const IntType *target) {
+  #pragma unroll
+  for (int64_t i = _len - 1; i >= 0; i--) {
     if (mid_element[i] < target[i]) {
       return -1;
     } else if (mid_element[i] > target[i]) {
@@ -465,10 +465,9 @@ __device__ inline int compare(const IntType *mid_element, const IntType *target,
   return 0;
 }
 
-template <typename IntType>
+template <typename IntType, int _len>
 __device__ int64_t BigInteger_device(const IntType *arr, const IntType *target,
                                      const int64_t arr_length,
-                                     const int64_t target_length = 1,
                                      bool little_endian = true) {
   // arr: [arr_length, targe_length] 2D array but arr is point not point-point
   // arr is array of the great uint64 or others [12, 13] => 2**64 + 12
@@ -480,9 +479,9 @@ __device__ int64_t BigInteger_device(const IntType *arr, const IntType *target,
 
   while (left <= right) {
     int64_t mid = left + (right - left) / 2;
-    int64_t mid_index = mid * target_length;
+    int64_t mid_index = mid * _len;
     const IntType *mid_element = &arr[mid_index];
-    int result = compare(mid_element, target, target_length);
+    int result = compare<IntType, _len>(mid_element, target);
 
     if (result == 0) {
       return mid;
@@ -496,6 +495,7 @@ __device__ int64_t BigInteger_device(const IntType *arr, const IntType *target,
   return -1;
 }
 
+template<int _len>
 __global__ void BigInteger_kernel(const unsigned long *arr,
                                   const unsigned long *target, int64_t *result,
                                   bool *mask,
@@ -514,8 +514,8 @@ __global__ void BigInteger_kernel(const unsigned long *arr,
 //   }
 //   __syncthreads();
 //   // result[idn]
-  int64_t x = BigInteger_device<unsigned long>(arr, &target[idn * target_length], arr_length,
-                                               target_length, little_endian);
+  int64_t x = BigInteger_device<unsigned long, MAX_SORB_LEN>(
+      arr, &target[idn * _len], arr_length, little_endian);
   result[idn] = x;
   if (x == -1) {
     mask[idn] = false;
@@ -529,7 +529,7 @@ __host__ void binary_search_BigInteger_cuda(
     const int64_t target_length = 1, bool little_endian = true) {
   dim3 blockDim(256);
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
-  BigInteger_kernel<<<gridDim, blockDim>>>(
+  BigInteger_kernel<MAX_SORB_LEN><<<gridDim, blockDim>>>(
       arr, target, result,mask, nbatch, arr_length, target_length, little_endian);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
