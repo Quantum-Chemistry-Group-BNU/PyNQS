@@ -34,18 +34,18 @@ elif sys_name == "sugon": #  DCU sugon
     os.environ["CC"] = "gcc"
     os.environ["CXX"] = "g++"
     os.environ["MAX_JOBS"] = '4'
-    os.environ["CUDA_HOME"] = "/public/software/compiler/dtk-23.10"
+    os.environ["CUDA_HOME"] = "/public/software/compiler/dtk-24.04"
     use_magma = False
-    env = "/work/home/ac9yhmo1d1/software/miniconda3/envs/torch1.13_py3.10_dtk23.10/lib/"
+    env = "/work/home/ac9yhmo1d1/software/miniconda3/envs/torch1.13_py3.10_dtk24.04/lib/"
     torch_DIR = env + "python3.10/site-packages/torch"
-    CUDA_LIB = "/public/software/compiler/dtk-23.10/lib"
+    CUDA_LIB = "/public/software/compiler/dtk-23.04/lib"
 else:
     raise NotImplementedError
 
 if sys_name == "sugon":
-    nvcc_param = ["-O3","-MMD", "-DHIP=1","-Wno-deprecated-register" ]
+    nvcc_param = ["-O3", "-std=c++17","-MMD", "-DHIP=1","-Wno-deprecated-register" ]
 else:
-    nvcc_param = ["-O3", "-MMD", "-lcudart", "-dc", "--expt-relaxed-constexpr"]
+    nvcc_param = ["-O3", "-std=c++17","-MMD", "-lcudart", "-dc", "--expt-relaxed-constexpr"]
 
 # notice ninja is necessary for CUDA compile
 
@@ -103,7 +103,7 @@ if use_magma:\
     magma_INCLUDE = magma_DIR +"/include"\
     magma_LIB = magma_DIR + "/lib"\
     include_dirs = [osp.join(ROOT_DIR), magma_INCLUDE]\
-    cxx_param = ["-O3", "-std=c++17", "-DGPU=1", "-lcudadevrt", "-DMAGMA=1","-DMAGMA_ILP64","-lmagma"]\
+    cxx_param = ["-O3", "-fopenmp", "-std=c++17", "-DGPU=1", "-lcudadevrt", "-DMAGMA=1","-DMAGMA_ILP64","-lmagma"]\
     library_dirs=[CUDA_LIB, magma_LIB]\
     extra_link_args= {\
                       "-Wl,-rpath,"+magma_LIB,\
@@ -114,7 +114,7 @@ if use_magma:\
 else:\
     sources = [i for i in sources if "magma" not in i ]\
     include_dirs =[osp.join(ROOT_DIR)]\
-    cxx_param = ["-O3", "-std=c++17", "-DGPU=1", "-lcudadevrt"]\
+    cxx_param = ["-O3", "-fopenmp","-std=c++17", "-DGPU=1", "-lcudadevrt"]\
     library_dirs = [CUDA_LIB]\
     extra_link_args = {"-Wl,-rpath,"+torch_LIB}\
 print(sources)\

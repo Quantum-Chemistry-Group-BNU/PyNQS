@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "c10/cuda/CUDAFunctions.h"
+#include "common/utils.h"
 #include "cuda/kernel.h"
 #include "interface_magma.h"
 #include "torch/types.h"
@@ -203,7 +204,7 @@ tuple_tensor_2d mps_vbatch_tensor(const Tensor &mps_data,
                             .reshape({n, nphysical});
   return std::make_tuple(result, std::move(flops_tensor.to(mps_data.device())));
 }
-#endif // MAGMA
+#endif  // MAGMA
 
 Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
                                const int sorb) {
@@ -316,6 +317,10 @@ Tensor constrain_make_charts_cuda(const Tensor &sym_index) {
                      .device(sym_index.device())
                      .requires_grad(false);
 
+  if (nbatch == 0) {
+    return torch::zeros({0, 4}, options);
+  }
+
   Tensor result = torch::zeros({nbatch, 4}, options);
   double *result_ptr = result.data_ptr<double>();
 
@@ -323,27 +328,127 @@ Tensor constrain_make_charts_cuda(const Tensor &sym_index) {
   return result;
 }
 
-Tensor wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
-                             const int sorb, const bool little_endian = true) {
+tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
+                                      const int sorb,
+                                      const bool little_endian = true) {
   // bra_key: (length, bra_len * 8)
   // onv: (nbatch, bra_len * 8)
   // little_endian: the order of the bra_key, default is little-endian
-  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
+  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 +
+  // 13
   const int64_t bra_len = (sorb - 1) / 64 + 1;
+  if (bra_key.size(1) != MAX_SORB_LEN * 8) {
+    std::cout << "key: shape[1] " << bra_key.size(1) << " != MAX_SORB_lEN * 8"
+              << MAX_SORB_LEN * 8 << std::endl;
+    exit(1);
+  }
   const int64_t nbatch = onv.size(0);
   int64_t length = bra_key.size(0);
+  assert(bra_key.size(1) == onv.size(1));
   auto device = bra_key.device();
+  auto options = torch::TensorOptions().dtype(torch::kInt64).device(device);
+  auto options_bool = torch::TensorOptions().dtype(torch::kBool).device(device);
+
+  if (onv.numel() == 0) {
+    Tensor result = torch::zeros({0}, options);
+    Tensor mask = torch::zeros({0}, options_bool);
+    return std::make_tuple(result, mask);
+  }
 
   const unsigned long *onv_ptr =
       reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
   const unsigned long *bra_key_ptr =
       reinterpret_cast<unsigned long *>(bra_key.data_ptr<uint8_t>());
-  Tensor result = torch::zeros(
-      nbatch, torch::TensorOptions().dtype(torch::kInt64).device(device));
+  auto t0 = tools::get_time();
+  Tensor result = torch::empty(nbatch, options);
+  Tensor mask = torch::ones(nbatch, options_bool);
   int64_t *result_ptr = result.data_ptr<int64_t>();
-  binary_search_BigInteger_cuda(bra_key_ptr, onv_ptr, result_ptr, nbatch,
-                                length, bra_len, little_endian);
-  return result;
-  // Tensor idx = torch::masked_select(result, result.gt(-1));
-  // return std::make_tuple(result, wf_value.index_select(0, idx));
+  // Tensor baseline =
+  //     torch::arange(nbatch,
+  //     torch::TensorOptions(torch::kInt64).device(device));
+  // auto t1 = tools::get_time();
+  binary_search_BigInteger_cuda(bra_key_ptr, onv_ptr, result_ptr,
+                                mask.data_ptr<bool>(), nbatch, length, bra_len,
+                                little_endian);
+  // auto t2 = tools::get_time();
+  // Tensor mask1 = result.gt(-1);
+  // Tensor onv_idx = baseline.masked_select(mask);
+  // auto onv_not_idx = baseline.masked_select(torch::logical_not(mask));
+  // std::cout << std::setprecision(6) <<
+  // "zeros:" << tools::get_duration_nano(t1-t0)/1.e06 << " ms " <<
+  // "WF-LUT:" << tools::get_duration_nano(t2-t1) / 1.e06 << " ms " <<
+  // std::endl;
+  return std::make_tuple(result, mask);
+}
+
+myHashTable test_hash_tensor(const Tensor &bra_key, const int sorb) {
+  assert(bra_key.size(1) == sizeof(KeyT));
+  if (bra_key.size(1) != sizeof(KeyT)) {
+    std::cout << "key: shape[1] " << bra_key.size(1) << " != keyT size "
+              << sizeof(KeyT) << std::endl;
+    exit(1);
+  }
+
+  const int64_t ele_num = bra_key.size(0);
+  auto key_ptr = reinterpret_cast<unsigned long *>(bra_key.data_ptr<uint8_t>());
+  auto device = bra_key.device();
+  Tensor values = torch::arange(
+      ele_num, torch::TensorOptions().dtype(torch::kInt64).device(device));
+  auto value_ptr = values.data_ptr<int64_t>();
+
+  // hashTable setting
+  float avg2cacheline = 0.3;
+  float avg2bsize = 0.55;
+  int cacheline_size = 128 / sizeof(KeyT);
+  int avg_size = cacheline_size * avg2cacheline;
+  int bucket_size = avg_size / avg2bsize;
+  int bucket_num = (ele_num + avg_size - 1) / avg_size;
+
+  auto device_index = bra_key.device().index();
+  myHashTable ht;
+  while (!build_hashtable(ht, (KeyT *)key_ptr, (ValueT *)value_ptr, bucket_num,
+                          bucket_size, ele_num, device_index)) {
+    bucket_size = 1.4 * bucket_size;
+    avg2bsize = (float)avg_size / bucket_size;
+    printf(
+        "Build hash table failed! The avg2bsize is %f now. Rebuilding... ...\n",
+        avg2bsize);
+  }
+
+  // Testing lookup-hashtable
+  // Tensor values1 = torch::empty_like(values);
+  // auto *val_ptr = values.data_ptr<int64_t>();
+  // unsigned long *key_ptr1 =
+  //     reinterpret_cast<unsigned long *>(bra_key.clone().data_ptr<uint8_t>());
+  // auto mask = torch::ones(ele_num,
+  // torch::TensorOptions().dtype(torch::kBool).device(device)); hash_lookup(ht,
+  // key_ptr1, val_ptr, mask.data_ptr<bool>(), ele_num); std::cout <<
+  // torch::allclose(values1, values) << std::endl;
+
+  return ht;
+}
+
+tuple_tensor_2d hash_lut_tensor(const myHashTable ht, const Tensor onv) {
+  auto device = onv.device();
+  auto options = torch::TensorOptions().dtype(torch::kInt64).device(device);
+  auto options_bool = torch::TensorOptions().dtype(torch::kBool).device(device);
+
+  if (onv.numel() == 0) {
+    Tensor result = torch::zeros({0}, options);
+    Tensor mask = torch::zeros({0}, options_bool);
+    return std::make_tuple(result, mask);
+  }
+
+  auto length = onv.size(0);
+  Tensor result = torch::empty(length, options);
+  Tensor mask = torch::ones(length, options_bool);
+  int64_t *result_ptr = result.data_ptr<int64_t>();
+
+  unsigned long *key_ptr =
+      reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
+
+  hash_lookup(ht, key_ptr, result.data_ptr<int64_t>(), mask.data_ptr<bool>(),
+              length);
+
+  return std::make_tuple(result, mask);
 }

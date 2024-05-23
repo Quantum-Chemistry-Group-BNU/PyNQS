@@ -1,7 +1,7 @@
 #include "onstate.h"
 #include <algorithm>
+#include <bitset>
 #include <cstdint>
-
 // #include "utils.h"
 
 namespace squant {
@@ -130,6 +130,52 @@ void get_vlst_ab_cpu(const unsigned long *bra, int *vlst, const int sorb,
   }
 }
 
+void get_olst_vlst_ab_cpu(const unsigned long *bra, int *lst, const int sorb,
+                          const int _len) {
+  // std::bitset<sorb> bitset(bra[0]);
+  // std::cout << "bra " << bitset << std::endl;
+  // occupied orbital(abab) -> virtual orbital(abab), notice: alpha != beta
+  // e.g. 0b00011100 -> 23410567
+  unsigned long tmp;
+  int idx = 0;
+  int ida = 0;
+  int idb = 0;
+  // occupied orbital
+  for (int i = 0; i < _len; i++) {
+    tmp = bra[i];
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1) {
+        idb++;
+        idx = 2 * idb - 1;
+      } else {
+        ida++;
+        idx = 2 * (ida - 1);
+      }
+      lst[idx] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+  // virtual orbital
+  for (int i = 0; i < _len; i++) {
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64));
+    while (tmp != 0) {
+      int j = __builtin_ctzl(tmp);
+      int s = i * 64 + j;
+      if (s & 1) {
+        idb++;
+        idx = 2 * idb - 1;
+      } else {
+        ida++;
+        idx = 2 * (ida - 1);
+      }
+      lst[idx] = s;
+      tmp &= ~(1ULL << j);
+    }
+  }
+}
+
 void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
                   const int bra_len) {
   constexpr int block = 64;
@@ -140,12 +186,14 @@ void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
       idx++;
     }
   }
-  const int reset = sorb % block;
+  int reset = sorb % block;
+  reset = reset > 0 ? reset:64;
   for (int j = 1; j <= reset; j++) {
     // if (idx >= sorb) break;
     lst[idx] = num_parity_cpu(bra[bra_len - 1], j);
     idx++;
   }
+  assert(idx == sorb);
 }
 
 int64_t permute_sgn_cpu(const int64_t *image2, const int64_t *onstate,

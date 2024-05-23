@@ -65,42 +65,73 @@ torch::Tensor onv_to_tensor_tensor_cpu(const torch::Tensor &bra_tensor,
       reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
   double *comb_ptr = comb_bit.data_ptr<double>();
 
-  for (int i = 0; i < nbatch; i++) {
-    squant::get_zvec_cpu(&bra_ptr[i * bra_len], &comb_ptr[i * sorb], sorb,
-                         bra_len);
-  }
+  at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+    for (const auto i : c10::irange(begin, end)) {
+      squant::get_zvec_cpu(&bra_ptr[i * bra_len], &comb_ptr[i * sorb], sorb,
+                           bra_len);
+    }
+  });
+
+  // for (int i = 0; i < nbatch; i++) {
+  //   squant::get_zvec_cpu(&bra_ptr[i * bra_len], &comb_ptr[i * sorb], sorb,
+  //                        bra_len);
+  // }
 
   return comb_bit;
 }
 
 tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
                                const int nele, const int noA, const int noB,
-                               const int seed) {
+                               const int seed, const bool in_place) {
+  // bra: (nbatch, bra_len)
   const int bra_len = (sorb - 1) / 64 + 1;
-  int merged[MAX_NO + MAX_NV] = {0};
-  auto bra = bra_tensor.clone();
+  // int merged[MAX_NO + MAX_NV] = {0};
+  auto bra = bra_tensor;
+  if (not in_place) {
+    bra = bra_tensor.clone();
+  }
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
 
-  squant::get_olst_ab_cpu(bra_ptr, merged, bra_len);
-  squant::get_vlst_ab_cpu(bra_ptr, merged + nele, sorb, bra_len);
-  const int ncomb = squant::get_Num_SinglesDoubles(sorb, noA, noB);
-  static std::mt19937 rng(seed);
-  static std::uniform_int_distribution<int> u0(0, ncomb - 1);
-  int r0 = u0(rng);
-  int idx_lst[4] = {0};
-  squant::unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
-  for (int i = 0; i < 4; i++) {
-    int idx = merged[idx_lst[i]];  // merged[olst, vlst]
-    BIT_FLIP(bra_ptr[idx / 64], idx % 64);
+  Tensor merged = get_merged_tensor_cpu(bra, nele, sorb, noA, noB);
+  auto *merged_ptr = reinterpret_cast<int32_t *>(merged.data_ptr<int32_t>());
+  // squant::get_olst_vlst_ab_cpu(bra_ptr, merged, sorb, bra_len);
+
+  auto nbatch = bra.size(0);
+  const int64_t ncomb = squant::get_Num_SinglesDoubles(sorb, noA, noB);
+  if (bra.dim() == 1) {
+    nbatch = 1;
   }
+  at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+    auto seed_thread = seed + at::get_thread_num();
+    // std::cout << "thread: " << at::get_thread_num() << "seed :" <<
+    // seed_thread << std::endl;
+    for (const auto i : c10::irange(begin, end)) {
+      static std::mt19937 rng(seed_thread);
+      static std::uniform_int_distribution<int> u0(0, ncomb - 1);
+      int r0 = u0(rng);
+      // std::cout << "r0: " << r0 << std::endl;
+      int idx_lst[4] = {0};
+      squant::unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
+      auto offset0 = i * sorb;
+      auto offset1 = i * bra_len;
+      for (int j = 0; j < 4; j++) {
+        auto idx = merged_ptr[offset0 + idx_lst[j]];
+        BIT_FLIP(bra_ptr[offset1 + idx / 64], idx % 64);
+        // int idx = merged[idx_lst[i]];  // merged[olst, vlst]
+        // BIT_FLIP(bra_ptr[idx / 64], idx % 64);
+      }
+    }
+  });
   return std::make_tuple(
-      onv_to_tensor_tensor_cpu(bra.unsqueeze(0), sorb).squeeze(), bra);
+      onv_to_tensor_tensor_cpu(bra.reshape({nbatch, -1}), sorb), bra);
 }
 
 Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
                              const int noA, const int noB) {
   // bra: (nbatch, bra_len * 8)
+  // occupied orbital(abab) -> virtual orbital(abab)
+  // e.g. 0b00011100 ->  23410567
   const int nbatch = bra.size(0);
   const int bra_len = (sorb - 1) / 64 + 1;
   auto options = torch::TensorOptions()
@@ -112,12 +143,16 @@ Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
   int *merged_ptr = merged.data_ptr<int32_t>();
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
-  for (int i = 0; i < nbatch; i++) {
-    squant::get_olst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb],
-                            bra_len);
-    squant::get_vlst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb + nele],
-                            sorb, bra_len);
-  }
+  at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+    for (const auto i : c10::irange(begin, end)) {
+      squant::get_olst_vlst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb],
+                                   sorb, bra_len);
+    }
+  });
+  // for (int i = 0; i < nbatch; i++) {
+  //   squant::get_olst_vlst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb],
+  //                                sorb, bra_len);
+  // }
   return merged;
 }
 
@@ -156,23 +191,24 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
 
   // merged: (nbatch, ncomb)
   Tensor merged = get_merged_tensor_cpu(bra_tensor, nele, sorb, noA, noB);
-  // std::cout <<"merged: \n" << merged << std::endl;
   int *merged_ptr = merged.data_ptr<int32_t>();
-  for (int i = 0; i < nbatch; i++) {
-    for (int j = 1; j < ncomb; j++) {
-      if (flag_bit) {
-        // comb[i, j], comb_bit[i, j], merged[i]
-        squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
-                            &comb_bit_ptr[i * ncomb * sorb + j * sorb],
-                            &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
-                            noB);
-      } else {
-        squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
-                            &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
-                            noB);
+  at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+    for (const auto i : c10::irange(begin, end)) {
+      for (int j = 1; j < ncomb; j++) {
+        if (flag_bit) {
+          // comb[i, j], comb_bit[i, j], merged[i]
+          squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
+                              &comb_bit_ptr[i * ncomb * sorb + j * sorb],
+                              &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
+                              noB);
+        } else {
+          squant::get_comb_SD(&comb_ptr[i * ncomb * bra_len + j * bra_len],
+                              &merged_ptr[i * sorb], j - 1, sorb, bra_len, noA,
+                              noB);
+        }
       }
     }
-  }
+  });
   return std::make_tuple(comb, comb_bit);
 }
 
@@ -209,26 +245,18 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
       reinterpret_cast<unsigned long *>(ket_tensor.data_ptr<uint8_t>());
   double *Hmat_ptr = Hmat.data_ptr<double>();
 
-  if (flag_eloc) {
-    for (int i = 0; i < n; i++) {
+  at::parallel_for(0, n, 0, [&](int64_t begin, int64_t end) {
+    for (const auto i : c10::irange(begin, end)) {
       for (int j = 0; j < m; j++) {
-        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[i, j])
-        Hmat_ptr[i * m + j] = squant::get_Hij_cpu(
-            &bra_ptr[i * bra_len], &ket_ptr[i * m * bra_len + j * bra_len],
-            h1e_ptr, h2e_ptr, sorb, nele, bra_len);
-      }
-    }
-  } else {
-    for (int i = 0; i < n; i++) {
-      for (int j = 0; j < m; j++) {
+        auto offset = flag_eloc * i * m * bra_len + j * bra_len;
+        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[i, j]), flag-eloc == True
         // Hmat[i, j] = get_Hij_cpu(bra[i], ket[m])
         Hmat_ptr[i * m + j] =
-            squant::get_Hij_cpu(&bra_ptr[i * bra_len], &ket_ptr[j * bra_len],
+            squant::get_Hij_cpu(&bra_ptr[i * bra_len], &ket_ptr[offset],
                                 h1e_ptr, h2e_ptr, sorb, nele, bra_len);
       }
     }
-  }
-
+  });
   return Hmat;
 }
 
@@ -455,6 +483,11 @@ Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
 
 Tensor constrain_make_charts_cpu(const Tensor &sym_index) {
   const int64_t nbatch = sym_index.size(0);
+  
+  if(nbatch == 0){
+    return torch::zeros({0, 4}).to(torch::kDouble);
+  }
+
   const int64_t *sym_ptr = sym_index.data_ptr<int64_t>();
   auto result = std::vector<double>(nbatch * 4, 0.0);
 
@@ -532,33 +565,49 @@ int64_t binary_search_BigInteger(const IntType *arr, const IntType *target,
   return -1;
 }
 
-Tensor wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
+tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
                             const int sorb, const bool little_endian = true) {
   // bra_key: (length, bra_len * 8)
   // onv: (nbatch, bra_len * 8)
   // little_endian: the order of the bra_key, default is little-endian
-  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 + 13
+  // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 +
+  // 13
   const int64_t bra_len = (sorb - 1) / 64 + 1;
   const int64_t nbatch = onv.size(0);
   int64_t length = bra_key.size(0);
+
+  auto options = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU);
+  auto options_bool =  torch::TensorOptions().dtype(torch::kBool).device(torch::kCPU);
+
+  if (onv.numel() == 0) {
+    Tensor result = torch::zeros({0}, options);
+    Tensor mask = torch::zeros({0}, options_bool);
+    return std::make_tuple(result, mask);
+  }
 
   const unsigned long *onv_ptr =
       reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());
   const unsigned long *bra_key_ptr =
       reinterpret_cast<unsigned long *>(bra_key.data_ptr<uint8_t>());
-  Tensor result = torch::zeros(
-      nbatch, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+  Tensor result = torch::zeros(nbatch, options);
+  Tensor mask = torch::ones(nbatch, options_bool);
   int64_t *result_ptr = result.data_ptr<int64_t>();
+  bool *mask_ptr = mask.data_ptr<bool>();
 
   // at::parallel_for maybe is faster, but push_back is error
-  for (int64_t i = 0; i < nbatch; i++) {
-    result_ptr[i] = binary_search_BigInteger<unsigned long>(
-        bra_key_ptr, &onv_ptr[i * bra_len], length, bra_len, little_endian);
-  }
-
-  return result;
-  // auto idx = torch::masked_select(result, result.gt(-1));
-  // return std::make_tuple(result, wf_value.index_select(0, idx));
+  // parallel, ref: https://zhuanlan.zhihu.com/p/652659936
+  // std::cout << "nbatch: " << nbatch << " length: " << length << std::endl;
+  at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+    for (const auto i: c10::irange(begin, end)) {
+      auto x = binary_search_BigInteger<unsigned long>(
+          bra_key_ptr, &onv_ptr[i * bra_len], length, bra_len, little_endian);
+      result_ptr[i] = x;
+      if (x == -1) {
+        mask_ptr[i] = false;
+      }
+    }
+  });
+  return std::make_tuple(result, mask);
 }
 
 inline std::vector<std::vector<unsigned long>> convert_space(const Tensor &bra,

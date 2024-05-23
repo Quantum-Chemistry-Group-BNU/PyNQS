@@ -9,7 +9,7 @@ Tensor onv_to_tensor_tensor_cpu(const Tensor &bra_tensor, const int sorb);
 
 tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
                                const int nele, const int noA, const int noB,
-                               const int seed);
+                               const int seed, const bool in_place = false);
 
 Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
                              const int noA, const int noB);
@@ -40,8 +40,8 @@ Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
 
 Tensor constrain_make_charts_cpu(const Tensor &sym_index);
 
-Tensor wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
-                            const int sorb, const bool little_endian);
+tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
+                                     const int sorb, const bool little_endian);
 
 tuple_tensor_2d wavefunction_lut_hash(const Tensor &bra_key,
                                       const Tensor &wf_value, const Tensor &onv,
