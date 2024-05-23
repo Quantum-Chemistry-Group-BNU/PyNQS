@@ -209,6 +209,8 @@ class VMCOptimizer(BaseVMCOptimizer):
             synchronize()
             self.logger_iteration_info(epoch=epoch, cost=cost)
 
+            if self.sampler.use_LUT:
+                self.sampler.WF_LUT.clean_memory()
             del sample_state, eloc, state, psi, cost
 
         # end vmc iterations

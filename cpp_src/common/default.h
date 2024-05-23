@@ -1,13 +1,13 @@
 #pragma once
 
-#define MAX_SORB_LEN 3  // max spin orbital: 64 * 3
-#define MAX_NELE 140    // max electron: 140
-#define MAX_NO 140      // max occupied orbital
-#define MAX_NOA 70
-#define MAX_NOB 70
-#define MAX_NV 80  // max virtual orbital
-#define MAX_NVA 40
-#define MAX_NVB 40
+#define MAX_SORB_LEN 1              // max spin orbital: 64 * 3
+#define MAX_NELE MAX_SORB_LEN * 40  // max electron: 140
+#define MAX_NO MAX_SORB_LEN * 40    // max occupied orbital
+#define MAX_NOA MAX_NO / 2          // alpha max occupied orbital / 2
+#define MAX_NOB MAX_NO / 2          // beta max occupied orbital / 2
+#define MAX_NV MAX_SORB_LEN * 40    // max virtual orbital
+#define MAX_NVA MAX_NV / 2          //  alpha max virtual orbital / 2
+#define MAX_NVB MAX_NOA / 2         // beta max virtual orbital / 2
 #define THREAD 32
 #define VERBOSE false
 #define DEBUG false

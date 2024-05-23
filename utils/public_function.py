@@ -19,6 +19,14 @@ from .onv import ONV
 from .distributed import get_rank, get_world_size
 # from libs.bak.C_extension import wavefunction_lut as v1
 
+USE_HASH = False
+try:
+    # Using HashTable implementing in CUDA
+    from libs.C_extension import hash_build, hash_lookup, HashTable
+except ImportError:
+    import warnings
+    warnings.warn("Not implement hashtable", UserWarning)
+
 def check_para(bra: Tensor):
     r"""
     check type of dtype is torch.uint8
@@ -706,7 +714,6 @@ def split_length_idx(dim: int, length: int) -> List[int]:
     idx_lst = idx_lst.cumsum(dim=0).tolist()
     return idx_lst
 
-
 class WavefunctionLUT:
     r"""
     wavefunction Lookup-Table in order to reduce psi(x) calculation in local energy
@@ -734,6 +741,8 @@ class WavefunctionLUT:
             self._bra_key = bra_key[idx].to(device)
             self._wf_value = wf_value[idx].to(device)
             self.idx_sorted = torch.argsort(idx, stable=True)
+            if USE_HASH:
+                self.hashtable = hash_build(self._bra_key, sorb)
         else:
             self._bra_key = bra_key.to(device)
             self._wf_value = wf_value.to(device)
@@ -765,6 +774,14 @@ class WavefunctionLUT:
         self._bra_key = self._bra_key.to(device=device)
         self._wf_value = self._wf_value.to(device=device)
 
+    @property
+    def memory(self) -> float:
+        if USE_HASH:
+            memory = self.hashtable.memory / 2**20
+        else:
+            memory = self.bra_key.numel() / 2**20
+        return memory
+
     def lookup(self, onv: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Returns:
@@ -778,7 +795,10 @@ class WavefunctionLUT:
         nbatch = onv.size(0)
         device = onv.device
         baseline = torch.arange(nbatch, device=device, dtype=torch.int64)
-        idx_array, mask = wavefunction_lut(self._bra_key, onv, self.sorb)
+        if USE_HASH:
+            idx_array, mask = hash_lookup(self.hashtable, onv)
+        else:
+            idx_array, mask = wavefunction_lut(self._bra_key, onv, self.sorb)
         # the index of onv in/not int bra-key
         onv_idx = baseline[mask]
         onv_not_idx = baseline[torch.logical_not(mask)]
@@ -796,12 +816,23 @@ class WavefunctionLUT:
         assert self.rank_end >= end, "Index date must be in the same rank"
         return self.wf_value[self.idx_sorted[begin: end]]
 
+    def clean_memory(self) -> None:
+        """
+        clean memory avoid OOM
+        """
+        if USE_HASH:
+            self.hashtable.cleanMemory()
+        else:
+            del self._bra_key, self._wf_value
+
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}(\n"
             + f"    bra-key shape: {tuple(self.bra_key.size())}\n"
             + f"    wf-value shape: {self.wf_value.size(0)}\n"
-            + f"    sorb: {self.sorb}"
+            + f"    sorb: {self.sorb}\n"
+            + f"    Using HashTable: {USE_HASH}\n"
+            + f"    Memory: {self.memory:.3f} MiB\n"
         )
 
 # XXX: how to implement the MemoryTrack?

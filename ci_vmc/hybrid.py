@@ -662,7 +662,8 @@ class NqsCi(BaseVMCOptimizer):
                 logger.info(s, master=True)
             cost = torch.tensor([delta_grad, delta_param, delta], device=self.device)
             self.logger_iteration_info(epoch=epoch, cost=cost)
-
+            if self.sampler.use_LUT:
+                self.sampler.WF_LUT.clean_memory()
         # End CI-NQS iteration
         vmc_time = (time.time_ns() - begin_vmc) / 1.0e09
         if self.rank == 0:
