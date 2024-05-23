@@ -337,6 +337,11 @@ tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
   // bra_key: [12, 13] => little-endian: 13 * 2**64 + 12, big-endian 12* 2**64 +
   // 13
   const int64_t bra_len = (sorb - 1) / 64 + 1;
+  if (bra_key.size(1) != MAX_SORB_LEN * 8) {
+    std::cout << "key: shape[1] " << bra_key.size(1) << " != MAX_SORB_lEN * 8"
+              << MAX_SORB_LEN * 8 << std::endl;
+    exit(1);
+  }
   const int64_t nbatch = onv.size(0);
   int64_t length = bra_key.size(0);
   assert(bra_key.size(1) == onv.size(1));
@@ -377,7 +382,6 @@ tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
 }
 
 myHashTable test_hash_tensor(const Tensor &bra_key, const int sorb) {
-
   assert(bra_key.size(1) == sizeof(KeyT));
   if (bra_key.size(1) != sizeof(KeyT)) {
     std::cout << "key: shape[1] " << bra_key.size(1) << " != keyT size "
