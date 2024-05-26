@@ -218,6 +218,9 @@ Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
                      .dtype(torch::kInt64)
                      .layout(onstate.layout())
                      .device(onstate.device());
+  if (nbatch == 0) {
+    return torch::zeros({0}, options).to(torch::kDouble);
+  }
   const Tensor index_tensor =
       torch::arange(sorb, options).unsqueeze(0).repeat({nbatch, 1});
 
