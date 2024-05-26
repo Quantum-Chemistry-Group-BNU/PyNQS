@@ -304,7 +304,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // TODO: 100000 cost: 727MiB memory?
   m.def("hash_build", &test_hash_tensor, "test_hash");
   m.def("hash_lookup", &hash_lut_tensor, "lookup-hash");
-  py::class_<myHashTable>(m, "HashTable", "this is testing")
+  py::class_<myHashTable>(m, "HashTable", "this is testing", py::module_local())
       .def(py::init())
       .def_readwrite("bucketNum", &myHashTable::bNum)
       .def_readwrite("bucketSize", &myHashTable::bSize)
@@ -317,7 +317,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
                 (sizeof(int) * ht.bNum) + (sizeof(BFT) * ht.bNum);
             return memory_size;
           })
-      .def_static("bitWidth",[](){return sizeof(KeyT) / 8;})
+      .def_static("bitWidth", []() { return sizeof(KeyT) / 8; })
       .def("cleanMemory", [](myHashTable &ht) { return freeHashTable(ht); });
 #endif
 
