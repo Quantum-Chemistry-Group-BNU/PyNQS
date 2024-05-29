@@ -75,8 +75,8 @@ __global__ void get_Hij_kernel_2D(double *Hmat, const unsigned long *bra,
 // How to optim
 #pragma unroll
   for (int i = 0; i < _len; i++) {
-    _bra_sh[threadIdx.x + i] = bra[blockIdx.x * blockDim.x + threadIdx.x + i];
-    _ket_sh[threadIdx.y + i] = ket[blockIdx.y * blockDim.y + threadIdx.y + i];
+    _bra_sh[threadIdx.x + i] = bra[idn * _len + i];
+    _ket_sh[threadIdx.y + i] = ket[idm * _len + i];
   }
   __syncthreads();
   if (idn >= n || idm >= m)
