@@ -17,6 +17,10 @@ from utils.public_function import WavefunctionLUT, get_Num_SinglesDoubles
 
 print = partial(print, flush=True)
 
+USE_PROFILE = False
+STOCHASTIC = True
+N_SAMPLE = 100
+SEMI_STOCHASTIC = True
 
 def local_energy(
     x: Tensor,
@@ -71,7 +75,7 @@ def local_energy(
             assert WF_LUT is not None, "WF_ULT must be used if use_sample"
             func = partial(_only_sample_space, index=index, alpha=alpha)
         else:
-            if reduce_psi and eps > 0.0:
+            if reduce_psi and eps >= 0.0:
                 func = _reduce_psi
             else:
                 func = _simple
@@ -266,11 +270,41 @@ def _reduce_psi(
     else:
         psi_x = ansatz(x0).unsqueeze(1)  # (batch, 1)
 
-    # ignore x' when <x|H|x'>/psi(x) < eps, other part is zeros
-    # auto-broadcast psi_x (batch * comb)
-    comb_psi = torch.div(comb_hij, psi_x).flatten()
-    gt_eps_idx = torch.where(comb_psi.abs() > eps)[0]
-    # logger.debug(f"reduce rate: {comb_psi.size(0)} -> {gt_eps_idx.size(0)}")
+    # STOCHASTIC = True if N_SAMPLE > 0 else False
+    # SEMI_STOCHASTIC = True if eps > 0.0 else False
+    # breakpoint()
+    if STOCHASTIC:
+        if SEMI_STOCHASTIC:
+            hij_abs = comb_hij.abs()
+            _mask = hij_abs >= eps
+            _index = torch.where(_mask.flatten())[0]
+            hij = torch.where(_mask, 0, hij_abs)
+        else:
+            hij = comb_hij.abs()
+        # sampling from p(m) , p(m) \propto |Hnm|
+        # 1/N \sum_m' H[n,m'] psi[m'] / p[m']
+        _prob = hij / hij.sum(1, keepdim=True)
+        # (batch, n_Sample)
+        _counts = torch.multinomial(_prob, N_SAMPLE, replacement=True)
+        # add index
+        _counts += torch.arange(batch, device=device).reshape(-1, 1) * n_comb
+        # unique counts
+        _index1, _count = _counts.unique(sorted=True, return_counts=True)
+        # H[n, m]/p[m'] N_m/N_sample
+        _prob = _prob.flatten()
+        comb_hij.view(-1)[_index1] = (_count / N_SAMPLE) * hij.flatten()[_index1] / _prob[_index1]
+        if use_spin_raising:
+            hij_spin.view(-1)[_index1] = (_count / N_SAMPLE) * hij_spin.flatten()[_index1] / _prob[_index1]
+        gt_eps_idx = _index1
+        if SEMI_STOCHASTIC:
+            gt_eps_idx = torch.cat([_index, _index1])
+    else:
+        # ignore x' when |<x|H|x'>| < eps
+        gt_eps_idx = torch.where(comb_hij.reshape(-1).abs() >= eps)[0]
+
+    rate = gt_eps_idx.size(0) / comb_hij.reshape(-1).size(0) * 100
+    logger.debug(f"N-sample: {N_SAMPLE}, STOCHASTIC: {STOCHASTIC}, SEMI_STOCHASTIC: {SEMI_STOCHASTIC}")
+    logger.debug(f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %")
     psi_x1 = torch.zeros(batch * n_comb, dtype=dtype, device=device)
 
     if comb_x.numel() != 0:

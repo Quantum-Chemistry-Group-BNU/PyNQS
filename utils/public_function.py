@@ -140,6 +140,19 @@ def get_Num_SinglesDoubles(sorb: int, noA: int, noB: int) -> int:
     nDab = noA * noB * nvA * nvB
     return sum((nSa, nSb, nDaa, nDbb, nDab))
 
+def get_index_SingleDoubles(sorb: int, noA: int, noB: int) -> List[int]:
+    """
+    (1, aa + bb, aaaa + bbbb + abab)
+    """
+    k = sorb // 2
+    nvA = k - noA
+    nvB = k - noB
+    nSa = noA * nvA
+    nSb = noB * nvB
+    nDaa = noA * (noA - 1) // 2 * nvA * (nvA - 1) // 2
+    nDbb = noB * (noB - 1) // 2 * nvB * (nvB - 1) // 2
+    nDab = noA * noB * nvA * nvB
+    return [1, nSa + nSb, nDaa + nDbb + nDab]
 
 def get_nbatch(
     sorb: int,
