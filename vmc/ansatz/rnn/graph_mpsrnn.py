@@ -268,6 +268,7 @@ class Graph_MPS_RNN(nn.Module):
         self.opt_sites_pos = None
 
         # Graph
+        self.h_boundary = torch.ones((self.hilbert_local, self.dcut), device=self.device, dtype=self.param_dtype)
         self.graph = graph # graph, is also the order of sampling
         self.sample_order = list(self.graph.adj)
         # self.out_num = [t[-1] for t in list(self.graph.in_degree)]
@@ -480,7 +481,6 @@ class Graph_MPS_RNN(nn.Module):
         target = (x + 1) / 2
         n_batch = x.shape[0]
         # List[List[Tensor]] (M, L, local_hilbert_dim, dcut, n_batch)
-        self.h_boundary = torch.ones((self.hilbert_local, self.dcut), device=self.device, dtype=self.param_dtype)
         h = HiddenStates(self.nqubits, self.h_boundary.unsqueeze(-1), self.device, use_list=True)
         h.repeat(1, 1, n_batch)
         # breakpoint()

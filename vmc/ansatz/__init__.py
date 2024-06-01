@@ -7,6 +7,7 @@ from .hybrid.hybrid import HybridWaveFunction
 from .hybrid.hqc import HybridQCWaveFunction
 from .transformer.mps_transformer import MPSdecoder
 from .rnn.mps_rnn import MPS_RNN_2D
+from .rnn.graph_mpsrnn import Graph_MPS_RNN
 try:
     from .mps import MPSWavefunction
 except ImportError:
@@ -25,4 +26,5 @@ __all__ = [
     "HybridQCWaveFunction",
     "MPSdecoder",
     "MPS_RNN_2D",
+    "Graph_MPS_RNN",
 ]

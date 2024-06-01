@@ -152,6 +152,7 @@ class Iface:
 def interface(
     atom: str = None,
     basis="sto-3g",
+    unit=None,
     integral_file: str = "integral.info",
     fci_coeff: bool = False,
     cisd_coeff: bool = False,
@@ -179,7 +180,10 @@ def interface(
         raise ValueError(f"model-type is {model_type}, but excepted in {MODEL_TYPE}")
 
     if model_type == "Chem":
-        mol = gto.Mole(atom=atom, verbose=5, basis=basis, symmetry=False)
+        if unit is None:
+            mol = gto.Mole(atom=atom, verbose=5, basis=basis, symmetry=False)
+        else:
+            mol = gto.Mole(unit=unit,atom=atom, verbose=5, basis=basis, symmetry=False)
         mol.build()
         sorb = mol.nao * 2
         nele = mol.nelectron
