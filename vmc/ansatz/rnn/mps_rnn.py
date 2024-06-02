@@ -283,7 +283,7 @@ class MPS_RNN_2D(nn.Module):
     M: int = #columns
     dcut: int = bond dim
     hilbert_local: int(2 or 4) = local H space dim
-    graph_type: str = caculation order
+    graph_type: str = calculation order
     sample_order: tensor = sampling order
     det_lut: det_lut input
     """
@@ -714,7 +714,7 @@ class MPS_RNN_2D(nn.Module):
                             T[..., :start, :, :dcut_before, :dcut_before, :dcut_before] = _T_left
                             T[..., end:, :, :dcut_before, :dcut_before, :dcut_before] = _T_right
                     else:
-                        _T = torch.view_as_complex(params["module.parm_v.all_sites"])
+                        _T = torch.view_as_complex(params["module.parm_T.all_sites"])
                         T[..., :dcut_before, :dcut_before, :dcut_before] = _T
 
                 if self.nqubits == self.M:
