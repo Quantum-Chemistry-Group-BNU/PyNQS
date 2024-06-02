@@ -344,25 +344,28 @@ class Graph_MPS_RNN(nn.Module):
             c_r = torch.rand(shape00, **self.factory_kwargs_real) * self.iscale
             if self.params_file is not None:
                 params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
-                dcut_before = params["module.parm_v.all_sites"].size(-2)
+                # breakpoint()
+                dcut_before = params["module.params_v.all_sites"].size(-2)
+                if self.dcut_before is None:
+                    self.dcut_before = dcut_before
                 # 'module.parm_M.all_sites'
                 M = torch.view_as_complex(M_r)
-                _M = torch.view_as_complex(params["module.parm_M.all_sites"])
+                _M = torch.view_as_complex(params["module.params_M.all_sites"])
                 M[..., :dcut_before, :dcut_before] = _M
                 # 'module.parm_v.all_sites'
                 v = torch.view_as_complex(v_r)
-                _v = torch.view_as_complex(params["module.parm_v.all_sites"])
-                v[..., : self.dcut_before] = _v
+                _v = torch.view_as_complex(params["module.params_v.all_sites"])
+                v[..., :dcut_before] = _v
                 # 'module.parm_eta.all_sites'
                 eta = torch.view_as_complex(eta_r)
-                _eta = torch.view_as_complex(params["module.parm_eta.all_sites"])
+                _eta = torch.view_as_complex(params["module.params_eta.all_sites"])
                 eta[..., :dcut_before] = _eta
                 # 'module.parm_w.all_sites'
                 w = torch.view_as_complex(w_r)
-                _w = torch.view_as_complex(params["module.parm_w.all_sites"])
-                w[..., : self.dcut_before] = _w
+                _w = torch.view_as_complex(params["module.params_w.all_sites"])
+                w[..., :dcut_before] = _w
                 # 'module.parm_c.all_sites' is not attribute to "dcut"
-                c_r = params["module.parm_c.all_sites"]
+                c_r = params["module.params_c.all_sites"]
 
             self.params_M = FrozeSites(M_r, self.froze_sites, self.opt_sites_pos)
             self.params_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos)
@@ -436,7 +439,7 @@ class Graph_MPS_RNN(nn.Module):
         pos_M = num_count(self.graph)[int(i_pos)]
         pos = list(self.graph.predecessors(str(i_pos)))
         # Param.s loaded and cal. h_ud
-        h_ud = torch.zeros(self.hilbert_local, self.dcut, n_batch)
+        h_ud = torch.zeros(self.hilbert_local, self.dcut, n_batch, device=self.device)
 
         v = self.params_v[int(i_pos),...] # (4, dcut)
         eta = self.params_eta[int(i_pos),...] # (dcut)
@@ -453,10 +456,12 @@ class Graph_MPS_RNN(nn.Module):
         else:
             M = self.params_M[pos_M-len(pos):pos_M ,...]
             j_ind = 0
+            # breakpoint()
             for j in pos:
                 h_j_cond = h[int(j),...] # (4, dcut, nbatch)
-                q_j = self.state_to_int(target[:, 2 * int(j) : 2 * int(j) + 2], sites=2)  # (nbatch, 1)
+                q_j = self.state_to_int(target[:, 2 * list(self.graph).index(j) : 2 * list(self.graph).index(j) + 2], sites=2)  # (nbatch, 1)
                 q_j = (q_j.reshape(1, 1, -1)).repeat(1, self.dcut, 1)  # (1, dcut, nbatch)
+                # breakpoint()
                 h_j = h_j_cond.gather(0, q_j).reshape(self.dcut, n_batch) # (dcut, nbatch) 
                 M_j = M[j_ind,...] # (4, dcut, dcut)
                 h_ud = h_ud + torch.matmul(M_j, h_j)  # (4, dcut, nbatch)
