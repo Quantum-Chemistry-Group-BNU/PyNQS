@@ -293,8 +293,8 @@ def _reduce_psi(
         # H[n, m]/p[m'] N_m/N_sample
         _prob = _prob.flatten()
         comb_hij.view(-1)[_index1] = (_count / N_SAMPLE) * hij.flatten()[_index1] / _prob[_index1]
-        if use_spin_raising:
-            hij_spin.view(-1)[_index1] = (_count / N_SAMPLE) * hij_spin.flatten()[_index1] / _prob[_index1]
+        # if use_spin_raising:
+        #     hij_spin.view(-1)[_index1] = (_count / N_SAMPLE) * hij_spin.flatten()[_index1] / _prob[_index1]
         gt_eps_idx = _index1
         if SEMI_STOCHASTIC:
             gt_eps_idx = torch.cat([_index, _index1])
