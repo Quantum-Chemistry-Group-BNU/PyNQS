@@ -58,7 +58,7 @@ class HiddenStates:
             for i in range(nqubits):
                 self.hTensor[i] = values.clone()
         else:
-            assert values.size(0) == nqubits
+            # assert values.size(0) == nqubits
             self.hTensor = values
 
     def repeat(self, *size: tuple):
@@ -80,21 +80,29 @@ class HiddenStates:
         return self
 
     def __getitem__(self, index: tuple[int | slice]):
+        # try:
         i, *k = index
-        if len(k) == 0 and i == Ellipsis :
+        # except:
+            # breakpoint()
+        if len(k) == 0 and i == Ellipsis:
             if not self.use_list:
                 x = HiddenStates(self.nqubits, self.hTensor[i], self.device, use_list=False)
                 return x
             else:
                 raise NotImplementedError(f"List[Tensor] does not support {index}")
         elif len(k) == 0 or k == [Ellipsis]:
+            # breakpoint()
             return self.hTensor[i]
         else:
-            logger.info(index)
-            raise NotImplementedError()
+            if not self.use_list:
+                # breakpoint()
+                return HiddenStates(self.nqubits, self.hTensor[..., k[0]], self.device, use_list=False)
+            else:    
+                logger.info(index)
+                raise NotImplementedError()
 
     def __setitem__(self, index, value: Tensor) -> None:
-        i, j = index
+        i = index
         self.hTensor[i] = value
 
     def shape(self) -> tuple[int, ...]:
@@ -461,7 +469,6 @@ class Graph_MPS_RNN(nn.Module):
                 h_j_cond = h[int(j),...] # (4, dcut, nbatch)
                 q_j = self.state_to_int(target[:, 2 * list(self.graph).index(j) : 2 * list(self.graph).index(j) + 2], sites=2)  # (nbatch, 1)
                 q_j = (q_j.reshape(1, 1, -1)).repeat(1, self.dcut, 1)  # (1, dcut, nbatch)
-                # breakpoint()
                 h_j = h_j_cond.gather(0, q_j).reshape(self.dcut, n_batch) # (dcut, nbatch) 
                 M_j = M[j_ind,...] # (4, dcut, dcut)
                 h_ud = h_ud + torch.matmul(M_j, h_j)  # (4, dcut, nbatch)
@@ -472,7 +479,7 @@ class Graph_MPS_RNN(nn.Module):
         normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
         h_ud = h_ud / normal # (4, dcut, nbatch)
         # breakpoint()
-        h[i,...] = h_ud
+        h[i] = h_ud
         # cal. prob. and normlized
         eta = torch.abs(eta) ** 2 # (dcut)
         P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
@@ -631,7 +638,7 @@ class Graph_MPS_RNN(nn.Module):
         if min_batch == -1:
             min_batch = float("inf")
         for k_th in range(k_start, k_end, interval):
-            # logger.info(f"dim: {sample_unique.shape[0]}. min-batch: {min_batch}")
+            logger.info(f"dim: {sample_unique.shape[0]}. min-batch: {min_batch}")
             if sample_unique.shape[0] > min_batch:
                 dim = sample_unique.shape[0]
                 num_loop = int(((dim - 1) // min_batch) + 1)
@@ -646,7 +653,12 @@ class Graph_MPS_RNN(nn.Module):
                         amps_value[begin:end].clone(),
                         phi[begin:end].clone(),
                     )
+                    # breakpoint()
                     _h = h[..., begin:end]
+                    # print(_h.shape, begin, end)
+
+                    # if _h.shape()[-1] < end:
+                        # breakpoint()
                     su, sc, av, pl = self._sample_dfs(
                         _sample_unique,
                         _sample_counts,
@@ -694,7 +706,7 @@ class Graph_MPS_RNN(nn.Module):
         sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
         psi_amp = torch.ones(1, **self.factory_kwargs)
         h = self.h_boundary
-        h = HiddenStates(self.nqubits, self.h_boundary.unsqueeze(-1), self.device, use_list=True)
+        h = HiddenStates(self.nqubits, self.h_boundary.unsqueeze(-1).repeat(self.nqubits, 1, 1, 1), self.device, use_list=False)
         # breakpoint()
         phi = torch.zeros(1, device=self.device)  # (n_batch,)
 
@@ -763,7 +775,10 @@ class Graph_MPS_RNN(nn.Module):
         psi_phase = torch.exp(phi * 1j)
         psi = psi_amp * psi_phase
         baseline = torch.arange(self.nqubits, device=self.device)
-        extra_phase = permute_sgn(baseline, sample_unique.long(), self.nqubits)
+        # sample-phase
+        graph = nx.relabel_nodes(self.graph, {n: int(n) for n in self.graph.nodes()})
+        order = torch.tensor(list(graph.nodes))
+        extra_phase = permute_sgn(order, sample_unique.long(), self.nqubits)
         psi = psi * extra_phase
 
         # wf = self.forward(sample_unique)
@@ -795,9 +810,9 @@ class Graph_MPS_RNN(nn.Module):
 if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
-    device = "cpu"
-    sorb = 8
-    nele = 4
+    device = "cuda"
+    sorb = 24
+    nele = 12
     fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     length = fock_space.shape[0]
     fci_space = onv_to_tensor(get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb)
@@ -812,7 +827,7 @@ if __name__ == "__main__":
     #     # param_dtype = torch.complex128
     #     # tensor=False,
     # )
-    graph_nn = nx.read_graphml("/Users/imacbook/Desktop/Research/zbh/ordering_and_graph/graph.graphml")
+    graph_nn = nx.read_graphml("/home/dell/usrs/zbh/PyNQS/graph/H12-34-maxdes2.graphml")
     # breakpoint()
     model = Graph_MPS_RNN(
         use_symmetry=True,
@@ -824,15 +839,15 @@ if __name__ == "__main__":
         dcut=6,
         graph=graph_nn,
     )
-    psi = model(fci_space)
+    # psi = model(fci_space)
     # breakpoint()
-    params = model.state_dict()
-    M = params['params_M.all_sites']
-    # print(M.shape)
-    v_p = params['params_v.all_sites']
-    eta_p = params['params_eta.all_sites']
-    w_p = params['params_w.all_sites']
-    c_p = params['params_c.all_sites']
+    # params = model.state_dict()
+    # M = params['params_M.all_sites']
+    # # print(M.shape)
+    # v_p = params['params_v.all_sites']
+    # eta_p = params['params_eta.all_sites']
+    # w_p = params['params_w.all_sites']
+    # c_p = params['params_c.all_sites']
     # M_v = torch.zeros((2,3,4,6,6,2))
     # M_v[1,2,...] = M[2:3,...]
     # M_v[1,1,...] = M[3:4,...]
@@ -872,55 +887,55 @@ if __name__ == "__main__":
     # c[1,1,...] = c_p[4,...]
     # c[1,0,...] = c_p[5,...]
     # (2\times 2)
-    M_v = torch.zeros((2,2,4,6,6,2))
-    M_v[1,1,...] = M[1:2,...]
-    M_v[1,0,...] = M[2:3,...]
-    M_h = torch.zeros((2,2,4,6,6,2))
-    M_h[0,0,...] = M[-1,...]
-    M_h[0,1,...] = M[0:1,...]
-    M_h[1,0,...] = M[3:4,...]
-    eta = torch.zeros((2,2,6,2))
-    eta[0,0,...] = eta_p[0,...]
-    eta[0,1,...] = eta_p[1,...]
-    eta[1,1,...] = eta_p[2,...]
-    eta[1,0,...] = eta_p[3,...]
-    v = torch.zeros((2,2,4,6,2))
-    v[0,0,...] = v_p[0,...]
-    v[0,1,...] = v_p[1,...]
-    v[1,1,...] = v_p[2,...]
-    v[1,0,...] = v_p[3,...]
-    w = torch.zeros((2,2,6,2))
-    w[0,0,...] = w_p[0,...]
-    w[0,1,...] = w_p[1,...]
-    w[1,1,...] = w_p[2,...]
-    w[1,0,...] = w_p[3,...]
-    c = torch.zeros((2,2,2))
-    c[0,0,...] = c_p[0,...]
-    c[0,1,...] = c_p[1,...]
-    c[1,1,...] = c_p[2,...]
-    c[1,0,...] = c_p[3,...]
-    params_2d = {'module.parm_M_h.all_sites':M_h,
-                'module.parm_M_v.all_sites':M_v,
-                'module.parm_eta.all_sites':eta,
-                'module.parm_w.all_sites':w,
-                'module.parm_v.all_sites':v,
-                'module.parm_c.all_sites':c}
-    # print(c.shape)
-    # breakpoint()
-    from mps_rnn import MPS_RNN_2D
-    model2 = MPS_RNN_2D(
-        use_symmetry=True,
-        param_dtype=torch.complex128,
-        hilbert_local=4,
-        nqubits=sorb,
-        nele=nele,
-        device=device,
-        dcut=6,
-        M=4,
-        use_tensor=False,
-        # params_file="/Users/imacbook/Desktop/Research/zbh/PyNQS/H_Chain/cp/H12_mpsrnn1d_0.2_dcut12-checkpoint.pth",
-        params_file=params_2d,
-    )
+    # M_v = torch.zeros((2,2,4,6,6,2))
+    # M_v[1,1,...] = M[1:2,...]
+    # M_v[1,0,...] = M[2:3,...]
+    # M_h = torch.zeros((2,2,4,6,6,2))
+    # M_h[0,0,...] = M[-1,...]
+    # M_h[0,1,...] = M[0:1,...]
+    # M_h[1,0,...] = M[3:4,...]
+    # eta = torch.zeros((2,2,6,2))
+    # eta[0,0,...] = eta_p[0,...]
+    # eta[0,1,...] = eta_p[1,...]
+    # eta[1,1,...] = eta_p[2,...]
+    # eta[1,0,...] = eta_p[3,...]
+    # v = torch.zeros((2,2,4,6,2))
+    # v[0,0,...] = v_p[0,...]
+    # v[0,1,...] = v_p[1,...]
+    # v[1,1,...] = v_p[2,...]
+    # v[1,0,...] = v_p[3,...]
+    # w = torch.zeros((2,2,6,2))
+    # w[0,0,...] = w_p[0,...]
+    # w[0,1,...] = w_p[1,...]
+    # w[1,1,...] = w_p[2,...]
+    # w[1,0,...] = w_p[3,...]
+    # c = torch.zeros((2,2,2))
+    # c[0,0,...] = c_p[0,...]
+    # c[0,1,...] = c_p[1,...]
+    # c[1,1,...] = c_p[2,...]
+    # c[1,0,...] = c_p[3,...]
+    # params_2d = {'module.parm_M_h.all_sites':M_h,
+    #             'module.parm_M_v.all_sites':M_v,
+    #             'module.parm_eta.all_sites':eta,
+    #             'module.parm_w.all_sites':w,
+    #             'module.parm_v.all_sites':v,
+    #             'module.parm_c.all_sites':c}
+    # # print(c.shape)
+    # # breakpoint()
+    # from mps_rnn import MPS_RNN_2D
+    # model2 = MPS_RNN_2D(
+    #     use_symmetry=True,
+    #     param_dtype=torch.complex128,
+    #     hilbert_local=4,
+    #     nqubits=sorb,
+    #     nele=nele,
+    #     device=device,
+    #     dcut=6,
+    #     M=12,
+    #     use_tensor=False,
+    #     # params_file="/Users/imacbook/Desktop/Research/zbh/PyNQS/H_Chain/cp/H12_mpsrnn1d_0.2_dcut12-checkpoint.pth",
+    #     params_file=params_2d,
+    # )
     # print(model(fci_space))
     # breakpoint()
     # logger.info(hasattr(model, "min_batch"))
@@ -939,18 +954,18 @@ if __name__ == "__main__":
     print(f"Psi^2 in AR-Sampling")
     print("--------------------------------")
     sample, counts, wf = model.ar_sampling(
-        n_sample=int(1e14),
+        n_sample=int(1e6),
         min_tree_height=5,
         use_dfs_sample=True,
-        min_batch=1000,
+        min_batch=50000,
     )
     sample = (sample * 2 - 1).double()
     wf1 = model(sample)
-    # breakpoint()
+    breakpoint()
     logger.info(f"p1 {(counts / counts.sum())[:30]}")
     logger.info(f"p2: {wf.abs().pow(2)[:30]}")
     # breakpoint()
-    loss = wf1.norm()
+    # loss = wf1.norm()
 
     # breakpoint()
     # from torch.profiler import profile, record_function, ProfilerActivity
@@ -1004,10 +1019,10 @@ if __name__ == "__main__":
     # print("================================")
     # torch.autograd.set_detect_anomaly(True)
     # loss = wf1.norm()
-    loss.backward()
-    grad = []
-    for param in model.parameters():
-        grad.append(param.grad.reshape(-1))
-    from loguru import logger
+    # loss.backward()
+    # grad = []
+    # for param in model.parameters():
+    #     grad.append(param.grad.reshape(-1))
+    # from loguru import logger
 
-    logger.info(torch.cat(grad).sum().item())
+    # logger.info(torch.cat(grad).sum().item())
