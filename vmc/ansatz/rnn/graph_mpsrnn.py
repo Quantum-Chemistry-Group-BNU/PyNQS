@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-import torch, sys
-from networkx import Graph, DiGraph
+import sys
+import torch
 import networkx as nx
 import torch.nn.functional as F
-from torch import nn, Tensor
+
 from functools import partial
-from typing import Tuple, List, Callable, NewType
+from typing import Tuple, List, NewType
 from typing_extensions import Self
+from torch import nn, Tensor
 from loguru import logger
+from networkx import Graph, DiGraph
 
 sys.path.append("./")
 from vmc.ansatz.symmetry import symmetry_mask, orthonormal_mask
-from vmc.ansatz.utils import joint_next_samples, OrbitalBlock
+from vmc.ansatz.utils import joint_next_samples
 from libs.C_extension import onv_to_tensor, permute_sgn
 
 from utils.det_helper import DetLUT
@@ -80,29 +82,17 @@ class HiddenStates:
 
         return self
 
-    def __getitem__(self, index: tuple[int | slice]):
-        # try:
+    def __getitem__(self, index: tuple[int | slice]) -> Tensor| HiddenStates:
         i, *k = index
-        # except:
-            # breakpoint()
-        if len(k) == 0 and i == Ellipsis:
-            # NO using
-            # logger.debug((i, k))
-            if not self.use_list:
-                x = HiddenStates(self.nqubits, self.hTensor[i], self.device, use_list=False)
-                return x
-            else:
-                raise NotImplementedError(f"List[Tensor] does not support {index}")
-        elif len(k) == 0 or k == [Ellipsis]:
-            # breakpoint()
+        if len(k) == 0 or k == [Ellipsis]:
+            # [i, ...] or [i]
             return self.hTensor[i]
-        else:
+        elif i == Ellipsis and isinstance(k[0], slice):
+            # [..., slice]
             if not self.use_list:
-                # breakpoint()
                 return HiddenStates(self.nqubits, self.hTensor[..., k[0]], self.device, use_list=False)
-            else:    
-                logger.info(index)
-                raise NotImplementedError()
+        else:
+            raise NotImplementedError(f"only support [i], [i, ...], [..., slice]")
 
     def __setitem__(self, index, value: Tensor) -> None:
         i = index
@@ -196,7 +186,7 @@ class FrozeSites(nn.Module):
                 raise NotImplementedError(f"Not support slice: {idx}")
 
     def _select_site(self, pos: int) -> Tensor:
-        #  left-site, mid-site, right-site
+        # left-site, mid-site, right-site
         if pos < self._start:
             return torch.select(self.data[0], self.dim, pos)
         elif pos < self._end:
@@ -253,8 +243,7 @@ class Graph_MPS_RNN(nn.Module):
         nqubits: int = None,
         nele: int = None,
         dcut: int = 6,
-        hilbert_local: int = 2,
-        M: int = 2,
+        hilbert_local: int = 4,
         params_file: str = None,
         graph : Graph| DiGraph= None,
         dcut_before: int = 2,
@@ -279,20 +268,22 @@ class Graph_MPS_RNN(nn.Module):
         self.froze_sites = False
         self.opt_sites_pos = None
 
+        if hilbert_local != 4:
+            raise NotImplementedError(f"Please use the 2-sites mode")
+
         # Graph
         self.h_boundary = torch.ones((self.hilbert_local, self.dcut), device=self.device, dtype=self.param_dtype)
         self.graph = graph # graph, is also the order of sampling
         self.sample_order = torch.tensor(list(map(int, graph.adj)), device=device).long()
         self.grad_nodes = list(map(int, self.graph.nodes))
         self.M_pos = num_count(graph)
-        # self.out_num = [t[-1] for t in list(self.graph.in_degree)]
+
         # distributed
         self.rank = get_rank()
         self.world_size = get_world_size()
         self.min_batch: int = None
         self.min_tree_height: int = None
         self.rank_independent_sampling = rank_independent_sampling
-
 
         # 横向边界条件（for h）
         self.left_boundary = torch.ones(
@@ -494,7 +485,8 @@ class Graph_MPS_RNN(nn.Module):
             h_ud = torch.matmul(M_cat, h_cat)
             # assert torch.allclose(h_ud, h_ud1)
             h_ud = h_ud + v.unsqueeze(-1)
-            
+            del M_cat, h_cat
+
         # cal. prob. by h_ud
         normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
         h_ud = h_ud / normal # (4, dcut, nbatch)
@@ -651,7 +643,7 @@ class Graph_MPS_RNN(nn.Module):
         min_batch: int = -1,
         interval: int = 1,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        # h: [M, L, 4, dcut, n-unique]
+        # h: [nqubits//2, dcut, n-unique]
         # phi: [n-unique]
         if min_batch == -1:
             min_batch = float("inf")
