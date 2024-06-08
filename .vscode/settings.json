@@ -95,7 +95,7 @@
     "-I/home/zbwu/soft/miniconda3/include",
     "-I/home/zbwu/soft/miniconda3/lib/python3.11/site-packages/torch/include",
     "-I/home/zbwu/soft/miniconda3/lib/python3.11/site-packages/torch/include/torch/csrc/api/include",
-    "-I/home/zbwu/soft/magma-2.6.1/include/", // magma
+    "-I/home/zbwu/soft/magma-2.8.0/include/", // magma
     //"-nocudainc", // check kernel functions <<< >>>
     "-DGPU=1",
     "-DMAGMA=1",

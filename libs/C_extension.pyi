@@ -391,3 +391,12 @@ def hash_lookup(ht: HashTable, onv: Tensor) -> Tuple[Tensor, Tensor]:
         index: the index of onv in bra-key, if not find, set to -1. (torch.int64)
         mask: bool array: if not find, set to False.
     """
+
+# check sorb:
+MAX_SORB: int
+MAX_SORB_LEN: int
+
+def check_sorb(sorb: int) -> None:
+    """
+    check sorb in (MAX_SORB_LNE - 1 * 64, MAX_SORB_LEN *64]
+    """

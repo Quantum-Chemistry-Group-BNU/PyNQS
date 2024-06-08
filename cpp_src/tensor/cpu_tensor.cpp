@@ -296,6 +296,16 @@ Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor &onstate,
                      .dtype(torch::kInt64)
                      .layout(onstate.layout())
                      .device(onstate.device());
+  // check dim
+  if (sorb != image2.size(0) && sorb != onstate.size(1)) {
+    std::cout << "check image2 or onstate dim, "
+              << "image2.size(0) or onstate.size(-1) != sorb" << std::endl;
+    throw std::length_error("Dim error");
+  }
+
+  if (nbatch == 0) {
+    return torch::zeros({0}, options).to(torch::kDouble);
+  }
 
   Tensor sgn_tensor = torch::empty(nbatch, options);  // Int64
   int64_t *sgn_ptr = sgn_tensor.data_ptr<int64_t>();

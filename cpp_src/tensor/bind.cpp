@@ -322,4 +322,19 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 #endif
 
   m.def("BKDR", &BKDR_tensor, "BKDR-method testing");
+
+  // check
+  m.attr("MAX_SORB") = MAX_SORB_LEN * 64;
+  m.attr("MAX_SORB_LEN") = MAX_SORB_LEN;
+  m.def("check_sorb", [](int sorb) -> void{
+    int _len = (sorb - 1) / 64 + 1;
+    bool flag = _len == MAX_SORB_LEN;
+    if (not flag) {
+      std::cout << "sorb: " << sorb << " not in (" << (MAX_SORB_LEN - 1) * 64
+                << ", " << MAX_SORB_LEN * 64 << "], "
+                << "Compile cpp/cuda sources with MAX_SORB_LEN = " << _len
+                << std::endl;
+      throw std::length_error("Sorb error");
+    }
+  }, py::arg("sorb"), "check sorb");
 }

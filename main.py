@@ -31,12 +31,11 @@ from vmc.ansatz import (
     Graph_MPS_RNN,
 )
 from vmc.optim import VMCOptimizer, GD
-from libs.C_extension import onv_to_tensor
 from torchinfo import summary
 from tmp.support import make_prefix
 from ci_vmc.hybrid import NqsCi
 from ci import unpack_ucisd, ucisd_to_fci, fci_revise, CIWavefunction
-from libs.C_extension import onv_to_tensor, tensor_to_onv
+from libs.C_extension import onv_to_tensor, tensor_to_onv, check_sorb
 from torchinfo import summary
 
 # from qubic import MPS_c, mps_CIcoeff, mps_sample, RunQubic
@@ -132,6 +131,7 @@ if __name__ == "__main__":
         "noa": noa,
         "nva": (sorb - nele) // 2,
     }
+    check_sorb(sorb)
     e_lst = e["e_lst"]
     if rank == 0:
         logger.info(f"e_lst: {e_lst}")
