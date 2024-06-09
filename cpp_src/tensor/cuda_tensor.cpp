@@ -452,7 +452,7 @@ tuple_tensor_2d hash_lut_tensor(const myHashTable ht, const Tensor onv) {
   auto length = onv.size(0);
   Tensor result = torch::empty(length, options);
   Tensor mask = torch::ones(length, options_bool);
-  int64_t *result_ptr = result.data_ptr<int64_t>();
+  // int64_t *result_ptr = result.data_ptr<int64_t>();
 
   unsigned long *key_ptr =
       reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());

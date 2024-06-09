@@ -250,7 +250,7 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
       for (int j = 0; j < m; j++) {
         auto offset = flag_eloc * i * m * bra_len + j * bra_len;
         // Hmat[i, j] = get_Hij_cpu(bra[i], ket[i, j]), flag-eloc == True
-        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[m])
+        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[j])
         Hmat_ptr[i * m + j] =
             squant::get_Hij_cpu(&bra_ptr[i * bra_len], &ket_ptr[offset],
                                 h1e_ptr, h2e_ptr, sorb, nele, bra_len);

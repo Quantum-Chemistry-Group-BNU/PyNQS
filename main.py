@@ -22,6 +22,7 @@ from utils.det_helper import DetLUT, select_det, sort_det
 from utils.pyscf_helper.dice_pyscf import run_shci
 from utils.distributed import get_rank
 from utils.loggings import dist_print
+from utils.enums import ElocMethod
 from vmc.ansatz import (
     RBMWavefunction,
     RNNWavefunction,
@@ -65,21 +66,20 @@ if __name__ == "__main__":
     # electronic structure information
     # if dist.get_rank() == 0:
     #     atom: str = ""
-    #     for i in range(2):
-    #         for j in range(2):
-    #             x = i * 4.0
-    #             y = j * 4.0
-    #             atom += f"H, {x:.2f}, {y:.2f}, 0.00 ;\n"
+    #     bond = 2.20
+    #     for k in range(50):
+    #         atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
     #     integral_file = tempfile.mkstemp()[1]
     #     sorb, nele, e_lst, fci_amp, ucisd_amp, mf = interface(
     #         atom,
     #         integral_file=integral_file,
     #         cisd_coeff=True,
-    #         basis="sto-3g",
+    #         basis="sto-6g",
     #         unit="bohr", # bohr 
     #         localized_orb=True,
     #         localized_method="meta-lowdin",
     #     )
+    #     breakpoint()
     #     # cas = (sorb // 2, (nele // 2, nele // 2))
     #     # # run_shci(mf, cas, det_file="./molecule/SHCI-N2-1.10-ccpvdz/N2-1.10-dets.bin")
     #     # run_shci(mf, cas, det_file="./tmp/dets.bin", epsilon1=[0.0001])
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     #         nele,
     #         # save_onstate=True,
     #         # external_onstate="profiler/H12-1.50",
-    #         # given_sorb= (nele + 2),
+    #         given_sorb= (nele + 2),
     #         device=device,
     #         # prefix="test-onstate",
     #     )
@@ -107,11 +107,11 @@ if __name__ == "__main__":
     #             "ucisd_amp": ucisd_amp,
     #             "fci_amp": fci_amp,
     #         },
-    #         "./molecule/H_2d/H4-4.0(bohr).pth",
+    #         "./molecule/H-chain-50-2.20-bobr.pth",
     #     )
     # breakpoint()
     # from utils.pyscf_helper.dice_pyscf import read_dice_wf
-    e = torch.load("./molecule/H_2d/H4-4.0(bohr).pth", map_location="cpu")
+    e = torch.load("./molecule/H8-1.60.pth", map_location="cpu")
     h1e = e["h1e"]
     h2e = e["h2e"]
     sorb = e["sorb"]
@@ -152,27 +152,27 @@ if __name__ == "__main__":
         param_dtype=torch.complex128,
         use_tensor=False,
         # 这两个是规定二维计算的长宽的。
-        M=4,
+        M=sorb,
         hilbert_local=4,
         # det_lut=det_lut,
         # dcut_params=params,
         # dcut_step=dcut+i-2,
     )
-    import networkx as nx
-    graph_nn = nx.read_graphml("/Users/imacbook/Desktop/Research/zbh/ordering_and_graph/graph.graphml")
-    # breakpoint()
-    model = Graph_MPS_RNN(
-        use_symmetry=True,
-        param_dtype=torch.complex128,
-        hilbert_local=4,
-        nqubits=sorb,
-        nele=nele,
-        device=device,
-        dcut=dcut,
-        graph=graph_nn,
-    )
+    # import networkx as nx
+    # graph_nn = nx.read_graphml("./graph/H12-34-maxdes1.graphml")
+    # # breakpoint()
+    # model = Graph_MPS_RNN(
+    #     use_symmetry=True,
+    #     param_dtype=torch.complex128,
+    #     hilbert_local=4,
+    #     nqubits=sorb,
+    #     nele=nele,
+    #     device=device,
+    #     dcut=dcut,
+    #     graph=graph_nn,
+    # )
 
-    ansatz = model
+    ansatz = MPS_RNN
     # ansatz = MPS_RNN
 
     co_sh = lambda step: 0
@@ -201,7 +201,16 @@ if __name__ == "__main__":
         model = DDP(ansatz)
 
     nsample = int(1e4)
-    
+    eloc_param = {
+        "method": ElocMethod.REDUCE,
+        "use_unique": True,
+        "use_LUT": True,
+        "eps": 1e-10,
+        "alpha": 1.0,
+        "max_memory": 5,
+        # "batch": -1,
+        # "fp_batch": -1,
+    }
     sampler_param = {
         "n_sample": nsample,
         # "start_n_sample": ss,
@@ -209,25 +218,18 @@ if __name__ == "__main__":
         # "max_n_sample": int(1.0e7),
         # "max_unique_sample": int(1e5),
         "debug_exact": False,
-        "therm_step": 10000,
+        # "therm_step": 10000,
         "seed": seed,
-        "record_sample": False,
-        "max_memory": 5,
-        "alpha": 1.0,
         "method_sample": "AR",
         "use_LUT": True,
-        "use_unique": True,
-        "reduce_psi": False,
-        "use_sample_space":True, #
-        "eps": 1.0e-10,
         "only_AD": False,
         "use_same_tree": True,
-        # "min_batch": 25000,
+        "min_batch": 25000,
         "min_tree_height": 5, 
-        # "use_dfs_sample": True, 
+        "use_dfs_sample": True, 
         # "det_lut": det_lut, # only use in CI-NQS exact optimization
+        "eloc_param": eloc_param
     }
-
     # opt
     opt_type = optim.AdamW
     opt_params = {"lr": 1, "betas": (0.9, 0.99)}

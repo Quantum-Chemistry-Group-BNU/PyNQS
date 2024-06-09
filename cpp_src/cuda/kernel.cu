@@ -67,25 +67,27 @@ __global__ void get_Hij_kernel_2D(double *Hmat, const unsigned long *bra,
                                   const unsigned long *ket, const double *h1e,
                                   const double *h2e, const size_t sorb,
                                   const size_t nele, const int n, const int m) {
-  __shared__ unsigned long _bra_sh[_len * THREAD];
-  __shared__ unsigned long _ket_sh[_len * 16];
   int idn = blockIdx.x * blockDim.x + threadIdx.x;
   int idm = blockIdx.y * blockDim.y + threadIdx.y;
 
-// How to optim
-#pragma unroll
-  for (int i = 0; i < _len; i++) {
-    _bra_sh[threadIdx.x + i] = bra[idn * _len + i];
-    _ket_sh[threadIdx.y + i] = ket[idm * _len + i];
-  }
-  __syncthreads();
+// // XXX: error when _len >= 2, why?
+// __shared__ unsigned long _bra_sh[_len * THREAD];
+// __shared__ unsigned long _ket_sh[_len * THREAD];
+// #pragma unroll
+//   for (int i = 0; i < _len; i++) {
+//     _bra_sh[threadIdx.x + i] = bra[idn * _len + i];
+//     _ket_sh[threadIdx.y + i] = ket[idm * _len + i];
+//   }
+//   __syncthreads();
+//   if (idn >= n || idm >= m)
+//     return;
+//   Hmat[idn * m + idm] = squant::get_Hij_cuda(&_bra_sh[threadIdx.x * _len],
+//                                              &_ket_sh[threadIdx.y * _len], h1e,
+//                                              h2e, sorb, nele, _len);
   if (idn >= n || idm >= m)
     return;
-  // Hmat[idn * m + idm] = squant::get_Hij_cuda(&bra[idn * _len], &ket[idm *
-  // _len], h1e, h2e, sorb, nele, _len);
-  Hmat[idn * m + idm] = squant::get_Hij_cuda(&_bra_sh[threadIdx.x * _len],
-                                             &_ket_sh[threadIdx.y * _len], h1e,
-                                             h2e, sorb, nele, _len);
+  Hmat[idn * m + idm] = squant::get_Hij_cuda(
+      &bra[idn * _len], &ket[idm * _len], h1e, h2e, sorb, nele, _len);
 }
 
 template <const int _len>
@@ -127,7 +129,7 @@ __host__ void squant::get_Hij_2D_cuda(double *Hmat, const unsigned long *bra,
                                       const int sorb, const int nele,
                                       const int bra_len, const int n,
                                       const int m) {
-  dim3 blockDim(THREAD, 16);
+  dim3 blockDim(THREAD, THREAD);
   dim3 gridDim((n + blockDim.x - 1) / blockDim.x,
                (m + blockDim.y - 1) / blockDim.y);
   get_Hij_kernel_2D<MAX_SORB_LEN>
