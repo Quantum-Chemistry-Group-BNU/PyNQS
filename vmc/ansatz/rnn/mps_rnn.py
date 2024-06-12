@@ -466,7 +466,7 @@ class MPS_RNN_2D(nn.Module):
         net_param_num = lambda net: sum(p.numel() for p in net.parameters())
         s = f"The MPS_RNN_2D is working on {self.device}.\n"
         s += f"The graph of this molecular is {self.M} * {self.L}.\n"
-        s += f"The order is(Spatial orbital).\n"
+        s += f"The order is (Spatial orbital).\n"
         s += f"{torch.flip(self.order, dims=[0])}.\n"
         s += f"And the params dtype(JUST THE W AND v) is {self.param_dtype}.\n"
         s += f"The number of opt-params is {net_param_num(self)}.\n"
