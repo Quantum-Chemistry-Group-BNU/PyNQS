@@ -11,16 +11,17 @@
 
 #include "../common/default.h"
 
+template <const int _len>
 __global__ void tensor_to_onv_kernel(const uint8_t *bra, uint8_t *states,
-                                     const int sorb, const int bra_len,
-                                     const int m, const size_t n) {
+                                     const int sorb, const int m,
+                                     const size_t n) {
   size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn >= n)
     return;
   int idx = idn % m, idy = idn / m;
   for (int i = 0; i < 8 && idx * 8 + i < sorb; i++) {
     uint8_t value = reinterpret_cast<uint8_t>(bra[sorb * idy + idx * 8 + i]);
-    states[idy * 8 * bra_len + idx] |= (value << i);
+    states[idy * 8 * _len + idx] |= (value << i);
   }
 }
 
@@ -31,19 +32,19 @@ __host__ void squant::tensor_to_onv_cuda(uint8_t *states, const uint8_t *bra,
                                          const int tensor_len) {
   dim3 blockDim(1024);
   dim3 gridDim((tensor_len * nbatch + blockDim.x - 1) / blockDim.x);
-  tensor_to_onv_kernel<<<gridDim, blockDim>>>(bra, states, sorb, bra_len,
-                                              tensor_len, tensor_len * nbatch);
+  tensor_to_onv_kernel<MAX_SORB_LEN><<<gridDim, blockDim>>>(
+      bra, states, sorb, tensor_len, tensor_len * nbatch);
 }
 
+template <const int _len>
 __global__ void onv_to_tensor_kernel(double *comb, const unsigned long *bra,
-                                     const int sorb, const int bra_len,
-                                     const size_t m) {
+                                     const int sorb, const size_t m) {
   size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn >= m)
     return;
   size_t idm = idn / sorb;
   // FIXME: the cost of launching thread. thread > 2**31
-  squant::get_zvec_cuda(&bra[idm * bra_len], &comb[idm * sorb], sorb, bra_len,
+  squant::get_zvec_cuda(&bra[idm * _len], &comb[idm * sorb], sorb, _len,
                         idn % sorb);
 }
 
@@ -55,36 +56,52 @@ __host__ void squant::onv_to_tensor_cuda(double *comb, const unsigned long *bra,
   dim3 blockDim(1024);
   dim3 gridDim((numel + blockDim.x - 1) / blockDim.x);
   // FIXME: numel > 2*
-  onv_to_tensor_kernel<<<gridDim, blockDim>>>(comb, bra, sorb, bra_len, numel);
+  onv_to_tensor_kernel<MAX_SORB_LEN>
+      <<<gridDim, blockDim>>>(comb, bra, sorb, numel);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
 
+template <const int _len>
 __global__ void get_Hij_kernel_2D(double *Hmat, const unsigned long *bra,
                                   const unsigned long *ket, const double *h1e,
                                   const double *h2e, const size_t sorb,
-                                  const size_t nele, const size_t bra_len,
-                                  const int n, const int m) {
+                                  const size_t nele, const int n, const int m) {
   int idn = blockIdx.x * blockDim.x + threadIdx.x;
   int idm = blockIdx.y * blockDim.y + threadIdx.y;
+
+// // XXX: error when _len >= 2, why?
+// __shared__ unsigned long _bra_sh[_len * THREAD];
+// __shared__ unsigned long _ket_sh[_len * THREAD];
+// #pragma unroll
+//   for (int i = 0; i < _len; i++) {
+//     _bra_sh[threadIdx.x + i] = bra[idn * _len + i];
+//     _ket_sh[threadIdx.y + i] = ket[idm * _len + i];
+//   }
+//   __syncthreads();
+//   if (idn >= n || idm >= m)
+//     return;
+//   Hmat[idn * m + idm] = squant::get_Hij_cuda(&_bra_sh[threadIdx.x * _len],
+//                                              &_ket_sh[threadIdx.y * _len], h1e,
+//                                              h2e, sorb, nele, _len);
   if (idn >= n || idm >= m)
     return;
   Hmat[idn * m + idm] = squant::get_Hij_cuda(
-      &bra[idn * bra_len], &ket[idm * bra_len], h1e, h2e, sorb, nele, bra_len);
+      &bra[idn * _len], &ket[idm * _len], h1e, h2e, sorb, nele, _len);
 }
 
+template <const int _len>
 __global__ void get_Hij_kernel_3D(double *Hmat, const unsigned long *bra,
                                   const unsigned long *ket, const double *h1e,
                                   const double *h2e, const size_t sorb,
-                                  const size_t nele, const size_t bra_len,
-                                  const int n, const int m) {
+                                  const size_t nele, const int n, const int m) {
   int idn = blockIdx.x * blockDim.x + threadIdx.x;
   int idm = blockIdx.y * blockDim.y + threadIdx.y;
   if (idn >= n || idm >= m)
     return;
-  Hmat[idn * m + idm] = squant::get_Hij_cuda(
-      &bra[idn * bra_len], &ket[idn * m * bra_len + idm * bra_len], h1e, h2e,
-      sorb, nele, bra_len);
+  Hmat[idn * m + idm] =
+      squant::get_Hij_cuda(&bra[idn * _len], &ket[idn * m * _len + idm * _len],
+                           h1e, h2e, sorb, nele, _len);
 }
 
 // <i|H|j> i: 2D(nbatch, onv), j: 3D(nbatch, ncomb, onv)
@@ -98,8 +115,8 @@ __host__ void squant::get_Hij_3D_cuda(double *Hmat, const unsigned long *bra,
   dim3 blockDim(THREAD, THREAD);
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x,
                (ncomb + blockDim.y - 1) / blockDim.y);
-  get_Hij_kernel_3D<<<gridDim, blockDim>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
-                                           bra_len, nbatch, ncomb);
+  get_Hij_kernel_3D<MAX_SORB_LEN><<<gridDim, blockDim>>>(
+      Hmat, bra, ket, h1e, h2e, sorb, nele, nbatch, ncomb);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
@@ -115,20 +132,20 @@ __host__ void squant::get_Hij_2D_cuda(double *Hmat, const unsigned long *bra,
   dim3 blockDim(THREAD, THREAD);
   dim3 gridDim((n + blockDim.x - 1) / blockDim.x,
                (m + blockDim.y - 1) / blockDim.y);
-  get_Hij_kernel_2D<<<gridDim, blockDim>>>(Hmat, bra, ket, h1e, h2e, sorb, nele,
-                                           bra_len, n, m);
+  get_Hij_kernel_2D<MAX_SORB_LEN>
+      <<<gridDim, blockDim>>>(Hmat, bra, ket, h1e, h2e, sorb, nele, n, m);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
 
+template <const int _len>
 __global__ void get_merged_ovlst_kernel(const unsigned long *bra, int *merged,
-                                        int sorb, int nele, int bra_len,
-                                        int n) {
+                                        int sorb, int nele, int n) {
   int idm = blockIdx.x * blockDim.x + threadIdx.x;
   if (idm >= n)
     return;
-  squant::get_ovlst_cuda(&bra[idm * bra_len], &merged[idm * sorb], sorb, nele,
-                         bra_len);
+  squant::get_ovlst_cuda(&bra[idm * _len], &merged[idm * sorb], sorb, nele,
+                         _len);
 }
 
 __host__ void squant::get_merged_cuda(const unsigned long *bra, int *merged,
@@ -136,36 +153,67 @@ __host__ void squant::get_merged_cuda(const unsigned long *bra, int *merged,
                                       const int bra_len, const int nbatch) {
   dim3 blockDim(1024);
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
-  get_merged_ovlst_kernel<<<gridDim, blockDim>>>(bra, merged, sorb, nele,
-                                                 bra_len, nbatch);
+  get_merged_ovlst_kernel<MAX_SORB_LEN>
+      <<<gridDim, blockDim>>>(bra, merged, sorb, nele, nbatch);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
 
+template <const int _len>
 __global__ void get_comb_SD_kernel(unsigned long *comb, double *comb_bit,
-                                   const int *merged, int sorb, int bra_len,
-                                   int noA, int noB, int nbatch, int ncomb) {
-  int idn = blockIdx.x * blockDim.x + threadIdx.x;
-  int idm = blockIdx.y * blockDim.y + threadIdx.y;
-  if (idn >= nbatch || idm >= ncomb || idm == 0)
+                                   const int *merged, int sorb, int noA,
+                                   int noB, int nbatch, int ncomb) {
+  // int idn = blockIdx.x * blockDim.x + threadIdx.x;
+  // int idm = blockIdx.y * blockDim.y + threadIdx.y;
+  // if (idn >= nbatch || idm >= ncomb || idm == 0)
+  //   return;
+  __shared__ int _merged_sh[MAX_SORB_LEN * 64];
+  int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  const int _comb_thread = (ncomb - 1) / blockDim.x + 1;
+  const int idx = blockIdx.x / _comb_thread;
+  if (idx >= nbatch)
     return;
-  // comb[idn, idm], merged[idn], comb_bit[idn, idm]
-  squant::get_comb_SD_cuda(&comb[idn * ncomb * bra_len + idm * bra_len],
-                           &comb_bit[idn * ncomb * sorb + idm * sorb],
-                           &merged[idn * sorb], idm - 1, sorb, noA, noB);
+  if (threadIdx.x < sorb) {
+    _merged_sh[threadIdx.x] = merged[idx * sorb + threadIdx.x];
+  }
+  __syncthreads();
+
+  int idy = idn - idx * (_comb_thread * blockDim.x);
+  if (idy >= ncomb || idy == 0)
+    return;
+  // comb[idx, idy], merged[idx], comb_bit[idx, idy]
+  squant::get_comb_SD_cuda(&comb[idx * ncomb * _len + idy * _len],
+                           &comb_bit[idx * ncomb * sorb + idy * sorb],
+                           _merged_sh, idy - 1, sorb, noA, noB);
 }
 
+template <const int _len>
 __global__ void get_comb_SD_kernel(unsigned long *comb, const int *merged,
-                                   const int sorb, const int bra_len,
-                                   const int noA, const int noB,
+                                   const int sorb, const int noA, const int noB,
                                    const int nbatch, const int ncomb) {
-  const int idn = blockIdx.x * blockDim.x + threadIdx.x;
-  const int idm = blockIdx.y * blockDim.y + threadIdx.y;
-  if (idn >= nbatch || idm >= ncomb || idm == 0)
+  // const int idn = blockIdx.x * blockDim.x + threadIdx.x;
+  // const int idm = blockIdx.y * blockDim.y + threadIdx.y;
+  // if (idn >= nbatch || idm >= ncomb || idm == 0)
+  //   return;
+  __shared__ int _merged_sh[MAX_SORB_LEN * 64];
+  int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  const int _comb_thread = (ncomb - 1) / blockDim.x + 1;
+  const int idx = blockIdx.x / _comb_thread;
+  if (idx >= nbatch)
     return;
-  // comb[idn, idm], merged[idn]
-  squant::get_comb_SD_cuda(&comb[idn * ncomb * bra_len + idm * bra_len],
-                           &merged[idn * sorb], idm - 1, sorb, noA, noB);
+  if (threadIdx.x < sorb) {
+    _merged_sh[threadIdx.x] = merged[idx * sorb + threadIdx.x];
+  }
+  __syncthreads();
+
+  int idy = idn - idx * (_comb_thread * blockDim.x);
+  if (idy >= ncomb || idy == 0)
+    return;
+  // if(idx == 1)
+  //   printf("idn: %ld idx: %d idy: %d\n", idn, idx, idy);
+  // comb[idx, idy], merged[idx]
+  squant::get_comb_SD_cuda(&comb[idx * ncomb * _len + idy * _len], _merged_sh,
+                           idy - 1, sorb, noA, noB);
 }
 
 // get all Singles-Doubles for given onv(2D)
@@ -175,13 +223,19 @@ __host__ void squant::get_comb_cuda(unsigned long *comb,
                                     const int noB, const int nbatch,
                                     const int ncomb) {
   // comb: (nbatch, ncomb, bra_len) merged: (nbatch, sorb)
-  dim3 blockDim(THREAD, THREAD);
-  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x,
-               (ncomb + blockDim.y - 1) / blockDim.y);
-  get_comb_SD_kernel<<<gridDim, blockDim>>>(comb, merged_ovlst, sorb, bra_len,
-                                            noA, noB, nbatch, ncomb);
-  cudaError_t cudaStatus = cudaGetLastError();
-  HANDLE_ERROR(cudaStatus);
+  // dim3 blockDim(THREAD, THREAD);
+  // dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x,
+  //              (ncomb + blockDim.y - 1) / blockDim.y);
+  // get_comb_SD_kernel<<<gridDim, blockDim>>>(comb, merged_ovlst, sorb,
+  // bra_len,
+  //                                           noA, noB, nbatch, ncomb);
+  // cudaError_t cudaStatus = cudaGetLastError();
+  // HANDLE_ERROR(cudaStatus);
+  dim3 blockDim(256);
+  dim3 gridDim(nbatch * ((ncomb - 1) / blockDim.x + 1));
+  // printf("grid-num: %d, nbatch: %d, ncomb: %d\n", gridDim.x, nbatch, ncomb);
+  get_comb_SD_kernel<MAX_SORB_LEN><<<gridDim, blockDim>>>(
+      comb, merged_ovlst, sorb, noA, noB, nbatch, ncomb);
 }
 
 // get all Singles-Doubles and states(3D: nbatch, ncomb, sorb) for given onv(2D)
@@ -192,11 +246,13 @@ __host__ void squant::get_comb_cuda(double *comb_bit, unsigned long *comb,
                                     const int ncomb) {
   // comb: (nbatch, ncomb, bra_len), comb_bit: (nbatch, ncomb, sorb)
   // merged: [nbatch, sorb]
-  dim3 blockDim(THREAD, THREAD);
-  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x,
-               (ncomb + blockDim.y - 1) / blockDim.y);
-  get_comb_SD_kernel<<<gridDim, blockDim>>>(comb, comb_bit, merged_ovlst, sorb,
-                                            bra_len, noA, noB, nbatch, ncomb);
+  // dim3 blockDim(THREAD, THREAD);
+  // dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x,
+  //              (ncomb + blockDim.y - 1) / blockDim.y);
+  dim3 blockDim(256);
+  dim3 gridDim(nbatch * ((ncomb - 1) / blockDim.x + 1));
+  get_comb_SD_kernel<MAX_SORB_LEN><<<gridDim, blockDim>>>(
+      comb, comb_bit, merged_ovlst, sorb, noA, noB, nbatch, ncomb);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
@@ -453,8 +509,9 @@ __host__ void constrain_lookup_table(const int64_t *sym_index, double *result,
 }
 
 template <typename IntType, int _len>
-__device__ inline int compare(const IntType *mid_element, const IntType *target) {
-  #pragma unroll
+__device__ inline int compare(const IntType *mid_element,
+                              const IntType *target) {
+#pragma unroll
   for (int64_t i = _len - 1; i >= 0; i--) {
     if (mid_element[i] < target[i]) {
       return -1;
@@ -495,25 +552,15 @@ __device__ int64_t BigInteger_device(const IntType *arr, const IntType *target,
   return -1;
 }
 
-template<int _len>
-__global__ void BigInteger_kernel(const unsigned long *arr,
-                                  const unsigned long *target, int64_t *result,
-                                  bool *mask,
-                                  const int64_t nbatch,
-                                  const int64_t arr_length,
-                                  const int64_t target_length,
-                                  bool little_endian) {
+template <int _len>
+__global__ void
+BigInteger_kernel(const unsigned long *arr, const unsigned long *target,
+                  int64_t *result, bool *mask, const int64_t nbatch,
+                  const int64_t arr_length, const int64_t target_length,
+                  bool little_endian) {
   int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
-  // int tx = threadIdx.x;
-  // __shared__ unsigned long tmp[256][MAX_SORB_LEN];
   if (idn >= nbatch)
     return;
-// #pragma unroll
-//   for (int i = 0; i < MAX_SORB_LEN; i++) {
-//     tmp[tx][i] = target[target_length * idn + i];
-//   }
-//   __syncthreads();
-//   // result[idn]
   int64_t x = BigInteger_device<unsigned long, MAX_SORB_LEN>(
       arr, &target[idn * _len], arr_length, little_endian);
   result[idn] = x;
@@ -523,14 +570,14 @@ __global__ void BigInteger_kernel(const unsigned long *arr,
 };
 
 __host__ void binary_search_BigInteger_cuda(
-    const unsigned long *arr, const unsigned long *target, int64_t *result, 
-    bool *mask,
-    const int64_t nbatch, const int64_t arr_length,
+    const unsigned long *arr, const unsigned long *target, int64_t *result,
+    bool *mask, const int64_t nbatch, const int64_t arr_length,
     const int64_t target_length = 1, bool little_endian = true) {
   dim3 blockDim(256);
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
-  BigInteger_kernel<MAX_SORB_LEN><<<gridDim, blockDim>>>(
-      arr, target, result,mask, nbatch, arr_length, target_length, little_endian);
+  BigInteger_kernel<MAX_SORB_LEN>
+      <<<gridDim, blockDim>>>(arr, target, result, mask, nbatch, arr_length,
+                              target_length, little_endian);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }

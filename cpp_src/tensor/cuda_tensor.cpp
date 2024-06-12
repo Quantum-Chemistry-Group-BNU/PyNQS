@@ -218,6 +218,16 @@ Tensor permute_sgn_tensor_cuda(const Tensor image2, const Tensor &onstate,
                      .dtype(torch::kInt64)
                      .layout(onstate.layout())
                      .device(onstate.device());
+  // check dim
+  if (sorb != image2.size(0) && sorb != onstate.size(1)) {
+    std::cout << "check image2 or onstate dim, "
+              << "image2.size(0) or onstate.size(-1) != sorb" << std::endl;
+    throw std::out_of_range("Dim error");
+  }
+
+  if (nbatch == 0) {
+    return torch::zeros({0}, options).to(torch::kDouble);
+  }
   const Tensor index_tensor =
       torch::arange(sorb, options).unsqueeze(0).repeat({nbatch, 1});
 
@@ -338,7 +348,7 @@ tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
   // 13
   const int64_t bra_len = (sorb - 1) / 64 + 1;
   if (bra_key.size(1) != MAX_SORB_LEN * 8) {
-    std::cout << "key: shape[1] " << bra_key.size(1) << " != MAX_SORB_lEN * 8"
+    std::cout << "key: shape[1] " << bra_key.size(1) << " != MAX_SORB_lEN * 8 "
               << MAX_SORB_LEN * 8 << std::endl;
     exit(1);
   }
@@ -442,7 +452,7 @@ tuple_tensor_2d hash_lut_tensor(const myHashTable ht, const Tensor onv) {
   auto length = onv.size(0);
   Tensor result = torch::empty(length, options);
   Tensor mask = torch::ones(length, options_bool);
-  int64_t *result_ptr = result.data_ptr<int64_t>();
+  // int64_t *result_ptr = result.data_ptr<int64_t>();
 
   unsigned long *key_ptr =
       reinterpret_cast<unsigned long *>(onv.data_ptr<uint8_t>());

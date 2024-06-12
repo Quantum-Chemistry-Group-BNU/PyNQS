@@ -250,7 +250,7 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
       for (int j = 0; j < m; j++) {
         auto offset = flag_eloc * i * m * bra_len + j * bra_len;
         // Hmat[i, j] = get_Hij_cpu(bra[i], ket[i, j]), flag-eloc == True
-        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[m])
+        // Hmat[i, j] = get_Hij_cpu(bra[i], ket[j])
         Hmat_ptr[i * m + j] =
             squant::get_Hij_cpu(&bra_ptr[i * bra_len], &ket_ptr[offset],
                                 h1e_ptr, h2e_ptr, sorb, nele, bra_len);
@@ -296,6 +296,16 @@ Tensor permute_sgn_tensor_cpu(const Tensor image2, const Tensor &onstate,
                      .dtype(torch::kInt64)
                      .layout(onstate.layout())
                      .device(onstate.device());
+  // check dim
+  if (sorb != image2.size(0) && sorb != onstate.size(1)) {
+    std::cout << "check image2 or onstate dim, "
+              << "image2.size(0) or onstate.size(-1) != sorb" << std::endl;
+    throw std::length_error("Dim error");
+  }
+
+  if (nbatch == 0) {
+    return torch::zeros({0}, options).to(torch::kDouble);
+  }
 
   Tensor sgn_tensor = torch::empty(nbatch, options);  // Int64
   int64_t *sgn_ptr = sgn_tensor.data_ptr<int64_t>();

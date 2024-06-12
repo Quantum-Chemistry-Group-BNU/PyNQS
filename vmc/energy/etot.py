@@ -10,15 +10,16 @@ from loguru import logger
 
 from .eloc import local_energy
 from utils.distributed import gather_tensor, get_world_size, synchronize, get_rank, scatter_tensor
-from utils.public_function import WavefunctionLUT, MemoryTrack
+from utils.public_function import WavefunctionLUT, MemoryTrack, split_batch_idx
 
 
 def total_energy(
     x: Tensor,
     nbatch: int,
+    fp_batch: int,
     h1e: Tensor,
     h2e: Tensor,
-    ansatz: Callable,
+    ansatz: Callable[..., Tensor],
     sorb: int,
     nele: int,
     noa: int,
@@ -33,6 +34,7 @@ def total_energy(
     h2e_spin: Tensor = None,
     reduce_psi: bool = False,
     eps: float = 1.0e-12,
+    eps_sample: int = 0,
     use_sample_space: bool = False,
     alpha: float = 2.0,
 ) -> tuple[Tensor, Tensor, Tensor]:
@@ -50,21 +52,38 @@ def total_energy(
     t0 = time.time_ns()
     dim: int = x.shape[0]
     device = x.device
+    rank = get_rank()
     eloc = torch.zeros(dim, device=device).to(dtype)
     psi = torch.zeros_like(eloc)
     sloc = torch.zeros_like(eloc)
 
-    time_lst = []
-    idx_lst = torch.empty(int(np.ceil(dim / nbatch)), dtype=torch.int64).fill_(nbatch)
-    idx_lst[-1] = dim - (idx_lst.size(0) - 1) * nbatch
-    idx_lst: List[int] = idx_lst.cumsum(dim=0).tolist()
-    rank = get_rank()
-
     # Calculate local energy in batches, better method?
+    assert fp_batch > 0 or fp_batch == -1
+    assert nbatch > 0 or nbatch == -1
+    if nbatch == -1:
+        nbatch = dim
+
+    idx_lst = split_batch_idx(dim, min_batch=nbatch)
+
+    # closure
+    def ansatz_batch(x: Tensor) -> Tensor:
+        if fp_batch == -1 or x.size(0) == 0:
+            return ansatz(x)
+        else:
+            _idx_lst = [0] + split_batch_idx(x.size(0), fp_batch)
+            result = torch.empty(x.size(0), device=device, dtype=dtype)
+            for i in range(len(_idx_lst) - 1):
+                _start = _idx_lst[i]
+                _end = _idx_lst[i + 1]
+                result[_start:_end] = ansatz(x[_start:_end])
+            return result
+
     if rank == 0:
-        s = f"nbatch: {nbatch}, dim: {dim}, split: {len(idx_lst)}"
+        s = f"eloc: nbatch: {nbatch}, dim: {dim}, split: {len(idx_lst)}"
+        s += f", Forward batch: {fp_batch}"
         logger.info(s, master=True)
 
+    time_lst = []
     with MemoryTrack(device) as track:
         begin = 0
         for i in range(len(idx_lst)):
@@ -74,7 +93,7 @@ def total_energy(
                 ons,
                 h1e,
                 h2e,
-                ansatz,
+                ansatz_batch,
                 sorb,
                 nele,
                 noa,
@@ -87,6 +106,7 @@ def total_energy(
                 use_unique=use_unique,
                 reduce_psi=reduce_psi,
                 eps=eps,
+                eps_sample=eps_sample,
                 use_sample_space=use_sample_space,
                 index=(begin, end),
                 alpha=alpha,
@@ -138,17 +158,6 @@ def total_energy(
         # assure length is true.
         assert state_prob.shape[0] == dim
         del psi_all, state_prob_all
-    else:
-        if state_prob is None:
-            state_prob = torch.ones(dim, dtype=dtype, device=device) / dim
-
-    # eloc_mean = torch.einsum("i, i ->", eloc, state_prob)
-    # e_total = eloc_mean + ecore
-
-    # if use_spin_raising:
-    #     spin_mean = torch.dot(loc_spin, state_prob).real.item()
-    # else:
-    #     spin_mean = 0.0
 
     t1 = time.time_ns()
     time_lst = np.stack(time_lst, axis=0)

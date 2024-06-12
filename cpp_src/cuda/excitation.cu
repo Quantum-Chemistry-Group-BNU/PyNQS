@@ -108,6 +108,7 @@ __device__ void get_comb_SD_cuda(unsigned long *comb, double *lst,
                                  const int sorb, const int noA, const int noB) {
   int idx_lst[4] = {0};
   unpack_Singles_Doubles_cuda(sorb, noA, noB, r0, idx_lst);
+  #pragma unroll
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
     BIT_FLIP(comb[idx / 64], idx % 64);
@@ -120,6 +121,7 @@ __device__ void get_comb_SD_cuda(unsigned long *comb, const int *merged,
                                  const int noB) {
   int idx_lst[4] = {0};
   unpack_Singles_Doubles_cuda(sorb, noA, noB, r0, idx_lst);
+  #pragma unroll
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
     BIT_FLIP(comb[idx / 64], idx % 64);

@@ -283,7 +283,7 @@ class MPS_RNN_2D(nn.Module):
     M: int = #columns
     dcut: int = bond dim
     hilbert_local: int(2 or 4) = local H space dim
-    graph_type: str = caculation order
+    graph_type: str = calculation order
     sample_order: tensor = sampling order
     det_lut: det_lut input
     """

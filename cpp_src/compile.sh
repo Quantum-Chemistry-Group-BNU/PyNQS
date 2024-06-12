@@ -24,6 +24,14 @@ if sys_name == "myarch":
     torch_DIR = "home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch"
     magma_DIR = "/home/zbwu/soft/magma-2.6.1"
     CUDA_LIB = "/home/zbwu/soft/anaconda3/lib"
+if sys_name == "wsl2":
+    use_magma = False
+    os.environ["CC"] = "gcc-11"
+    os.environ["CXX"] = "g++-11"
+    os.environ["CUDA_HOME"] = '/home/zbwu/soft/miniconda3'
+    os.environ["MAX_JOBS"] = '4' # ninja
+    torch_DIR = "/home/zbwu/soft/miniconda3/lib/python3.11/site-packages/torch"
+    CUDA_LIB = "/home/zbwu/soft/miniconda3/lib"
 elif sys_name == "dell2":  # Dell-A100-40GiB-PCIE
     os.environ["CC"] = "gcc"
     os.environ["CXX"] = "g++"

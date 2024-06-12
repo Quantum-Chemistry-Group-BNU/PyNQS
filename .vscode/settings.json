@@ -83,7 +83,7 @@
     },
     "black-formatter.args": [
         "--line-length",
-        "120"
+        "100"
     ],
     //"python.formatting.provider": "yapf",
     // "python.formatting.yapfArgs": ["--style", "{column_limit: 110, based_on_style: google, indent_width: 4}"],
@@ -91,19 +91,19 @@
     "clangd.fallbackFlags": [
     "-std=c++17",
     "-I${workspaceFolder}/cpp_src",
-    "-I/home/zbwu/soft/anaconda3/include/python3.10",
-    "-I/home/zbwu/soft/anaconda3/include",
-    "-I/home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch/include",
-    "-I/home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch/include/torch/csrc/api/include",
-    "-I/home/zbwu/soft/magma-2.6.1/include/", // magma
+    "-I/home/zbwu/soft/miniconda3/include/python3.11",
+    "-I/home/zbwu/soft/miniconda3/include",
+    "-I/home/zbwu/soft/miniconda3/lib/python3.11/site-packages/torch/include",
+    "-I/home/zbwu/soft/miniconda3/lib/python3.11/site-packages/torch/include/torch/csrc/api/include",
+    "-I/home/zbwu/soft/magma-2.8.0/include/", // magma
     //"-nocudainc", // check kernel functions <<< >>>
     "-DGPU=1",
     "-DMAGMA=1",
     "-nocudalib",
     //"--cuda-path=/opt/cuda",
     // "-L/opt/cuda/lib64",
-    "--cuda-path=/home/zbwu/soft/anaconda3",
-    "-L/home/zbwu/soft/anaconda3/lib",
+    "--cuda-path=/home/zbwu/soft/miniconda3",
+    "-L/home/zbwu/soft/miniconda3/lib",
     "--cuda-host-only",
     "-lcudart_static",
     "--cuda-gpu-arch=sm_75",

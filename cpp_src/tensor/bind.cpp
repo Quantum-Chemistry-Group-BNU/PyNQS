@@ -263,6 +263,27 @@ std::vector<int64_t> BKDR_tensor(const Tensor &onv){
   return value1;
 }
 
+void check_sorb(const int sorb, const int nele) {
+  int _len = (sorb - 1) / 64 + 1;
+  bool flag = _len == MAX_SORB_LEN;
+  if (not flag) {
+    std::cout << "sorb: " << sorb << " not in (" << (MAX_SORB_LEN - 1) * 64
+              << ", " << MAX_SORB_LEN * 64 << "], "
+              << "Compile cpp/cuda sources with MAX_SORB_LEN = " << _len
+              << std::endl;
+    throw std::length_error("Sorb error");
+  }
+  if (nele > MAX_NO) {
+    std::cout << "nele: " << nele << " > max-electron " << MAX_NO << std::endl;
+    throw std::overflow_error("electron overflow");
+  }
+  if ((sorb - nele) > MAX_NV) {
+    std::cout << "Virtual orbital: " << sorb - nele << " > max virtual-orbital"
+              << MAX_NV << std::endl;
+    throw std::overflow_error("unoccupied orbital error");
+  }
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
@@ -304,7 +325,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // TODO: 100000 cost: 727MiB memory?
   m.def("hash_build", &test_hash_tensor, "test_hash");
   m.def("hash_lookup", &hash_lut_tensor, "lookup-hash");
-  py::class_<myHashTable>(m, "HashTable", "this is testing")
+  py::class_<myHashTable>(m, "HashTable", "this is testing", py::module_local())
       .def(py::init())
       .def_readwrite("bucketNum", &myHashTable::bNum)
       .def_readwrite("bucketSize", &myHashTable::bSize)
@@ -317,9 +338,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
                 (sizeof(int) * ht.bNum) + (sizeof(BFT) * ht.bNum);
             return memory_size;
           })
-      .def_static("bitWidth",[](){return sizeof(KeyT) / 8;})
+      .def_static("bitWidth", []() { return sizeof(KeyT) / 8; })
       .def("cleanMemory", [](myHashTable &ht) { return freeHashTable(ht); });
 #endif
 
   m.def("BKDR", &BKDR_tensor, "BKDR-method testing");
+
+  // check
+  m.attr("MAX_SORB") = MAX_SORB_LEN * 64;
+  m.attr("MAX_SORB_LEN") = MAX_SORB_LEN;
+  m.attr("MAX_NELE") = MAX_NO;
+  m.def("check_sorb", &check_sorb, py::arg("sorb"), py::arg("nele"),
+        "check sorb/nele");
 }

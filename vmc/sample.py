@@ -51,6 +51,7 @@ from utils.public_function import (
 )
 from utils.det_helper import DetLUT
 from utils.pyscf_helper.operator import spin_raising
+from utils.enums import ElocMethod
 
 print = partial(print, flush=True)
 
@@ -70,6 +71,7 @@ class Sampler:
         self,
         nqs: DDP,
         ele_info: ElectronInfo,
+        eloc_param: dict = None,
         n_sample: int = 100,
         start_iter: int = 100,
         start_n_sample: int = None,
@@ -79,8 +81,8 @@ class Sampler:
         record_sample: bool = False,
         max_memory: float = 4,
         alpha: float = 0.25,
-        dtype = torch.double,
-        method_sample = "AR",
+        dtype=torch.double,
+        method_sample="AR",
         use_same_tree: bool = False,
         max_n_sample: int = None,
         max_unique_sample: int = None,
@@ -148,10 +150,6 @@ class Sampler:
             self.frame_sample = pd.DataFrame({"full_space": self.str_full})
         self.time_sample = 0
 
-        # memory control and nbatch
-        self.max_memory = max_memory
-        self.alpha = alpha
-
         # unique sample, apply to AR sample, about all-rank, not single-rank
         self.max_unique_sample = (
             min(max_unique_sample, self.fci_size)
@@ -175,13 +173,54 @@ class Sampler:
         self.use_LUT = use_LUT
         self.WF_LUT: WavefunctionLUT = None
 
-        # Use 'torch.unique' to speed up local-energy calculations
-        self.use_unique = use_unique
+        # control eloc
+        self.eloc_param = eloc_param
+        # memory control and nbatch
+        if self.eloc_param is None:
+            self.max_memory = max_memory
+            self.alpha = alpha
 
-        # ignore x' when <x|H|x'>/psi(x) < eps
-        # only apply to when psi(x)^2 is normalization in FCI-space
-        self.reduce_psi = reduce_psi
-        self.eps = eps
+            # Use 'torch.unique' to speed up local-energy calculations
+            self.use_unique = use_unique
+
+            # ignore x' when <x|H|x'>/psi(x) < eps
+            # only apply to when psi(x)^2 is normalization in FCI-space
+            self.reduce_psi = reduce_psi
+            self.eps = eps
+
+            # only use x' in n_unique sample not SD, dose not support exact-opt
+            # psi(x') can be looked from WaveFunction look-up table
+            self.use_sample_space = use_sample_space if not debug_exact else False
+
+            warnings.warn(f"Using 'eloc_param'", stacklevel=2)
+        else:
+            self.use_unique = eloc_param["use_unique"]
+            eloc_method = eloc_param["method"]
+            self.eps: float = 0.0
+            self.eps_sample: int = 0
+            self.reduce_psi = False
+            self.use_sample_space = False
+            self.alpha = 0
+            self.max_memory = 0
+            if eloc_method == ElocMethod.SAMPLE_SPACE:
+                if self.debug_exact:
+                    raise TypeError(f"Exact support in Sample-space")
+                self.use_sample_space = True
+            elif eloc_method == ElocMethod.REDUCE:
+                self.reduce_psi = True
+                self.eps = eloc_param["eps"]
+                self.eps_sample = eloc_param["eps-sample"]
+                assert self.eps >= 0 and self.eps_sample >= 0
+            elif eloc_method == ElocMethod.SIMPLE:
+                if self.rank == 0:
+                    logger.info(f"Exact calculate local energy", master=True)
+            else:
+                raise NotImplementedError
+
+            if "max_memory" in eloc_param.keys():
+                warnings.warn(f"Using batch/fd_batch control eloc/model batch", stacklevel=2)
+                self.max_memory = eloc_param["max_memory"]
+                self.alpha = eloc_param["alpha"]
 
         # only sampling not calculations local-energy, applies to test AD memory
         self.only_AD = only_AD
@@ -189,11 +228,7 @@ class Sampler:
         # only sampling not backward
         self.only_sample = only_sample
 
-        # only use x' in n_unique sample not SD, dose not support exact-opt
-        # psi(x') can be looked from WaveFunction look-up table
-        self.use_sample_space = use_sample_space if not debug_exact else False
-
-        # nbatch-rank AR-sampling, only implemented in Transformer-ansatz
+        # nbatch-rank AR-sampling, only implemented in Transformer/MPS-RNN/Graph-MPS-RNN
         flag1 = hasattr(self.nqs.module, "min_batch")
         flag2 = hasattr(self.nqs.module, "min_tree_height")
         self.sampling_batch_rank: bool = flag1 and flag2
@@ -655,8 +690,8 @@ class Sampler:
         t4 = time.time_ns()
 
         # Testing prob
-        use_subpsace = False
-        if use_subpsace:
+        use_subspace = False
+        if use_subspace:
             if not self.use_LUT:
                 raise NotImplementedError
             else:
@@ -799,16 +834,23 @@ class Sampler:
             n_sample = self.WF_LUT.bra_key.size(0)
         else:
             n_sample = sample.size(0)
-        nbatch = get_nbatch(
-            self.sorb,
-            n_sample,
-            self.n_SinglesDoubles,
-            self.max_memory,
-            self.alpha,
-            device=self.device,
-            use_sample=self.use_sample_space,
-            dtype=self.dtype,
-        )
+
+        if not "batch" in self.eloc_param.keys():
+            nbatch = get_nbatch(
+                self.sorb,
+                n_sample,
+                self.n_SinglesDoubles,
+                self.max_memory,
+                self.alpha,
+                device=self.device,
+                use_sample=self.use_sample_space,
+                dtype=self.dtype,
+            )
+            fp_batch = -1
+        else:
+            nbatch = self.eloc_param["batch"]
+            fp_batch = self.eloc_param["fp_batch"]
+
         if not self.only_AD:
             use_spin_raising = self.use_spin_raising
             if self.h1e_spin is None and self.h2e_spin is None:
@@ -816,6 +858,7 @@ class Sampler:
             eloc, sloc, placeholders = total_energy(
                 sample,
                 nbatch,
+                fp_batch,
                 h1e=self.h1e,
                 h2e=self.h2e,
                 ansatz=self.nqs,
@@ -833,6 +876,7 @@ class Sampler:
                 dtype=self.dtype,
                 reduce_psi=self.reduce_psi,
                 eps=self.eps,
+                eps_sample=self.eps_sample,
                 use_sample_space=self.use_sample_space,
                 alpha=self.alpha,
             )
@@ -854,16 +898,11 @@ class Sampler:
             + f"    the number of sample: {self.last_n_sample:.3E}\n"
             + f"    first {self.start_iter}-th sample: {self.start_n_sample:.3E}\n"
             + f"    Using LUT: {self.use_LUT}\n"
-            + f"    local energy unique: {self.use_unique}\n"
-            + f"    Reduce psi: {self.reduce_psi}\n"
-            + f"    eps: {self.eps:.3E}\n"
-            + f"    only use sample-space: {self.use_sample_space}\n"
             + f"    Therm step: {self.therm_step}\n"
             + f"    Exact sampling: {self.debug_exact}\n"
             + f"    Given CI: {self.ci_space.size(0):.3E}\n"
-            + f"    FCI space: {self.fci_size:.3E}\n"
+            
             + f"    Record the sample: {self.record_sample}\n"
-            + f"    Singles + Doubles: {self.n_SinglesDoubles}\n"
             + f"    Max unique sample: {self.max_unique_sample:3E}\n"
             + f"    Max sample: {self.max_n_sample:3E}\n"
             + f"    use-same-tree: {self.use_same_tree}\n"
@@ -871,8 +910,28 @@ class Sampler:
             + f"    min-nbatch: {self.sample_min_sample_batch}\n"
             + f"    use-dfs-sample: {self.use_dfs_sample}\n"
             + f"    Random seed: {self.seed}\n"
-            + f"    alpha: {self.alpha}\n"
-            + f"    max_memory: {self.max_memory}\n"
+            + ")\n"
+            + f"{self.__print_eloc_param()}"
+        )
+
+    def __print_eloc_param(self) -> str:
+        if not "batch" in self.eloc_param.keys():
+            auto_batch = True
+            nbatch = fp_batch = -1
+        else:
+            nbatch = self.eloc_param["batch"]
+            fp_batch = self.eloc_param["fp_batch"]
+            auto_batch = False
+        return (
+             f"Eloc-param: (\n"
+            + f"    Eloc-method: {self.eloc_param['method']}:\n"
+            + f"    Using LUT: {self.use_LUT}\n"
+            + f"    Singles + Doubles: {self.n_SinglesDoubles}\n"
+            + f"    FCI space: {self.fci_size:.3E}\n"
+            + f"    auto-split-batch: {auto_batch}\n"
+            + f"    eps: {self.eps:.3E}, eps-sample: {self.eps_sample}\n"
+            + f"    alpha: {self.alpha}, max_memory: {self.max_memory}\n"
+            + f"    eloc-batch: {nbatch}, Forward-batch: {fp_batch}\n"
             + ")"
         )
 
