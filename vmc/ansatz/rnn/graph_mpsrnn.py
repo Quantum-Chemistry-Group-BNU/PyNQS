@@ -281,11 +281,10 @@ class Graph_MPS_RNN(nn.Module):
         self.graph = graph  # graph, is also the order of sampling
         sample_order = torch.tensor(list(map(int, self.graph.adj)), device=self.device)  # (nqubits//2)
         # self.sample_order = sample_order.repeat_interleave(2)
-        self.sample_order = torch.empty(
-            2 * sample_order.size(0), device=sample_order.device, dtype=sample_order.dtype
-        )  # -> (nqubits)
+        self.sample_order = torch.empty(2 * sample_order.size(0), device=self.device).long()  # -> (nqubits)
         self.sample_order[0::2] = 2 * sample_order
         self.sample_order[1::2] = 2 * sample_order + 1
+        self.exchange_order = self.sample_order.argsort(stable=True)
         self.grad_nodes = list(map(int, self.graph.nodes))
         self.M_pos = num_count(graph)
 
@@ -519,12 +518,14 @@ class Graph_MPS_RNN(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         #  x: (+1/-1)
-        target = (x + 1) / 2
+        target = ((x + 1) / 2)
         # This order should be replaced by the sample order(the order of sample space is become natural,
-        #                                                   and the full-ci vec is the natural order in the begining)
-        idx = self.sample_order.argsort(stable=True).argsort(stable=True)
-        target = target[:, idx]
+        #  and the full-ci vec is the natural order in the beginning)
+        # idx = self.sample_order.argsort(stable=True).argsort(stable=True)
+        # assert torch.allclose(idx, self.sample_order)
+        target = target[:, self.sample_order]
         n_batch = x.shape[0]
+
         # List[List[Tensor]] (M, L, local_hilbert_dim, dcut, n_batch)
         h = HiddenStates(self.nqubits // 2, self.h_boundary.unsqueeze(-1), self.device, use_list=True)
         h.repeat(1, 1, n_batch)
@@ -573,7 +574,7 @@ class Graph_MPS_RNN(nn.Module):
         if self.det_lut is not None:
             psi = torch.where(psi.isnan(), torch.full_like(psi, 0), psi)
         # sample-phase
-        extra_phase = permute_sgn(self.sample_order.argsort(stable=True), target.long(), self.nqubits)
+        extra_phase = permute_sgn(self.exchange_order, target.long(), self.nqubits)
         psi = psi * extra_phase
         return psi
 
@@ -811,11 +812,10 @@ class Graph_MPS_RNN(nn.Module):
         psi = psi_amp * psi_phase
         # sample-phase
         # the extra phase is the order of change the sample order to natural order(i.e. 0,1,2,...)
-        idx = self.sample_order.argsort(stable=True)
-        extra_phase = permute_sgn(idx, sample_unique.long(), self.nqubits)
+        extra_phase = permute_sgn(self.exchange_order, sample_unique.long(), self.nqubits)
         psi = psi * extra_phase
         # for cal. the s,d excited
-        sample_unique = sample_unique[:, idx]
+        sample_unique = sample_unique[:, self.exchange_order]
         del h
         return sample_unique, sample_counts, psi
 
@@ -862,6 +862,7 @@ if __name__ == "__main__":
     #     # tensor=False,
     # )
     graph_nn = nx.read_graphml("./graph/H_Plane/H12-34-1.graphml")
+    # graph_nn = nx.read_graphml("./graph/H12-34-maxdes2.graphml")
     # breakpoint()
     model = Graph_MPS_RNN(
         use_symmetry=True,
