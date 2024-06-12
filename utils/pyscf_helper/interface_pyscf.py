@@ -49,9 +49,17 @@ class Iface:
         eri = eri.reshape(nact, nact, nact, nact)
         print("finished")
         print(ecore)
+        # for debug
+        # np.savez("h.npz",h1e=hmo,h2e=eri)
+        # hmo = np.load("h.npz")["h1e"]
+        # eri = np.load("h.npz")["h2e"]
+        # For change the order of sorb (<kongjian> orbitial)
+        # order = numpy.array([0, 4, 8, 9, 5, 1, 2, 6, 10, 11, 7, 3])
+        # hmo = hmo[np.ix_(order,order)]
+        # eri = eri[np.ix_(order,order,order,order)]
         return ecore, hmo, eri
 
-    def get_integral_FCIDUMP(self, fname="FCIDUMP") -> Tuple[float, ndarray, ndarray]:
+    def get_integral_FCIDUMP(fname="FCIDUMP") -> Tuple[float, ndarray, ndarray]:
         print("\n[iface.get_integral_FCIDUMP] fname=", fname)
         with open(fname, "r") as f:
             line = f.readline().split(",")[0].split(" ")[-1]
@@ -65,22 +73,22 @@ class Iface:
             int2e = numpy.zeros((n, n, n, n))
             for line in f.readlines():
                 data = line.split()
-                ind = [int(x) - 1 for x in data[1:]]
+                ind = [int(x)-1 for x in data[:-1]]
                 if ind[2] == -1 and ind[3] == -1:
                     if ind[0] == -1 and ind[1] == -1:
-                        e = float(data[0])
+                        e = float(data[-1])
                     else:
-                        int1e[ind[0], ind[1]] = float(data[0])
-                        int1e[ind[1], ind[0]] = float(data[0])
+                        int1e[ind[0], ind[1]] = float(data[-1])
+                        int1e[ind[1], ind[0]] = float(data[-1])
                 else:
-                    int2e[ind[0], ind[1], ind[2], ind[3]] = float(data[0])
-                    int2e[ind[1], ind[0], ind[2], ind[3]] = float(data[0])
-                    int2e[ind[0], ind[1], ind[3], ind[2]] = float(data[0])
-                    int2e[ind[1], ind[0], ind[3], ind[2]] = float(data[0])
-                    int2e[ind[2], ind[3], ind[0], ind[1]] = float(data[0])
-                    int2e[ind[3], ind[2], ind[0], ind[1]] = float(data[0])
-                    int2e[ind[2], ind[3], ind[1], ind[0]] = float(data[0])
-                    int2e[ind[3], ind[2], ind[1], ind[0]] = float(data[0])
+                    int2e[ind[0], ind[1], ind[2], ind[3]] = float(data[-1])
+                    int2e[ind[1], ind[0], ind[2], ind[3]] = float(data[-1])
+                    int2e[ind[0], ind[1], ind[3], ind[2]] = float(data[-1])
+                    int2e[ind[1], ind[0], ind[3], ind[2]] = float(data[-1])
+                    int2e[ind[2], ind[3], ind[0], ind[1]] = float(data[-1])
+                    int2e[ind[3], ind[2], ind[0], ind[1]] = float(data[-1])
+                    int2e[ind[2], ind[3], ind[1], ind[0]] = float(data[-1])
+                    int2e[ind[3], ind[2], ind[1], ind[0]] = float(data[-1])
         print("finished")
         return e, int1e, int2e
 
@@ -146,12 +154,14 @@ class Iface:
             line = "0 0 0 0 " + str(ecore) + "\n"
             f.writelines(line)
         print("finished")
+        # return ecore, h1e1, h2e1
         return 0
 
 
 def interface(
     atom: str = None,
     basis="sto-3g",
+    unit=None,
     integral_file: str = "integral.info",
     fci_coeff: bool = False,
     cisd_coeff: bool = False,
@@ -179,7 +189,10 @@ def interface(
         raise ValueError(f"model-type is {model_type}, but excepted in {MODEL_TYPE}")
 
     if model_type == "Chem":
-        mol = gto.Mole(atom=atom, verbose=5, basis=basis, symmetry=False)
+        if unit is None:
+            mol = gto.Mole(atom=atom, verbose=5, basis=basis, symmetry=False)
+        else:
+            mol = gto.Mole(unit=unit,atom=atom, verbose=5, basis=basis, symmetry=False)
         mol.build()
         sorb = mol.nao * 2
         nele = mol.nelectron
@@ -214,7 +227,9 @@ def interface(
         mo_coeff = mf.mo_coeff
 
     # staticmethod
+    # e, h1e, h2e = Iface.dump(info, fname=integral_file)
     Iface.dump(info, fname=integral_file)
+    # info = Iface.get_integral_FCIDUMP(fname=integral_file)
 
     if sorb <= 20:
         cisolver = fci.FCI(mf, mo_coeff)
