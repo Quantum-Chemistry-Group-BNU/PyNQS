@@ -34,6 +34,7 @@ def total_energy(
     h2e_spin: Tensor = None,
     reduce_psi: bool = False,
     eps: float = 1.0e-12,
+    eps_sample: int = 0,
     use_sample_space: bool = False,
     alpha: float = 2.0,
 ) -> tuple[Tensor, Tensor, Tensor]:
@@ -105,6 +106,7 @@ def total_energy(
                 use_unique=use_unique,
                 reduce_psi=reduce_psi,
                 eps=eps,
+                eps_sample=eps_sample,
                 use_sample_space=use_sample_space,
                 index=(begin, end),
                 alpha=alpha,

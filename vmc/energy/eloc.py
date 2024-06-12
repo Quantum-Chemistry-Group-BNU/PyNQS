@@ -17,10 +17,10 @@ from utils.public_function import WavefunctionLUT, get_Num_SinglesDoubles
 
 print = partial(print, flush=True)
 
-USE_PROFILE = False
-STOCHASTIC = True
-N_SAMPLE = 100
-SEMI_STOCHASTIC = True
+# USE_PROFILE = False
+# STOCHASTIC = True
+# N_SAMPLE = 100
+# SEMI_STOCHASTIC = True
 
 def local_energy(
     x: Tensor,
@@ -39,6 +39,7 @@ def local_energy(
     use_unique: bool = True,
     reduce_psi: bool = False,
     eps: float = 1e-12,
+    eps_sample: int = 0,
     use_sample_space: bool = False,
     index: Tuple[int, int] = None,
     alpha: float = 2,
@@ -75,8 +76,9 @@ def local_energy(
             assert WF_LUT is not None, "WF_ULT must be used if use_sample"
             func = partial(_only_sample_space, index=index, alpha=alpha)
         else:
-            if reduce_psi and eps >= 0.0:
-                func = _reduce_psi
+            if reduce_psi:
+                assert (eps >= 0.0 and eps_sample >= 0)
+                func = partial(_reduce_psi, n_sample=eps_sample)
             else:
                 func = _simple
         # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
@@ -231,6 +233,7 @@ def _reduce_psi(
     WF_LUT: WavefunctionLUT = None,
     use_unique: bool = True,
     eps: float = 1.0e-12,
+    n_sample: int = 0,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
@@ -270,11 +273,12 @@ def _reduce_psi(
     else:
         psi_x = ansatz(x0).unsqueeze(1)  # (batch, 1)
 
-    # STOCHASTIC = True if N_SAMPLE > 0 else False
-    # SEMI_STOCHASTIC = True if eps > 0.0 else False
+    # n_sample = 1000
+    stochastic = True if n_sample > 0 else False
+    semi_stochastic = True if eps > 0.0 else False
     # breakpoint()
-    if STOCHASTIC:
-        if SEMI_STOCHASTIC:
+    if stochastic:
+        if semi_stochastic:
             hij_abs = comb_hij.abs()
             _mask = hij_abs >= eps
             _index = torch.where(_mask.flatten())[0]
@@ -285,18 +289,18 @@ def _reduce_psi(
         # 1/N \sum_m' H[n,m'] psi[m'] / p[m']
         _prob = hij / hij.sum(1, keepdim=True)
         # (batch, n_Sample)
-        _counts = torch.multinomial(_prob, N_SAMPLE, replacement=True)
+        _counts = torch.multinomial(_prob, n_sample, replacement=True)
         # add index
         _counts += torch.arange(batch, device=device).reshape(-1, 1) * n_comb
         # unique counts
         _index1, _count = _counts.unique(sorted=True, return_counts=True)
         # H[n, m]/p[m'] N_m/N_sample
         _prob = _prob.flatten()
-        comb_hij.view(-1)[_index1] = (_count / N_SAMPLE) * comb_hij.flatten()[_index1] / _prob[_index1]
+        comb_hij.view(-1)[_index1] = (_count / n_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
         # if use_spin_raising:
         #     hij_spin.view(-1)[_index1] = (_count / N_SAMPLE) * hij_spin.flatten()[_index1] / _prob[_index1]
         gt_eps_idx = _index1
-        if SEMI_STOCHASTIC:
+        if semi_stochastic:
             gt_eps_idx = torch.cat([_index, _index1])
         del hij, _prob, _count, _counts
     else:
@@ -304,7 +308,7 @@ def _reduce_psi(
         gt_eps_idx = torch.where(comb_hij.reshape(-1).abs() >= eps)[0]
 
     rate = gt_eps_idx.size(0) / comb_hij.reshape(-1).size(0) * 100
-    logger.debug(f"N-sample: {N_SAMPLE}, STOCHASTIC: {STOCHASTIC}, SEMI_STOCHASTIC: {SEMI_STOCHASTIC}")
+    logger.debug(f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}")
     logger.debug(f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %")
     psi_x1 = torch.zeros(batch * n_comb, dtype=dtype, device=device)
 
