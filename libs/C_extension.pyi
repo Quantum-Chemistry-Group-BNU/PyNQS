@@ -1,5 +1,6 @@
 from typing import Tuple
 from torch import Tensor
+from numpy import ndarray
 
 def tensor_to_onv(bra: Tensor, sorb: int) -> Tensor:
     r"""tensor_to_onv(bra, sorb) ->Tensor
@@ -401,4 +402,12 @@ def check_sorb(sorb: int, nele: int) -> None:
     """
     check sorb in (MAX_SORB_LNE - 1 * 64, MAX_SORB_LEN *64]
     electron and virtual orbital
+    """
+
+def compress_h1e_h2e(h1e: ndarray, h2e: ndarray, sorb: int) -> Tuple[ndarray, ndarray]:
+    """
+    compress h1e/he2
+
+    h1e(sorb, sorb) -> sorb * sorb
+    h2e(sorb, sorb, sorb, sorb) -> (pair * (pair + 1))/2, pair = sorb * (sorb -1)/2
     """

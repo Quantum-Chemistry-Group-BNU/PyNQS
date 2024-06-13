@@ -1662,7 +1662,8 @@ if __name__ == "__main__":
     ) as prof:
         # sample, counts, wf = model.ar_sampling(n_sample=int(1e12))
         # sample = (sample * 2 - 1).double()
-        loss.backward()
+        ...
+        # loss.backward()
         # model(fci_space)
     # torch.save(wf1.detach(), "wf1.pth")
     print(prof.key_averages(group_by_stack_n=5).table(sort_by="cuda_time_total", row_limit=20))

@@ -287,6 +287,7 @@ class Graph_MPS_RNN(nn.Module):
         self.exchange_order = self.sample_order.argsort(stable=True)
         self.grad_nodes = list(map(int, self.graph.nodes))
         self.M_pos = num_count(graph)
+        assert self.sample_order.size(0) == nqubits
 
         # distributed
         self.rank = get_rank()
@@ -861,8 +862,9 @@ if __name__ == "__main__":
     #     # param_dtype = torch.complex128
     #     # tensor=False,
     # )
-    graph_nn = nx.read_graphml("./graph/H_Plane/H12-34-1.graphml")
-    # graph_nn = nx.read_graphml("./graph/H12-34-maxdes2.graphml")
+    # graph_nn = nx.read_graphml("./graph/H_Plane/H12-34-1.graphml")
+    graph_nn = nx.read_graphml("./graph/H12-34-maxdes2.graphml")
+    breakpoint()
     # breakpoint()
     model = Graph_MPS_RNN(
         use_symmetry=True,

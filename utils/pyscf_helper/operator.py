@@ -2,13 +2,17 @@
 Operator, e.g. S-S+, S^2
 """
 
+import time
+import sys
+import warnings
 import torch
 import numpy as np
+sys.path.append("./")
 
 from numpy import ndarray
 from torch import Tensor
 
-def _compress_h1e_h2e(
+def _compress_h1e_h2e_py(
     h1e: ndarray,
     h2e: ndarray,
     sorb: int,
@@ -44,6 +48,12 @@ def _compress_h1e_h2e(
 
     return int1e, int2e
 
+
+try:
+    from libs.C_extension import compress_h1e_h2e as func
+except ImportError:
+    warnings.warn("Using compress h1e/h2 using python is pretty slower", stacklevel=2)
+    func = _compress_h1e_h2e_py
 
 def spin_raising(sbas: int, c1: float = 1.0, compress: bool = True) -> tuple[Tensor, Tensor]:
     """
@@ -86,11 +96,22 @@ def spin_raising(sbas: int, c1: float = 1.0, compress: bool = True) -> tuple[Ten
     h2e = c1 * vprqs
 
     if compress:
-        return tuple(map(torch.from_numpy, _compress_h1e_h2e(h1e, h2e, sbas)))
+        return tuple(map(torch.from_numpy, func(h1e, h2e, sbas)))
     else:
         return tuple(map(torch.from_numpy, (h1e, h2e)))
 
 
 if __name__ == "__main__":
-    sorb = 40
-    x = spin_raising(sorb, compress=False)
+    sorb = 60
+    h1e, h2e = spin_raising(sorb, compress=False)
+    h1e = h1e.numpy()
+    h2e = h2e.numpy()
+    t0 = time.time_ns()
+    result = _compress_h1e_h2e_py(h1e, h2e, sorb)
+    print(f"Delta: {(time.time_ns() - t0)/1.0e6:.3f} ms")
+
+    t0 = time.time_ns()
+    result1 = func(h1e, h2e, sorb)
+    print(f"Delta: {(time.time_ns() - t0)/1.0e6:.3f} ms")
+
+    assert np.allclose(result[0], result1[0]) and np.allclose(result1[1], result[1])

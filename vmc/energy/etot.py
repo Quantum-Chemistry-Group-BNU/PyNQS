@@ -89,6 +89,7 @@ def total_energy(
         for i in range(len(idx_lst)):
             end = idx_lst[i]
             ons = x[begin:end]
+            # reduce-psi S-S+ is error
             _eloc, _sloc, _psi, x_time = local_energy(
                 ons,
                 h1e,
@@ -100,7 +101,7 @@ def total_energy(
                 nob,
                 dtype=dtype,
                 WF_LUT=WF_LUT,
-                use_spin_raising=use_spin_raising,
+                use_spin_raising=False if reduce_psi else use_spin_raising,
                 h1e_spin=h1e_spin,
                 h2e_spin=h2e_spin,
                 use_unique=use_unique,
@@ -111,6 +112,27 @@ def total_energy(
                 index=(begin, end),
                 alpha=alpha,
             )
+            if reduce_psi and use_spin_raising:
+                # recalculate S-S+ in Sample-space
+                _sloc, _, _, _x_time = local_energy(
+                    ons,
+                    h1e_spin,
+                    h2e_spin,
+                    ansatz_batch,
+                    sorb,
+                    nele,
+                    noa,
+                    nob,
+                    dtype=dtype,
+                    WF_LUT=WF_LUT,
+                    use_spin_raising=False,
+                    use_sample_space=True,
+                    index=(begin, end),
+                    alpha=alpha,
+                )
+                x_time = list(x_time)
+                for i in range(3):
+                    x_time[i] += _x_time[i]
             eloc[begin:end] = _eloc
             psi[begin:end] = _psi
             sloc[begin:end] = _sloc

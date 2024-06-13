@@ -73,22 +73,22 @@ class Iface:
             int2e = numpy.zeros((n, n, n, n))
             for line in f.readlines():
                 data = line.split()
-                ind = [int(x)-1 for x in data[:-1]]
+                ind = [int(x) - 1 for x in data[1:]]
                 if ind[2] == -1 and ind[3] == -1:
                     if ind[0] == -1 and ind[1] == -1:
-                        e = float(data[-1])
+                        e = float(data[0])
                     else:
-                        int1e[ind[0], ind[1]] = float(data[-1])
-                        int1e[ind[1], ind[0]] = float(data[-1])
+                        int1e[ind[0], ind[1]] = float(data[0])
+                        int1e[ind[1], ind[0]] = float(data[0])
                 else:
-                    int2e[ind[0], ind[1], ind[2], ind[3]] = float(data[-1])
-                    int2e[ind[1], ind[0], ind[2], ind[3]] = float(data[-1])
-                    int2e[ind[0], ind[1], ind[3], ind[2]] = float(data[-1])
-                    int2e[ind[1], ind[0], ind[3], ind[2]] = float(data[-1])
-                    int2e[ind[2], ind[3], ind[0], ind[1]] = float(data[-1])
-                    int2e[ind[3], ind[2], ind[0], ind[1]] = float(data[-1])
-                    int2e[ind[2], ind[3], ind[1], ind[0]] = float(data[-1])
-                    int2e[ind[3], ind[2], ind[1], ind[0]] = float(data[-1])
+                    int2e[ind[0], ind[1], ind[2], ind[3]] = float(data[0])
+                    int2e[ind[1], ind[0], ind[2], ind[3]] = float(data[0])
+                    int2e[ind[0], ind[1], ind[3], ind[2]] = float(data[0])
+                    int2e[ind[1], ind[0], ind[3], ind[2]] = float(data[0])
+                    int2e[ind[2], ind[3], ind[0], ind[1]] = float(data[0])
+                    int2e[ind[3], ind[2], ind[0], ind[1]] = float(data[0])
+                    int2e[ind[2], ind[3], ind[1], ind[0]] = float(data[0])
+                    int2e[ind[3], ind[2], ind[1], ind[0]] = float(data[0])
         print("finished")
         return e, int1e, int2e
 
@@ -230,6 +230,17 @@ def interface(
     # e, h1e, h2e = Iface.dump(info, fname=integral_file)
     Iface.dump(info, fname=integral_file)
     # info = Iface.get_integral_FCIDUMP(fname=integral_file)
+
+    # graph
+    # from utils.graph import fielder, nxutils
+    # import networkx as nx
+
+    # eri = info[2]
+    # kij = np.einsum('ijji->ij',eri)
+    # forder = fielder.orbitalOrdering(kij,mode='kmat',debug=False)
+    # fgraph = nxutils.fromOrderToDiGraph(forder)
+    # nx.write_graphml_xml(fgraph, "./graph/H12-2.00-Bohr-sto6g.graphml")
+    # breakpoint()
 
     if sorb <= 20:
         cisolver = fci.FCI(mf, mo_coeff)

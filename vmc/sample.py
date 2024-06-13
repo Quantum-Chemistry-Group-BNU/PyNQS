@@ -630,7 +630,7 @@ class Sampler:
             unique_length = [i.size(0) for i in unique_all]
             count_length = [i.sum().item() for i in count_all]
             s = f"Single-rank: unique: {sum(unique_length)}, counts: {sum(count_length)}"
-            logger.debug(s, master=True)
+            logger.info(s, master=True)
 
         t1 = time.time_ns()
         if self.rank == 0:
