@@ -25,6 +25,8 @@ from utils.public_function import (
     multinomial_tensor,
     split_batch_idx,
     split_length_idx,
+    torch_consecutive_unique_idex,
+    torch_lexsort,
 )
 from utils.distributed import get_rank, get_world_size, synchronize
 
@@ -84,6 +86,15 @@ class HiddenStates:
 
         return self
 
+    def index_select(self, index: Tensor, dim: int = -1) -> Self:
+        if self.use_list:
+            for i in range(self.nqubits):
+                self.hTensor[i] = self.hTensor[i].index_select(dim, index)
+        else:
+            self.hTensor = self.hTensor.index_select(dim, index)
+
+        return self
+
     def __getitem__(self, index: tuple[int | slice]) -> Tensor | HiddenStates:
         i, *k = index
         if len(k) == 0 or k == [Ellipsis]:
@@ -103,7 +114,7 @@ class HiddenStates:
     @property
     def shape(self) -> tuple[int, ...]:
         if self.use_list:
-            return (self.nqubits,) + tuple(self.hTensor[0][0].shape)
+            return (self.nqubits,) + tuple(self.hTensor[0].shape)
         else:
             return tuple(self.hTensor.shape)
 
@@ -251,13 +262,14 @@ class Graph_MPS_RNN(nn.Module):
         hilbert_local: int = 4,
         params_file: str = None,
         graph: Graph | DiGraph = None,
-        dcut_before: int = 2,
+        # dcut_before: int = 2,
         # 功能参数
         use_symmetry: bool = False,
         alpha_nele: int = None,
         beta_nele: int = None,
         rank_independent_sampling: bool = False,
         det_lut: DetLUT = None,
+        use_unique: bool = True,
     ) -> None:
         super(Graph_MPS_RNN, self).__init__()
         # 模型输入参数
@@ -269,7 +281,7 @@ class Graph_MPS_RNN(nn.Module):
         self.hilbert_local = hilbert_local
         self.param_dtype = param_dtype
         self.params_file = params_file  # checkpoint-file coming from 'BaseVMCOptimizer'
-        self.dcut_before = dcut_before
+        self.dcut_before: int = None
         self.froze_sites = False
         self.opt_sites_pos = None
 
@@ -285,7 +297,7 @@ class Graph_MPS_RNN(nn.Module):
         self.sample_order[0::2] = 2 * sample_order
         self.sample_order[1::2] = 2 * sample_order + 1
         self.exchange_order = self.sample_order.argsort(stable=True)
-        self.grad_nodes = list(map(int, self.graph.nodes))
+        self.graph_nodes = list(map(int, self.graph.nodes))
         self.M_pos = num_count(graph)
         assert self.sample_order.size(0) == nqubits
 
@@ -340,11 +352,17 @@ class Graph_MPS_RNN(nn.Module):
             self.remove_det = True
             self.det_lut = det_lut
 
+        # remove duplicate onstate, dose not support auto-backward
+        self.use_unique = use_unique
+
     def extra_repr(self) -> str:
         net_param_num = lambda net: sum(p.numel() for p in net.parameters())
         s = f"The graph-MPSRNN is working on {self.device}.\n"
         s += f"The bond dim in MPS--RNN is {self.dcut}, the local dim of Hilbert space is {self.hilbert_local}.\n"
 
+        s += "Graph:\n"
+        for node, neighbors in self.graph.adj.items():
+            s += f"{str(node)}: {list(neighbors)}\n"
         s += f"The cal.(and the sampling) order is (Spatial orbital).\n"
         s += f"-> {list(map(int, self.graph.adj))} ->.\n"
 
@@ -465,12 +483,12 @@ class Graph_MPS_RNN(nn.Module):
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         # 先查出采样的第i个元素是第i_pos个空间轨道
         # i_pos = list(self.graph.nodes)[i_site]
-        i_pos = self.grad_nodes[i_chain]
+        i_pos = self.graph_nodes[i_chain]
         _M_pos = self.M_pos[i_pos]
         pos = list(self.graph.predecessors(str(i_pos)))
         # Param.s loaded and cal. h_ud
         # h_ud = torch.zeros(self.hilbert_local, self.dcut, n_batch, device=self.device)
-        # logger.info(f"site: {i_site}, i_pos: {i_pos}, pos: {pos}, pos-M: {_M_pos}")
+        # logger.debug(f"site: {i_chain}, i_pos: {i_pos}, pos: {pos}, pos-M: {_M_pos}")
         v = self.params_v[i_pos, ...]  # (4, dcut)
         eta = self.params_eta[i_pos, ...]  # (dcut)
         w = self.params_w[i_pos, ...]  # (dcut)
@@ -502,6 +520,7 @@ class Graph_MPS_RNN(nn.Module):
             # logger.debug((M_cat.shape, M.shape, h_cat.shape))
             # logger.debug(f"M_cat: {M_cat.shape}, h_cat: {h_cat.shape}")
             h_ud = torch.matmul(M_cat, h_cat)
+            # breakpoint()
             # assert torch.allclose(h_ud, h_ud1)
             h_ud = h_ud + v.unsqueeze(-1)
             del M_cat, h_cat
@@ -521,24 +540,76 @@ class Graph_MPS_RNN(nn.Module):
         #  x: (+1/-1)
         target = ((x + 1) / 2)
         # This order should be replaced by the sample order(the order of sample space is become natural,
-        #  and the full-ci vec is the natural order in the beginning)
+        # and the full-ci vec is the natural order in the beginning)
         # idx = self.sample_order.argsort(stable=True).argsort(stable=True)
         # assert torch.allclose(idx, self.sample_order)
         target = target[:, self.sample_order]
-        n_batch = x.shape[0]
+        n_batch = target.shape[0]
 
-        # List[List[Tensor]] (M, L, local_hilbert_dim, dcut, n_batch)
+        # remove duplicate onstate, dose not support auto-backward
+        # torch.unique/torch_lexsort maybe is time consuming
+        use_unique = self.use_unique and (not x.requires_grad)
+        # use_unique = True
+        if use_unique:
+            # avoid sorted much orbital, unique_nqubits >= 2
+            unique_nqubits = min(int(torch.tensor(n_batch / 1024 + 1).log2().ceil()), self.nqubits // 4)
+            unique_nqubits = max(2, unique_nqubits)
+            sorted_idx = torch_lexsort(
+                keys=list(map(torch.flatten,reversed(target.squeeze(1)[:, :unique_nqubits].split(1, dim=1))))
+            )
+            original_idx = torch.argsort(sorted_idx, stable=True)
+            target = target[sorted_idx]
+
+        # List[Tensor] (M, local_hilbert_dim, dcut, n_batch)
         h = HiddenStates(self.nqubits // 2, self.h_boundary.unsqueeze(-1), self.device, use_list=True)
-        h.repeat(1, 1, n_batch)
+        if not use_unique:
+            h.repeat(1, 1, n_batch)
         # breakpoint()
         phi = torch.zeros(n_batch, device=self.device)  # (n_batch,)
         amp = torch.ones(n_batch, device=self.device)  # (n_batch,)
         num_up = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
         num_down = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
 
+        inverse_before: Tensor = None
         assert self.hilbert_local == 4
         for i in range(0, self.nqubits // 2):
-            P, h, h_ud, w, c = self.calculate_two_site(h, target, n_batch, i, sampling=False)
+            if use_unique:
+                if i <= unique_nqubits // 2:
+                    if i == 0:
+                        _target: Tensor = None
+                        _nbatch = 1
+                        inverse_i = torch.zeros(n_batch, dtype=torch.int64, device=self.device)
+                    else:
+                        # input tensor is already sorted, torch.unique_consecutive is faster.
+                        _target, inverse_i, index_i = torch_consecutive_unique_idex(
+                            target[..., :i * 2].squeeze(1), dim=0
+                        )[:3]
+                        _nbatch = _target.size(0)
+                    if i == 0:
+                        ...
+                    else:
+                        # change hidden-state (M, 4, dcut, nbatch->nbatch')
+                        h = h.index_select(inverse_before[index_i])
+                    inverse_before = inverse_i
+                else:
+                    _target = target
+                    _nbatch = n_batch
+                if i == unique_nqubits//2 + 1:
+                    h = h.index_select(inverse_i)
+                # if i > 0:
+                #     logger.debug(f"i: {i} h: {h.shape}, _target: {_target.shape}, _nbatch: {_nbatch}")
+                P, h, h_ud, w, c = self.calculate_two_site(h, _target, _nbatch, i, sampling=False)
+                if i <= unique_nqubits//2 :
+                    P = P[..., inverse_i]
+                    h_ud = h_ud[..., inverse_i]
+                    rate = _nbatch / n_batch * 100
+                    logger.debug(f"Reduce {i}-th qubits : {n_batch} -> {_nbatch}, rate: {rate:.4f}%")
+            else:
+                # h: (sorb//2, dcut, nbatch), target: (nbatch, sorb)
+                # P: (4, nbatch), h: (sorb//2, 4, dcut, nbatch), h_ud: (4, dcut, nbatch) w: (dcut,), c: scaler
+                P, h, h_ud, w, c = self.calculate_two_site(h, target, n_batch, i, sampling=False)
+                logger.debug(f"P: {P.shape}, h: {h.shape}, h_ud: {h_ud.shape}, w: {w.shape}, c: {c}")
+
             # logger.info(f"h: {h.shape}, h_ud: {h_ud.shape}")
             # symmetry
             psi_mask = self.symmetry_mask(2 * i, num_up, num_down)
@@ -577,6 +648,8 @@ class Graph_MPS_RNN(nn.Module):
         # sample-phase
         extra_phase = permute_sgn(self.exchange_order, target.long(), self.nqubits)
         psi = psi * extra_phase
+        if use_unique:
+            psi = psi[original_idx]
         return psi
 
     def _interval_sample(
@@ -864,7 +937,6 @@ if __name__ == "__main__":
     # )
     # graph_nn = nx.read_graphml("./graph/H_Plane/H12-34-1.graphml")
     graph_nn = nx.read_graphml("./graph/H12-34-maxdes2.graphml")
-    breakpoint()
     # breakpoint()
     model = Graph_MPS_RNN(
         use_symmetry=True,
@@ -873,7 +945,7 @@ if __name__ == "__main__":
         nqubits=sorb,
         nele=nele,
         device=device,
-        dcut=6,
+        dcut=10,
         graph=graph_nn,
     )
     # psi = model(fci_space)
@@ -994,11 +1066,23 @@ if __name__ == "__main__":
         n_sample=int(1e5),
         min_tree_height=5,
         use_dfs_sample=True,
-        min_batch=5000,
+        min_batch=50000,
     )
     sample = (sample * 2 - 1).double()
     # sample = fci_space[:100000]
-
+    import time
+    t0 = time.time_ns()
+    wf = model(sample)
+    torch.cuda.synchronize()
+    t1 = time.time_ns()
+    model.use_unique = False
+    wf1 = model(sample)
+    torch.cuda.synchronize()
+    t2 = time.time_ns()
+    assert torch.allclose(wf, wf1, rtol=1e-7, atol=1e-10)
+    logger.info(f"Delta: {(t1 - t0)/1.e06:.3f}ms, Delta1: {(t2 - t1)/1.e06:.3f} ms")
+    breakpoint()
+    exit()
     # import time
     # t0 = time.time_ns()
     # wf1 = model(sample)

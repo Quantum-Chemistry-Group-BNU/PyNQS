@@ -43,7 +43,7 @@ def local_energy(
     use_sample_space: bool = False,
     index: Tuple[int, int] = None,
     alpha: float = 2,
-) -> tuple[Tensor, Tensor, tuple[float, float, float]]:
+) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
@@ -249,12 +249,14 @@ def _reduce_psi(
     device = h1e.device
 
     # comb_x: (batch, comb, bra_len), x1: (batch, comb, sorb)
-    if use_unique:
-        comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
-        x0 = onv_to_tensor(x, sorb).reshape(1, -1)
-    else:
-        comb_x, x1 = get_comb_tensor(x, sorb, nele, noa, nob, True)
-        x0 = x1[:, 0, :].reshape(1, -1)
+    # if use_unique:
+    #     comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
+    #     x0 = onv_to_tensor(x, sorb).reshape(1, -1)
+    # else:
+    #     comb_x, x1 = get_comb_tensor(x, sorb, nele, noa, nob, True)
+    #     x0 = x1[:, 0, :].reshape(1, -1)
+    comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
+    x0 = onv_to_tensor(x, sorb).reshape(1, -1)
     batch, n_comb, bra_len = tuple(comb_x.size())
 
     # calculate matrix <x|H|x'>
@@ -331,10 +333,11 @@ def _reduce_psi(
         else:
             if use_LUT:
                 # x1 great than eps and not in LUT
-                x1 = x1[gt_not_lut_idx]
+                _comb = comb_x.reshape(-1, bra_len)[gt_not_lut_idx]
             else:
                 # x1 great than eps
-                x1 = x1[gt_eps_idx]
+                _comb = comb_x.reshape(-1, bra_len)[gt_eps_idx]
+            x1 = onv_to_tensor(_comb, sorb)
             psi_gt_eps = ansatz(x1)
 
         if use_LUT:

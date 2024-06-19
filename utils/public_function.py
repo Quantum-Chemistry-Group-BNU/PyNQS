@@ -367,7 +367,7 @@ def torch_consecutive_unique_idex(x: Tensor, dim: int = 0) -> Tuple[Tensor, Tens
     unique, inverse, counts = torch.unique_consecutive(
         x, dim=dim, return_inverse=True, return_counts=True
     )
-    inv_sorted = inverse.argsort()  # True is slower
+    inv_sorted = inverse.argsort(stable=True)  # True is slower
     tot_counts = torch.cat((counts.new_zeros(1), counts.cumsum(dim=0)))[:-1]
     index = inv_sorted[tot_counts]
     return unique, inverse, index, counts
