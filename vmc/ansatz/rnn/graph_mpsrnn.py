@@ -525,12 +525,15 @@ class Graph_MPS_RNN(nn.Module):
             h_ud = h_ud + v.unsqueeze(-1)
             del M_cat, h_cat
         # cal. prob. by h_ud
-        normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
+        _h_ud = h_ud.abs().pow(2)
+        normal = (_h_ud).mean((0, 1)).sqrt()
+        # normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
         h_ud = h_ud / normal  # (4, dcut, nbatch)
         h[i_pos] = h_ud
         # cal. prob. and normalized
         eta = torch.abs(eta) ** 2  # (dcut)
-        P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
+        # P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
+        P = (_h_ud * normal**2 * eta.reshape(1, -1, 1)).sum(1)
         # print(torch.exp(self.parm_eta[a, b]))
         P = torch.sqrt(P)
 
@@ -608,7 +611,7 @@ class Graph_MPS_RNN(nn.Module):
                 # h: (sorb//2, dcut, nbatch), target: (nbatch, sorb)
                 # P: (4, nbatch), h: (sorb//2, 4, dcut, nbatch), h_ud: (4, dcut, nbatch) w: (dcut,), c: scaler
                 P, h, h_ud, w, c = self.calculate_two_site(h, target, n_batch, i, sampling=False)
-                logger.debug(f"P: {P.shape}, h: {h.shape}, h_ud: {h_ud.shape}, w: {w.shape}, c: {c}")
+                # logger.debug(f"P: {P.shape}, h: {h.shape}, h_ud: {h_ud.shape}, w: {w.shape}, c: {c}")
 
             # logger.info(f"h: {h.shape}, h_ud: {h_ud.shape}")
             # symmetry
@@ -1080,6 +1083,7 @@ if __name__ == "__main__":
     torch.cuda.synchronize()
     t2 = time.time_ns()
     assert torch.allclose(wf, wf1, rtol=1e-7, atol=1e-10)
+    logger.debug(wf)
     logger.info(f"Delta: {(t1 - t0)/1.e06:.3f}ms, Delta1: {(t2 - t1)/1.e06:.3f} ms")
     breakpoint()
     exit()
