@@ -263,6 +263,62 @@ std::vector<int64_t> BKDR_tensor(const Tensor &onv){
   return value1;
 }
 
+std::tuple<py::array_t<double>, py::array_t<double>> compress_h1e_h2e(
+    const py::array_t<double> &h1e, const py::array_t<double> &h2e,
+    const int sorb) {
+  int pair = sorb * (sorb - 1) / 2;
+  std::vector<double> int1e(sorb * sorb, 0.0);
+  std::vector<double> int2e((pair * (pair + 1)) / 2, 0.0);
+
+  auto h1e_unchecked = h1e.unchecked<2>();  // View h1e as a 2D array
+  auto h2e_unchecked = h2e.unchecked<4>();  // View h2e as a 4D array
+
+  // compress h1e
+  for (int i = 0; i < sorb; ++i) {
+    for (int j = 0; j < sorb; ++j) {
+      int1e[i * sorb + j] = h1e_unchecked(i, j);
+    }
+  }
+
+  // compress h2e
+  auto _tow_body = [&int2e](int i, int j, int k, int l, double value) {
+    if (i == j || k == l) return;
+    int ij = (i * (i - 1)) / 2 + j;
+    int kl = (k * (k - 1)) / 2 + l;
+    if (i <= j) ij = (j * (j - 1)) / 2 + i;
+    if (k <= l) kl = (l * (l - 1)) / 2 + k;
+
+    double sgn = 1.0;
+    if (i <= j) sgn = -sgn;
+    if (k <= l) sgn = -sgn;
+
+    if (ij >= kl) {
+      int ijkl = (ij * (ij + 1)) / 2 + kl;
+      int2e[ijkl] = sgn * value;
+    } else {
+      int ijkl = (kl * (kl + 1)) / 2 + ij;
+      int2e[ijkl] = sgn * value;
+    }
+  };
+
+  // Compress values from h2e to int2e using the helper lambda
+  for (int i = 0; i < sorb; ++i) {
+    for (int j = 0; j < sorb; ++j) {
+      for (int k = 0; k < sorb; ++k) {
+        for (int l = 0; l < sorb; ++l) {
+          _tow_body(i, j, k, l, h2e_unchecked(i, j, k, l));
+        }
+      }
+    }
+  }
+
+  // Create pybind11 arrays from std::vector
+  py::array_t<double> int1e_array(sorb * sorb, int1e.data());
+  py::array_t<double> int2e_array((pair * (pair + 1)) / 2, int2e.data());
+
+  return std::make_tuple(int1e_array, int2e_array);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
@@ -322,4 +378,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 #endif
 
   m.def("BKDR", &BKDR_tensor, "BKDR-method testing");
+  // check
+  m.attr("MAX_SORB") = MAX_SORB_LEN * 64;
+  m.attr("MAX_SORB_LEN") = MAX_SORB_LEN;
+  m.attr("MAX_NELE") = MAX_NO;
+  m.def("check_sorb", &check_sorb, py::arg("sorb"), py::arg("nele"),
+        "check sorb/nele");
+  m.def("compress_h1e_h2e", &compress_h1e_h2e, py::arg("h1e"), py::arg("h2e"),
+        py::arg("sorb"), "Compress h1e(2D) and h2e(4D) to 1D ");
 }
