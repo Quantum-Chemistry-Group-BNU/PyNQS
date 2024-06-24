@@ -600,7 +600,7 @@ class Sampler:
         wf_value: Tensor,
     ) -> Tuple[Tensor, Tensor, Tensor, WavefunctionLUT]:
         """
-        1. Gather sample-unique/counts from very rank
+        1. Gather sample-unique/counts from very rank, compress uint64 to uint8
         2. Merge all unique/counts in master-rank(rank0)
         3. Scatter unique/counts/prob to very rank
 
@@ -610,13 +610,14 @@ class Sampler:
 
         Returns
         -------
-            unique_rank: Tensor
+            unique_rank: Tensor (uint8, onv)
             placeholders: Tensor (remove counts-rank)
             prob_rank: Tensor, prob_rank = prob * world_size
             WF_LUT: wavefunction LookUP-Table about all-sample-unique and wf-value
         """
         t0 = time.time_ns()
         # Gather unique, counts, wf_value
+        unique = tensor_to_onv(unique.byte(), self.sorb) # compress uint64 -> uint8
         unique_all = gather_tensor(unique, self.device, self.world_size, master_rank=0)
         count_all = gather_tensor(counts, self.device, self.world_size, master_rank=0)
         if self.use_LUT:
@@ -673,7 +674,7 @@ class Sampler:
 
         # FIXME:zbwu-24-04-17 remove counts-ranks
         # Scatter unique, counts
-        unique_rank = scatter_tensor(merge_unique, self.device, torch.int64, self.world_size)
+        unique_rank = scatter_tensor(merge_unique, self.device, torch.uint8, self.world_size)
         # counts_rank = scatter_tensor(merge_counts, self.device, torch.int64, self.world_size)
         prob_rank = scatter_tensor(merge_prob, self.device, torch.double, self.world_size)
 
@@ -681,7 +682,7 @@ class Sampler:
         if self.use_LUT:
             # XXX: unique_rank split merge_unique when broadcast to all-rank,
             # this maybe efficiency than scatter->broadcast
-            merge_unique = broadcast_tensor(merge_unique, self.device, torch.int64, master_rank=0)
+            merge_unique = broadcast_tensor(merge_unique, self.device, torch.uint8, master_rank=0)
             # breakpoint()
             wf_value_unique = broadcast_tensor(
                 wf_value_unique, self.device, self.dtype, master_rank=0
@@ -711,11 +712,10 @@ class Sampler:
             s += f"All-Rank unique sample: {merge_unique.size(0)}, Broadcast LUT: {delta4:.3E} s"
             logger.info(s, master=True)
 
-        # # convert to onv
-        # unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
         if self.use_LUT:
             dim = merge_unique.size(0)
-            bra_key = tensor_to_onv(merge_unique.to(torch.uint8), self.sorb)
+            bra_key = merge_unique
+            # bra_key = tensor_to_onv(merge_unique, self.sorb)
             WF_LUT = WavefunctionLUT(
                 bra_key,
                 wf_value_unique,
@@ -726,12 +726,13 @@ class Sampler:
             begin_rank = idx_lst[self.rank]
             end_rank = idx_lst[self.rank + 1]
             # unique_rank1 = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
-            unique_rank = bra_key[begin_rank:end_rank]
+            # unique_rank = bra_key[begin_rank:end_rank]
+            # assert torch.allclose(bra_key[begin_rank:end_rank], unique_rank)
             # assert torch.allclose(unique_rank1, unique_rank)
         else:
             WF_LUT: WavefunctionLUT = None
             # convert to onv
-            unique_rank = tensor_to_onv(unique_rank.to(torch.uint8), self.sorb)
+            # unique_rank = tensor_to_onv(unique_rank, self.sorb)
 
         del merge_counts, merge_prob, unique_all, count_all, wf_value_all
 
