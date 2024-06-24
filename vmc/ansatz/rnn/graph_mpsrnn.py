@@ -914,6 +914,15 @@ class Graph_MPS_RNN(nn.Module):
         psi = psi * extra_phase
         # for cal. the s,d excited
         sample_unique = sample_unique[:, self.exchange_order]
+        
+        if self.J_W_phase:
+            phase_b = torch.zeros(sample_unique.shape[0])
+            for i in range(2, sample_unique.shape[1], 2):
+                onv_bool = sample_unique[:, i]  # bool array, 0/1
+                phase_b += torch.sum(sample_unique[:, 1:i:2], dim=-1) % 2 * onv_bool
+            phase_b = -2 * (phase_b % 2) + 1
+            psi = psi * phase_b
+
         del h
         return sample_unique, sample_counts, psi
 

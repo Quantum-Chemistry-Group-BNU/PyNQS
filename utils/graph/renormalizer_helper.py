@@ -1,15 +1,3 @@
-import logging, torch
-import numpy as np
-
-from renormalizer import Model, Mps, Mpo, optimize_mps
-from renormalizer.model import h_qc
-from renormalizer.utils import log
-
-# the way to install renormalizer is simple just
-#  ''' pip install renormalizer '''
-# numpy ==> 1.26.4
-# renormalizer ==> 0.0.10
-
 def Rmps2mpsrnn(
     fci_dump_file: str = None,
     sorb: int = None,
@@ -18,6 +6,7 @@ def Rmps2mpsrnn(
     bond_dim_procedure: list = None,
     output_file: str = None,
 ):
+    
     ''' 
     INPUT:
     fci_dump_file(str): fcidump file, a easy way to get it is make integral file with fci_dump_file output
@@ -27,6 +16,18 @@ def Rmps2mpsrnn(
     bond_dim_procedure(list): mps bond dim. optimize procedure
     output_file(str): saved file
     '''
+    import logging, torch
+    import numpy as np
+
+    from renormalizer import Model, Mps, Mpo, optimize_mps
+    from renormalizer.model import h_qc
+    from renormalizer.utils import log
+
+    # the way to install renormalizer is simple just
+    #  ''' pip install renormalizer '''
+    # numpy ==> 1.26.4
+    # renormalizer ==> 0.0.10
+
     dump_dir = "./"
     job_name = "qc"  #########
     log.set_stream_level(logging.DEBUG)
