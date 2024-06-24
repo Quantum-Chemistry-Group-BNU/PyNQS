@@ -942,8 +942,6 @@ class Graph_MPS_RNN(nn.Module):
             sample_counts: the counts of unique sample, s.t. sum(sample_counts) = n_sample
             wf_value: the wavefunction of unique sample
         """
-        if min_tree_height is None:
-            min_tree_height = 8
         return self.forward_sample(n_sample, min_batch, min_tree_height, use_dfs_sample)
 
 

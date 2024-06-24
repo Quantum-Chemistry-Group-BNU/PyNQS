@@ -96,16 +96,16 @@ def Rmps2mpsrnn(
     
      # save as checkpoint file
     torch.save({"model":{"module.params_M.all_sites":params2rnn}},output_file)
-    print("Warning! The mps wavefunction is equal to mpsrnn(reduce to mps) up to a Jordan--Weigner phase")
+    print("Warning! The mps wavefunction is equal to mpsrnn(reduce to mps) up to a Jordan--Wigner phase")
     print(f"Input Fci-dump=file is {fci_dump_file}")
     print(f"Save params. in {output_file}")
 
 
 if __name__ == "__main__":
     Rmps2mpsrnn(
-        fci_dump_file="H18-fcidump.txt",
-        sorb = 18,
-        nelec = [9,9],
+        fci_dump_file="H6-fcidump.txt",
+        sorb = 6,
+        nelec = [3,3],
         bond_dim_init = 50,
         output_file = "params.pth",
     )

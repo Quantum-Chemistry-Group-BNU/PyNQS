@@ -2,12 +2,16 @@
 
 ## Requirement
 
-- Pytorch
-- pybind11
+- torch >= 2.0.0
+- torchinfo >= 1.7.0
+- pyscf >= 2.5.0
+- numpy >= 1.24.0, < 2.0.0
+- pandas >= 2.0.0
+- scipy >= 1.10.0
 - loguru
-- line_profiler
 - memory_profiler
-- torchinfo
+- line_profiler
+- renormalizer(choice)
 
 ## Available ansatze 
 
