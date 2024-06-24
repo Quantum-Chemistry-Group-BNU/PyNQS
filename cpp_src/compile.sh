@@ -22,6 +22,14 @@ if sys_name == "myarch":
     torch_DIR = "home/zbwu/soft/anaconda3/lib/python3.10/site-packages/torch"
     magma_DIR = "/home/zbwu/soft/magma-2.6.1"
     CUDA_LIB = "/home/zbwu/soft/anaconda3/lib"
+if sys_name == "wsl2":
+    use_magma = False
+    os.environ["CC"] = "gcc-11"
+    os.environ["CXX"] = "g++-11"
+    os.environ["CUDA_HOME"] = '/home/zbwu/soft/miniconda3'
+    os.environ["MAX_JOBS"] = '4' # ninja
+    torch_DIR = "/home/zbwu/soft/miniconda3/lib/python3.11/site-packages/torch"
+    CUDA_LIB = "/home/zbwu/soft/miniconda3/lib"
 elif sys_name == "dell2":  # Dell-A100-40GiB-PCIE
     os.environ["CC"] = "gcc"
     os.environ["CXX"] = "g++"
@@ -39,6 +47,27 @@ elif sys_name == "sugon": #  DCU sugon
     env = "/work/home/ac9yhmo1d1/software/miniconda3/envs/torch1.13_py3.10_dtk24.04/lib/"
     torch_DIR = env + "python3.10/site-packages/torch"
     CUDA_LIB = "/public/software/compiler/dtk-23.04/lib"
+elif "whshare-agent" in sys_name:
+    # module load compilers/cuda/11.7.0
+    # source set_env.sh
+    # conda activate Full_CI
+    os.environ["CC"] = "gcc"
+    os.environ["CXX"] = "g++"
+    os.environ["MAX_JOBS"] = '4'
+    os.environ["CUDA_HOME"] = "/home/HPCBase/compilers/cuda/11.6.0"
+    torch_DIR ="/home/share/l6eub2ic/home/xuhongtao/.conda/envs/NQS/lib/python3.10/site-packages/torch"
+    use_magma = False
+    CUDA_LIB = "/home/HPCBase/tools/anaconda3/lib"
+elif "g0" in sys_name:
+    # module load cuda/11.7
+    # conda activate pt
+    os.environ["CC"] = "gcc"
+    os.environ["CXX"] = "g++"
+    os.environ["MAX_JOBS"] = '8'
+    os.environ["CUDA_HOME"] = '/share/app/cuda/cuda-11.7/'
+    torch_DIR ="/share/home/xuhongtao/anaconda3/envs/pt/lib/python3.10/site-packages/torch"
+    use_magma = False
+    CUDA_LIB = "/share/home/xuhongtao/anaconda3/lib"
 else:
     raise NotImplementedError
 

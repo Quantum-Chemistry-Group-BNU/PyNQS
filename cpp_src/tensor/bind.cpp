@@ -1,3 +1,6 @@
+#include <pybind11/cast.h>
+#include <pybind11/numpy.h>
+
 #include "cpu_tensor.h"
 #include "cuda_tensor.h"
 #include "pybind11/cast.h"
@@ -261,6 +264,27 @@ std::vector<int64_t> BKDR_tensor(const Tensor &onv){
     value1.push_back(BKDR(ptr[i]) & 0x7FFFFFFF);
   }
   return value1;
+}
+
+void check_sorb(const int sorb, const int nele) {
+  int _len = (sorb - 1) / 64 + 1;
+  bool flag = _len == MAX_SORB_LEN;
+  if (not flag) {
+    std::cout << "sorb: " << sorb << " not in (" << (MAX_SORB_LEN - 1) * 64
+              << ", " << MAX_SORB_LEN * 64 << "], "
+              << "Compile cpp/cuda sources with MAX_SORB_LEN = " << _len
+              << std::endl;
+    throw std::length_error("Sorb error");
+  }
+  if (nele > MAX_NO) {
+    std::cout << "nele: " << nele << " > max-electron " << MAX_NO << std::endl;
+    throw std::overflow_error("electron overflow");
+  }
+  if ((sorb - nele) > MAX_NV) {
+    std::cout << "Virtual orbital: " << sorb - nele << " > max virtual-orbital"
+              << MAX_NV << std::endl;
+    throw std::overflow_error("unoccupied orbital error");
+  }
 }
 
 std::tuple<py::array_t<double>, py::array_t<double>> compress_h1e_h2e(
