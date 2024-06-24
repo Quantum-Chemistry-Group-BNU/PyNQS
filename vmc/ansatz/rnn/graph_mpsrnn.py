@@ -270,6 +270,7 @@ class Graph_MPS_RNN(nn.Module):
         rank_independent_sampling: bool = False,
         det_lut: DetLUT = None,
         use_unique: bool = True,
+        J_W_phase: bool = False,
     ) -> None:
         super(Graph_MPS_RNN, self).__init__()
         # 模型输入参数
@@ -284,6 +285,7 @@ class Graph_MPS_RNN(nn.Module):
         self.dcut_before: int = None
         self.froze_sites = False
         self.opt_sites_pos = None
+        self.J_W_phase = J_W_phase
 
         if hilbert_local != 4:
             raise NotImplementedError(f"Please use the 2-sites mode")
@@ -383,35 +385,45 @@ class Graph_MPS_RNN(nn.Module):
             # init.
             if self.params_file is not None:
                 self.iscale = 1e-7
+            # the order of M along site: [1,2,...,nqubits//2-1,[0]]
             M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
             v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
             eta_r = torch.rand(shape01, **self.factory_kwargs_real) * self.iscale
+            # eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
             w_r = torch.rand(shape01, **self.factory_kwargs_real) * self.iscale
             c_r = torch.rand(shape00, **self.factory_kwargs_real) * self.iscale
+
+             # init. from mps
+            # M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
+            # v_r = torch.zeros(shape1, **self.factory_kwargs_real) * self.iscale
+            # eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
+            # w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
+            # c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
+
             if self.params_file is not None:
                 params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
-                # breakpoint()
-                dcut_before = params["module.params_v.all_sites"].size(-2)
-                if self.dcut_before is None:
-                    self.dcut_before = dcut_before
-                # 'module.parm_M.all_sites'
-                M = torch.view_as_complex(M_r)
-                _M = torch.view_as_complex(params["module.params_M.all_sites"])
-                M[..., :dcut_before, :dcut_before] = _M
-                # 'module.parm_v.all_sites'
-                v = torch.view_as_complex(v_r)
-                _v = torch.view_as_complex(params["module.params_v.all_sites"])
-                v[..., :dcut_before] = _v
-                # 'module.parm_eta.all_sites'
-                eta = torch.view_as_complex(eta_r)
-                _eta = torch.view_as_complex(params["module.params_eta.all_sites"])
-                eta[..., :dcut_before] = _eta
-                # 'module.parm_w.all_sites'
-                w = torch.view_as_complex(w_r)
-                _w = torch.view_as_complex(params["module.params_w.all_sites"])
-                w[..., :dcut_before] = _w
-                # 'module.parm_c.all_sites' is not attribute to "dcut"
-                c_r = params["module.params_c.all_sites"]
+                for site in range(self.nqubits//2):
+                    M = torch.view_as_complex(M_r)
+                    _M = torch.view_as_complex(params["module.params_M.all_sites"][site].contiguous())
+                    M[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
+                if "module.params_v.all_sites" in params:
+                    # 'module.parm_v.all_sites'
+                    dcut_before = params["module.params_v.all_sites"].size(-2)
+                    if self.dcut_before is None:
+                        self.dcut_before = dcut_before
+                    v = torch.view_as_complex(v_r)
+                    _v = torch.view_as_complex(params["module.params_v.all_sites"])
+                    v[..., :dcut_before] = _v
+                    # 'module.parm_eta.all_sites'
+                    eta = torch.view_as_complex(eta_r)
+                    _eta = torch.view_as_complex(params["module.params_eta.all_sites"])
+                    eta[..., :dcut_before] = _eta
+                    # 'module.parm_w.all_sites'
+                    w = torch.view_as_complex(w_r)
+                    _w = torch.view_as_complex(params["module.params_w.all_sites"])
+                    w[..., :dcut_before] = _w
+                    # 'module.parm_c.all_sites' is not attribute to "dcut"
+                    c_r = params["module.params_c.all_sites"]
 
             self.params_M = FrozeSites(M_r, self.froze_sites, self.opt_sites_pos)
             self.params_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos)
@@ -532,11 +544,11 @@ class Graph_MPS_RNN(nn.Module):
         h[i_pos] = h_ud
         # cal. prob. and normalized
         eta = torch.abs(eta) ** 2  # (dcut)
+        # P = torch.einsum("aij,i,aij->aj",h_ud,eta,h_ud.conj()).real
         # P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
         P = (_h_ud * normal**2 * eta.reshape(1, -1, 1)).sum(1)
         # print(torch.exp(self.parm_eta[a, b]))
         P = torch.sqrt(P)
-
         return P, h, h_ud, w, c
 
     def forward(self, x: Tensor) -> Tensor:
@@ -653,6 +665,15 @@ class Graph_MPS_RNN(nn.Module):
         psi = psi * extra_phase
         if use_unique:
             psi = psi[original_idx]
+
+        if self.J_W_phase:
+            phase_b = torch.zeros(target.shape[0])
+            for i in range(2, target.shape[1], 2):
+                onv_bool = target[:, i]  # bool array, 0/1
+                phase_b += torch.sum(target[:, 1:i:2], dim=-1) % 2 * onv_bool
+            phase_b = -2 * (phase_b % 2) + 1
+            psi = psi * phase_b
+
         return psi
 
     def _interval_sample(
@@ -920,10 +941,10 @@ class Graph_MPS_RNN(nn.Module):
 if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
-    device = "cuda"
-    sorb = 24
-    nele = 12
-    # fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
+    device = "cpu"
+    sorb = 12
+    nele = 6
+    fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     # length = fock_space.shape[0]
     # fci_space = torch.load("./H12-FCI-space.pth", map_location="cpu").cuda()
     # fci_space = onv_to_tensor(get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb)
@@ -939,7 +960,7 @@ if __name__ == "__main__":
     #     # tensor=False,
     # )
     # graph_nn = nx.read_graphml("./graph/H_Plane/H12-34-1.graphml")
-    graph_nn = nx.read_graphml("./graph/H12-34-maxdes2.graphml")
+    graph_nn = nx.read_graphml("./graph/H6-maxdes.graphml")
     # breakpoint()
     model = Graph_MPS_RNN(
         use_symmetry=True,
@@ -948,11 +969,13 @@ if __name__ == "__main__":
         nqubits=sorb,
         nele=nele,
         device=device,
-        dcut=10,
+        dcut=50,
         graph=graph_nn,
+        params_file="params.pth"
     )
-    # psi = model(fci_space)
-    # breakpoint()
+    breakpoint()
+    psi = model(fock_space)
+    
     # params = model.state_dict()
     # M = params['params_M.all_sites']
     # # print(M.shape)
@@ -1062,31 +1085,31 @@ if __name__ == "__main__":
     #     M=10,
     #     hilbert_local=4,
     # )
-    print("==========Graph-MPS--RNN==========")
-    print(f"Psi^2 in AR-Sampling")
-    print("--------------------------------")
-    sample, counts, wf = model.ar_sampling(
-        n_sample=int(1e5),
-        min_tree_height=5,
-        use_dfs_sample=True,
-        min_batch=50000,
-    )
-    sample = (sample * 2 - 1).double()
-    # sample = fci_space[:100000]
-    import time
-    t0 = time.time_ns()
-    wf = model(sample)
-    torch.cuda.synchronize()
-    t1 = time.time_ns()
-    model.use_unique = False
-    wf1 = model(sample)
-    torch.cuda.synchronize()
-    t2 = time.time_ns()
-    assert torch.allclose(wf, wf1, rtol=1e-7, atol=1e-10)
-    logger.debug(wf)
-    logger.info(f"Delta: {(t1 - t0)/1.e06:.3f}ms, Delta1: {(t2 - t1)/1.e06:.3f} ms")
-    breakpoint()
-    exit()
+    # print("==========Graph-MPS--RNN==========")
+    # print(f"Psi^2 in AR-Sampling")
+    # print("--------------------------------")
+    # sample, counts, wf = model.ar_sampling(
+    #     n_sample=int(1e5),
+    #     min_tree_height=5,
+    #     use_dfs_sample=True,
+    #     min_batch=50000,
+    # )
+    # sample = (sample * 2 - 1).double()
+    # # sample = fci_space[:100000]
+    # import time
+    # t0 = time.time_ns()
+    # wf = model(sample)
+    # torch.cuda.synchronize()
+    # t1 = time.time_ns()
+    # model.use_unique = False
+    # wf1 = model(sample)
+    # torch.cuda.synchronize()
+    # t2 = time.time_ns()
+    # assert torch.allclose(wf, wf1, rtol=1e-7, atol=1e-10)
+    # logger.debug(wf)
+    # logger.info(f"Delta: {(t1 - t0)/1.e06:.3f}ms, Delta1: {(t2 - t1)/1.e06:.3f} ms")
+    # breakpoint()
+    # exit()
     # import time
     # t0 = time.time_ns()
     # wf1 = model(sample)

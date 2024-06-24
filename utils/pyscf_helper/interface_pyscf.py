@@ -169,6 +169,7 @@ def interface(
     hubbard_info: tuple = None,
     localized_orb: bool = False,
     localized_method: str = "lowdin",
+    fci_dump_file: str = None,
 ) -> tuple[int, int, list[float], ndarray, ndarray, any]:
     """
     PYSCF interface
@@ -228,6 +229,13 @@ def interface(
 
     # staticmethod
     # e, h1e, h2e = Iface.dump(info, fname=integral_file)
+    if fci_dump_file is not None:
+        from pyscf import tools
+        if model_type == "Hubbard":
+            # breakpoint()
+            tools.fcidump.from_integrals(fci_dump_file, info[1], info[2], nbas, [nele//2,nele//2], info[0])
+        else:
+            tools.fcidump.from_integrals(fci_dump_file, info[1], ao2mo.kernel(mol, mo_coeff), mol.nao, [nele//2,nele//2], info[0])
     Iface.dump(info, fname=integral_file)
     # info = Iface.get_integral_FCIDUMP(fname=integral_file)
 
