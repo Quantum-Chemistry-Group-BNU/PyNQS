@@ -402,7 +402,7 @@ class Graph_MPS_RNN(nn.Module):
 
             if self.params_file is not None:
                 params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
-                for site in range(self.nqubits//2):
+                for site in range(len(params["module.params_M.all_sites"])):
                     M = torch.view_as_complex(M_r)
                     _M = torch.view_as_complex(params["module.params_M.all_sites"][site].contiguous())
                     M[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
