@@ -7,6 +7,8 @@ from renormalizer.utils import log
 
 # the way to install renormalizer is simple just
 #  ''' pip install renormalizer '''
+# numpy ==> 1.26.4
+# renormalizer ==> 0.0.10
 
 def Rmps2mpsrnn(
     fci_dump_file: str = None,
