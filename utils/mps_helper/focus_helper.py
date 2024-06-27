@@ -1,0 +1,70 @@
+import torch
+import numpy as np
+import sys
+
+sys.path.append("./")
+
+from utils.mps_helper.focus_utils import ctns_loader, mps_simple
+
+def Fmps2mpsrnn(
+    input_file: str,
+    output_file: str,
+    dcut: int,
+):
+    # loading
+    ctns = ctns_loader.ctns_info()
+    ctns.load(input_file)
+    # params from focus
+    mps_params = ctns.toMPSdense()
+
+    params2rnn = []
+    # 0, 2, a, b => 0, a, b, 2
+    index = torch.tensor([0,2,3,1])
+    for param in mps_params:
+        param = torch.from_numpy(param)
+        # (dcut_l, 4, dcut_r) -> (4, dcut_r, dcut_l)
+        # index the hilbert space 
+        _M_real = param[:, index, :] 
+        # transpose the martix order
+        _M_real = torch.permute(_M_real, (1, 2, 0))
+        # split real-part & imag-part
+        _M_real = _M_real.unsqueeze(-1)
+        _M_imag = torch.zeros_like(_M_real)
+        _M = torch.cat([_M_real, _M_imag],dim=-1)
+        params2rnn.append(_M)
+    
+    # print shapes
+    for site, M in enumerate(params2rnn):
+        print("site", site, "==>", M.shape)
+
+    # put the b.c. M to the end of the list of parameters
+    params2rnn = params2rnn[1:] + params2rnn[:1]
+
+    param_w = torch.zeros((len(params2rnn), dcut), dtype=torch.complex128)
+    param_c = torch.zeros((len(params2rnn),), dtype=torch.complex128)
+    # change the last term
+    param_w[-1, ...] = torch.ones_like(param_w[-1, ...])
+    # change the form be like: real-part & imag-part
+    param_w = param_w.reshape(len(params2rnn), dcut, 1)
+    param_c = param_c.reshape(len(params2rnn), 1)
+    param_w = torch.cat([param_w.real, param_w.imag], dim=-1)
+    param_c = torch.cat([param_c.real, param_c.imag], dim=-1)
+
+    torch.save(
+        {
+            "model": {
+                "module.params_M.all_sites": params2rnn,
+                "module.params_w.all_sites": param_w,
+                "module.params_c.all_sites": param_c,
+            }
+        },
+        output_file,
+    )
+    print(f"Input file is {input_file}")
+    print(f"Save params. in {output_file}")
+
+if __name__ == "__main__":
+    Fmps2mpsrnn(input_file='./focus/rcanon_isweep49.bin',
+                output_file='./focus/H50_focus_dcu50_params.pth',
+                dcut=50
+    )

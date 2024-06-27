@@ -18,6 +18,7 @@ from vmc.ansatz.utils import joint_next_samples
 from libs.C_extension import onv_to_tensor, permute_sgn
 
 from utils.det_helper import DetLUT
+from utils.graph import checkgraph, num_count
 from utils.public_function import (
     get_fock_space,
     get_special_space,
@@ -33,20 +34,6 @@ from utils.distributed import get_rank, get_world_size, synchronize
 import torch.autograd.profiler as profiler
 
 hTensor = NewType("hTensor", list[Tensor])
-
-
-def num_count(graph) -> list[int]:
-    """
-    to calculate the pos. of site i in param M
-    """
-    num = [0] * len(list(graph.nodes))
-    all_in_num = 0
-    for i in list(graph.nodes):
-        all_in = list(graph.predecessors(str(i)))
-        all_in_num += len(all_in)
-        num[int(i)] = all_in_num
-    return num
-
 
 class HiddenStates:
     def __init__(
@@ -262,11 +249,10 @@ class Graph_MPS_RNN(nn.Module):
         hilbert_local: int = 4,
         params_file: str = None,
         graph: Graph | DiGraph = None,
-        # dcut_before: int = 2,
+        graph_before: Graph | DiGraph = None,
         # 功能参数
         use_symmetry: bool = False,
         alpha_nele: int = None,
-        beta_nele: int = None,
         rank_independent_sampling: bool = False,
         det_lut: DetLUT = None,
         use_unique: bool = True,
@@ -292,6 +278,8 @@ class Graph_MPS_RNN(nn.Module):
 
         # Graph
         self.h_boundary = torch.ones((self.hilbert_local, self.dcut), device=self.device, dtype=self.param_dtype)
+        if graph_before is not None:
+            checkgraph(graph_before, graph)
         self.graph = graph  # graph, is also the order of sampling
         sample_order = torch.tensor(list(map(int, self.graph.adj)), device=self.device)  # (nqubits//2)
         # self.sample_order = sample_order.repeat_interleave(2)
@@ -408,24 +396,29 @@ class Graph_MPS_RNN(nn.Module):
                     # 'module.parm_M.all_sites'
                     for site in range(len(params["module.params_M.all_sites"])):
                         M = torch.view_as_complex(M_r)
-                        _M = torch.view_as_complex(params["module.params_M.all_sites"][site].contiguous())
+                        x = params["module.params_M.all_sites"][site]
+                        try:
+                            _M = torch.view_as_complex(x.contiguous())
+                            logger.info((x.stride(), x.shape))
+                        except:breakpoint()
                         M[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
                 if "module.params_v.all_sites" in params:
                     # 'module.parm_v.all_sites'
                     v = torch.view_as_complex(v_r)
                     _v = torch.view_as_complex(params["module.params_v.all_sites"])
-                    v[..., :_v.shape[-2]] = _v
+                    breakpoint()
+                    v[..., :_v.shape[-1]] = _v
                 if "module.params_eta.all_sites" in params:
                     # 'module.parm_eta.all_sites'
                     eta = torch.view_as_complex(eta_r)
                     _eta = torch.view_as_complex(params["module.params_eta.all_sites"])
-                    eta[..., :_eta.shape[-2]] = _eta                    
+                    eta[..., :_eta.shape[-1]] = _eta                    
                 # Phase part
                 if "module.params_w.all_sites" in params:
                     # 'module.parm_w.all_sites'
                     w = torch.view_as_complex(w_r)
                     _w = torch.view_as_complex(params["module.params_w.all_sites"])
-                    w[..., :_w.shape[-2]] = _w
+                    w[..., :_w.shape[-1]] = _w
                 if "module.params_c.all_sites" in params:
                     # 'module.parm_c.all_sites' is not attribute to "dcut"
                     c_r = params["module.params_c.all_sites"]

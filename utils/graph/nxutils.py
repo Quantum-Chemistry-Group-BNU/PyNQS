@@ -121,3 +121,36 @@ def fromKijToGraph(kij):
     graph = nx.Graph()
     graph.add_edges_from(edges)
     return graph
+
+def num_count(graph) -> list[int]:
+    """
+    to calculate the pos. of site i in param M
+    """
+    num = [0] * len(list(graph.nodes))
+    all_in_num = 0
+    for i in list(graph.nodes):
+        all_in = list(graph.predecessors(str(i)))
+        all_in_num += len(all_in)
+        num[int(i)] = all_in_num
+    return num
+
+def checkgraph(graph1,graph2):
+    '''
+    check graph1 ⊂ graph2
+    '''
+    graph1_node = list(graph1.nodes)
+    graph2_node = list(graph2.nodes)
+    assert graph1_node == graph2_node
+    add_edge = []
+    for site in graph1_node:
+        graph1_pre_site = list(graph1.predecessors(site))
+        graph2_pre_site = list(graph2.predecessors(site))
+        assert set(graph1_pre_site).issubset(set(graph2_pre_site))
+        print("graph1 is subset of graph2?",set(graph1_pre_site).issubset(set(graph2_pre_site)))
+        print(site, "=big=>", graph2_pre_site[:len(graph1_pre_site)])
+        print(site, "=small=>", graph1_pre_site)
+        breakpoint()
+        # assert graph2_pre_site[:len(graph1_pre_site)] == graph1_pre_site
+        # add_edge.append(len(graph2_pre_site) - len(graph1_pre_site))
+    breakpoint()
+    return 0
