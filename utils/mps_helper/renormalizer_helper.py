@@ -95,17 +95,35 @@ def Rmps2mpsrnn(
     params2rnn = params2rnn[1:] + params2rnn[:1]
     
      # save as checkpoint file
-    torch.save({"model":{"module.params_M.all_sites":params2rnn}},output_file)
-    print("Warning! The mps wavefunction is equal to mpsrnn(reduce to mps) up to a Jordan--Wigner phase")
+    B = bond_dim_init
+    param_w = torch.zeros((len(params2rnn),B),dtype=torch.complex128)
+    param_c = torch.zeros((len(params2rnn),),dtype=torch.complex128)
+    # change the last term
+    param_w[-1,...] = torch.ones_like(param_w[-1,...])
+    # param_c[-1,...] = torch.zeros_like(param_c[-1,...])
+    # change the form be like: real-part & imag-part
+    param_w = param_w.reshape(len(params2rnn),B,1)
+    param_c = param_c.reshape(len(params2rnn),1)
+    param_w = torch.cat([param_w.real,param_w.imag],dim=-1)
+    param_c = torch.cat([param_c.real,param_c.imag],dim=-1)
+    torch.save({"model":{"module.params_M.all_sites":params2rnn,
+                     "module.params_w.all_sites":param_w,
+                     "module.params_c.all_sites":param_c
+                     }},
+                     output_file)
+    torch.save(torch.tensor(p_mps.todense()),"mps.pth")
+    # print("Warning! The mps wavefunction is equal to mpsrnn(reduce to mps) up to a Jordan--Wigner phase")
     print(f"Input Fci-dump=file is {fci_dump_file}")
     print(f"Save params. in {output_file}")
 
 
 if __name__ == "__main__":
+    M = 30
     Rmps2mpsrnn(
         fci_dump_file="H6-fcidump.txt",
         sorb = 6,
         nelec = [3,3],
-        bond_dim_init = 50,
+        bond_dim_init = M,
+        bond_dim_procedure = [[M,0.4],[M,0.4],[M,0.2],[M,0.2],[M,0.1],[M,0],[M,0],[M,0]],
         output_file = "params.pth",
     )

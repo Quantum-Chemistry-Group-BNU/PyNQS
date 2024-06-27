@@ -136,9 +136,9 @@ class FrozeSites(nn.Module):
     ) -> None:
         super(FrozeSites, self).__init__()
         """
-        opt_index(list[int]|int): ones-sites or [star, end)
-        dim(int): Froze dim
-        view_complex(bool): view Real to Complex, dose not change memory
+        opt_index(list[int]|int): ones-sites or [start, end)
+        dim(int): Froze dim.
+        view_complex(bool): view Real to Complex, does not change memory
         """
         self.froze = froze
         self.opt_index = opt_index
@@ -253,7 +253,7 @@ class Graph_MPS_RNN(nn.Module):
 
     def __init__(
         self,
-        iscale=1,
+        iscale=1e-2,
         device="cpu",
         param_dtype: torch.dtype = torch.double,
         nqubits: int = None,
@@ -270,7 +270,7 @@ class Graph_MPS_RNN(nn.Module):
         rank_independent_sampling: bool = False,
         det_lut: DetLUT = None,
         use_unique: bool = True,
-        J_W_phase: bool = False,
+        J_W_phase: bool = False, 
     ) -> None:
         super(Graph_MPS_RNN, self).__init__()
         # 模型输入参数
@@ -285,7 +285,7 @@ class Graph_MPS_RNN(nn.Module):
         self.dcut_before: int = None
         self.froze_sites = False
         self.opt_sites_pos = None
-        self.J_W_phase = J_W_phase
+        self.J_W_phase = J_W_phase  # testing, aa..bb.. -> abab...
 
         if hilbert_local != 4:
             raise NotImplementedError(f"Please use the 2-sites mode")
@@ -376,65 +376,103 @@ class Graph_MPS_RNN(nn.Module):
         return s
 
     def param_init_two_site(self):
+        if self.params_file is not None:
+                self.iscale = 1e-14
         if self.param_dtype == torch.complex128:
+            self.complex = True
             all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
             shape00 = (self.nqubits // 2, 2)
             shape01 = (self.nqubits // 2, self.dcut, 2)
             shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut, 2)
             shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut, 2)
             # init.
-            if self.params_file is not None:
-                self.iscale = 1e-7
+
             # the order of M along site: [1,2,...,nqubits//2-1,[0]]
-            M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
-            v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
-            eta_r = torch.rand(shape01, **self.factory_kwargs_real) * self.iscale
+            # M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
+            # v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
+            # # eta_r = torch.rand(shape01, **self.factory_kwargs_real) * self.iscale
             # eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
-            w_r = torch.rand(shape01, **self.factory_kwargs_real) * self.iscale
-            c_r = torch.rand(shape00, **self.factory_kwargs_real) * self.iscale
+            # w_r = torch.rand(shape01, **self.factory_kwargs_real) * self.iscale
+            # c_r = torch.rand(shape00, **self.factory_kwargs_real) * self.iscale
 
              # init. from mps
-            # M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
-            # v_r = torch.zeros(shape1, **self.factory_kwargs_real) * self.iscale
-            # eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
-            # w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
-            # c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
+            M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
+            v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
+            eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
+            w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
+            c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
 
             if self.params_file is not None:
                 params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
-                for site in range(len(params["module.params_M.all_sites"])):
-                    M = torch.view_as_complex(M_r)
-                    _M = torch.view_as_complex(params["module.params_M.all_sites"][site].contiguous())
-                    M[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
+                if "module.params_M.all_sites" in params:    
+                    # 'module.parm_M.all_sites'
+                    for site in range(len(params["module.params_M.all_sites"])):
+                        M = torch.view_as_complex(M_r)
+                        _M = torch.view_as_complex(params["module.params_M.all_sites"][site].contiguous())
+                        M[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
                 if "module.params_v.all_sites" in params:
                     # 'module.parm_v.all_sites'
-                    dcut_before = params["module.params_v.all_sites"].size(-2)
-                    if self.dcut_before is None:
-                        self.dcut_before = dcut_before
                     v = torch.view_as_complex(v_r)
                     _v = torch.view_as_complex(params["module.params_v.all_sites"])
-                    v[..., :dcut_before] = _v
+                    v[..., :_v.shape[-2]] = _v
+                if "module.params_eta.all_sites" in params:
                     # 'module.parm_eta.all_sites'
                     eta = torch.view_as_complex(eta_r)
                     _eta = torch.view_as_complex(params["module.params_eta.all_sites"])
-                    eta[..., :dcut_before] = _eta
+                    eta[..., :_eta.shape[-2]] = _eta                    
+                # Phase part
+                if "module.params_w.all_sites" in params:
                     # 'module.parm_w.all_sites'
                     w = torch.view_as_complex(w_r)
                     _w = torch.view_as_complex(params["module.params_w.all_sites"])
-                    w[..., :dcut_before] = _w
+                    w[..., :_w.shape[-2]] = _w
+                if "module.params_c.all_sites" in params:
+                    # 'module.parm_c.all_sites' is not attribute to "dcut"
+                    c_r = params["module.params_c.all_sites"]
+        else:
+            self.complex = False
+            all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
+
+            shape00 = (self.nqubits // 2)
+            shape01 = (self.nqubits // 2, self.dcut)
+            shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut)
+            shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut)
+            # init. 
+            M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
+            v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
+            eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
+            w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
+            c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
+
+            if self.params_file is not None:
+                params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
+                if "module.params_M.all_sites" in params:    
+                    # 'module.parm_M.all_sites'
+                    for site in range(len(params["module.params_M.all_sites"])):
+                        _M = torch.tensor(params["module.params_M.all_sites"][site].contiguous())
+                        M_r[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
+                if "module.params_v.all_sites" in params:
+                    # 'module.parm_v.all_sites'
+                    _v = torch.tensor(params["module.params_v.all_sites"])
+                    v_r[..., :_v.shape[-1]] = _v
+                if "module.params_eta.all_sites" in params:
+                    # 'module.parm_eta.all_sites'
+                    _eta = torch.tensor(params["module.params_eta.all_sites"])
+                    eta_r[..., :_eta.shape[-1]] = _eta                    
+                # Phase part
+                if "module.params_w.all_sites" in params:
+                    # 'module.parm_w.all_sites'
+                    _w = torch.tensor(params["module.params_w.all_sites"])
+                    w_r[..., :_w.shape[-1]] = _w
+                if "module.params_c.all_sites" in params:
                     # 'module.parm_c.all_sites' is not attribute to "dcut"
                     c_r = params["module.params_c.all_sites"]
 
-            self.params_M = FrozeSites(M_r, self.froze_sites, self.opt_sites_pos)
-            self.params_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos)
-            self.params_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos)
-            self.params_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos)
-            self.params_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos)
-        else:
-            raise NotImplementedError(f"dtype: {self.param_dtype}, using complex128")
-            # shape0 = (self.nqubits, self.dcut)
-            # shape1 = (self.nqubits, self.dcut, self.hilbert_local)
-            # shape2 = (self.nqubits, self.dcut, self.dcut, self.hilbert_local)
+        self.params_M = FrozeSites(M_r, self.froze_sites, self.opt_sites_pos, self.complex)
+        self.params_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos, self.complex)
+        self.params_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos, self.complex)
+        self.params_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos, self.complex)
+        self.params_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos, self.complex)
 
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
         """
@@ -491,7 +529,6 @@ class Graph_MPS_RNN(nn.Module):
         target: Tensor,
         n_batch: int,
         i_chain: int,  # 计算到第i个site（计算的序号而非采样的序号，此处i_site就是0到nqubits//2依次排列）
-        sampling: bool = True,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         # 先查出采样的第i个元素是第i_pos个空间轨道
         # i_pos = list(self.graph.nodes)[i_site]
@@ -532,7 +569,6 @@ class Graph_MPS_RNN(nn.Module):
             # logger.debug((M_cat.shape, M.shape, h_cat.shape))
             # logger.debug(f"M_cat: {M_cat.shape}, h_cat: {h_cat.shape}")
             h_ud = torch.matmul(M_cat, h_cat)
-            # breakpoint()
             # assert torch.allclose(h_ud, h_ud1)
             h_ud = h_ud + v.unsqueeze(-1)
             del M_cat, h_cat
@@ -613,7 +649,7 @@ class Graph_MPS_RNN(nn.Module):
                     h = h.index_select(inverse_i)
                 # if i > 0:
                 #     logger.debug(f"i: {i} h: {h.shape}, _target: {_target.shape}, _nbatch: {_nbatch}")
-                P, h, h_ud, w, c = self.calculate_two_site(h, _target, _nbatch, i, sampling=False)
+                P, h, h_ud, w, c = self.calculate_two_site(h, _target, _nbatch, i)
                 if i <= unique_nqubits//2 :
                     P = P[..., inverse_i]
                     h_ud = h_ud[..., inverse_i]
@@ -622,7 +658,7 @@ class Graph_MPS_RNN(nn.Module):
             else:
                 # h: (sorb//2, dcut, nbatch), target: (nbatch, sorb)
                 # P: (4, nbatch), h: (sorb//2, 4, dcut, nbatch), h_ud: (4, dcut, nbatch) w: (dcut,), c: scaler
-                P, h, h_ud, w, c = self.calculate_two_site(h, target, n_batch, i, sampling=False)
+                P, h, h_ud, w, c = self.calculate_two_site(h, target, n_batch, i)
                 # logger.debug(f"P: {P.shape}, h: {h.shape}, h_ud: {h_ud.shape}, w: {w.shape}, c: {c}")
 
             # logger.info(f"h: {h.shape}, h_ud: {h_ud.shape}")
@@ -701,7 +737,7 @@ class Graph_MPS_RNN(nn.Module):
             if self.hilbert_local == 4:
                 # h: (2, 4, 4, dcut, n-unique), h_ud: (4, dcut, n-unique)
                 with profiler.record_function("Update amp"):
-                    psi_amp_k, h, h_ud, w, c = self.calculate_two_site(h, x0, n_batch, i, sampling=True)
+                    psi_amp_k, h, h_ud, w, c = self.calculate_two_site(h, x0, n_batch, i)
             else:
                 raise NotImplementedError(f"Please use the 2-sites mode")
 
