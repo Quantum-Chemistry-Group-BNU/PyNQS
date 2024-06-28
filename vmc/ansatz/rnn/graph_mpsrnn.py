@@ -279,8 +279,13 @@ class Graph_MPS_RNN(nn.Module):
         # Graph
         self.h_boundary = torch.ones((self.hilbert_local, self.dcut), device=self.device, dtype=self.param_dtype)
         if graph_before is not None:
-            checkgraph(graph_before, graph)
+            self.edge_order = checkgraph(graph_before, graph)
+        else:
+            self.edge_order = []
+            for site in list(graph.nodes):
+                self.edge_order.append(range(len(list(graph.predecessors(site)))))
         self.graph = graph  # graph, is also the order of sampling
+        self.graph_before = graph_before
         sample_order = torch.tensor(list(map(int, self.graph.adj)), device=self.device)  # (nqubits//2)
         # self.sample_order = sample_order.repeat_interleave(2)
         self.sample_order = torch.empty(2 * sample_order.size(0), device=self.device).long()  # -> (nqubits)
@@ -351,7 +356,7 @@ class Graph_MPS_RNN(nn.Module):
         s += f"The bond dim in MPS--RNN is {self.dcut}, the local dim of Hilbert space is {self.hilbert_local}.\n"
 
         s += "Graph:\n"
-        for node, neighbors in self.graph.adj.items():
+        for node, neighbors in self.graph.pred.items():
             s += f"{str(node)}: {list(neighbors)}\n"
         s += f"The cal.(and the sampling) order is (Spatial orbital).\n"
         s += f"-> {list(map(int, self.graph.adj))} ->.\n"
@@ -363,110 +368,124 @@ class Graph_MPS_RNN(nn.Module):
         s += "The below (in number meaning(1 complex number is 1 number)) \n"
         return s
 
-    def param_init_two_site(self):
-        if self.params_file is not None:
-                self.iscale = 1e-14
-        if self.param_dtype == torch.complex128:
-            self.complex = True
-            all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
-            shape00 = (self.nqubits // 2, 2)
-            shape01 = (self.nqubits // 2, self.dcut, 2)
-            shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut, 2)
-            shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut, 2)
-            # init.
-
-            # the order of M along site: [1,2,...,nqubits//2-1,[0]]
-            # M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
-            # v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
-            # # eta_r = torch.rand(shape01, **self.factory_kwargs_real) * self.iscale
-            # eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
-            # w_r = torch.rand(shape01, **self.factory_kwargs_real) * self.iscale
-            # c_r = torch.rand(shape00, **self.factory_kwargs_real) * self.iscale
-
-             # init. from mps
-            M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
-            v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
-            eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
-            w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
-            c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
-
-            if self.params_file is not None:
-                params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
-                if "module.params_M.all_sites" in params:    
-                    # 'module.parm_M.all_sites'
-                    for site in range(len(params["module.params_M.all_sites"])):
-                        M = torch.view_as_complex(M_r)
-                        x = params["module.params_M.all_sites"][site]
-                        try:
-                            _M = torch.view_as_complex(x.contiguous())
-                            logger.info((x.stride(), x.shape))
-                        except:breakpoint()
-                        M[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
-                if "module.params_v.all_sites" in params:
-                    # 'module.parm_v.all_sites'
-                    v = torch.view_as_complex(v_r)
-                    _v = torch.view_as_complex(params["module.params_v.all_sites"])
-                    breakpoint()
-                    v[..., :_v.shape[-1]] = _v
-                if "module.params_eta.all_sites" in params:
-                    # 'module.parm_eta.all_sites'
-                    eta = torch.view_as_complex(eta_r)
-                    _eta = torch.view_as_complex(params["module.params_eta.all_sites"])
-                    eta[..., :_eta.shape[-1]] = _eta                    
-                # Phase part
-                if "module.params_w.all_sites" in params:
-                    # 'module.parm_w.all_sites'
-                    w = torch.view_as_complex(w_r)
-                    _w = torch.view_as_complex(params["module.params_w.all_sites"])
-                    w[..., :_w.shape[-1]] = _w
-                if "module.params_c.all_sites" in params:
-                    # 'module.parm_c.all_sites' is not attribute to "dcut"
-                    c_r = params["module.params_c.all_sites"]
-        else:
-            self.complex = False
-            all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
-
-            shape00 = (self.nqubits // 2)
-            shape01 = (self.nqubits // 2, self.dcut)
-            shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut)
-            shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut)
-            # init. 
-            M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
-            v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
-            eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
-            w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
-            c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
-
-            if self.params_file is not None:
-                params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
-                if "module.params_M.all_sites" in params:    
-                    # 'module.parm_M.all_sites'
-                    for site in range(len(params["module.params_M.all_sites"])):
-                        _M = torch.tensor(params["module.params_M.all_sites"][site].contiguous())
-                        M_r[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
-                if "module.params_v.all_sites" in params:
-                    # 'module.parm_v.all_sites'
-                    _v = torch.tensor(params["module.params_v.all_sites"])
-                    v_r[..., :_v.shape[-1]] = _v
-                if "module.params_eta.all_sites" in params:
-                    # 'module.parm_eta.all_sites'
-                    _eta = torch.tensor(params["module.params_eta.all_sites"])
-                    eta_r[..., :_eta.shape[-1]] = _eta                    
-                # Phase part
-                if "module.params_w.all_sites" in params:
-                    # 'module.parm_w.all_sites'
-                    _w = torch.tensor(params["module.params_w.all_sites"])
-                    w_r[..., :_w.shape[-1]] = _w
-                if "module.params_c.all_sites" in params:
-                    # 'module.parm_c.all_sites' is not attribute to "dcut"
-                    c_r = params["module.params_c.all_sites"]
-
+    def init_params(self,M_r,v_r,eta_r,w_r,c_r):
         self.params_M = FrozeSites(M_r, self.froze_sites, self.opt_sites_pos, self.complex)
         self.params_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos, self.complex)
         self.params_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos, self.complex)
         self.params_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos, self.complex)
         self.params_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos, self.complex)
 
+    def param_init_two_site_complex(self):
+        self.complex = True
+        all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
+        shape00 = (self.nqubits // 2, 2)
+        shape01 = (self.nqubits // 2, self.dcut, 2)
+        shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut, 2)
+        shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut, 2)
+        # init. from mps
+        M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
+        v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
+        eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
+        w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
+        c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
+
+        if self.params_file is not None:
+            params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
+            if "module.params_M.all_sites" in params:
+                # 'module.parm_M.all_sites'
+                M = torch.view_as_complex(M_r)
+                nodes = list(self.graph.nodes)
+                # 对graph的每一个node作循环
+                for i_chain, site in enumerate(nodes): # 加边√可用
+                    predecessors = list(self.graph.predecessors(site))
+                    if self.graph_before is not None:
+                        predecessors_before = list(self.graph_before.predecessors(site)) # graph_before的边
+                        M_pos_before = num_count(self.graph_before) #  graph_before每一个node对应的M的索引终止位置
+                    else:
+                        # 用来和不加边的情况兼容
+                        predecessors_before = list(self.graph.predecessors(site))
+                        M_pos_before = self.M_pos
+                    # 对每一个node的graph_before的predecessors作循环（只需要指定填入之前的参数即可，其余默认用小数填充）
+                    for i_pre, edge in enumerate(predecessors_before):
+                        # 计算总顺序（在M中的位置） 注意：由于兼容采样缘故，M_pos是按照[0,1,...]排列，需要索引
+                        site_i = (self.M_pos[int(site)] - len(predecessors)) + self.edge_order[i_chain][i_pre]  # M_pos索引出是结束的顺序
+                        site_i_before = (M_pos_before[int(site)] - len(predecessors_before)) + i_pre # before参数下对应的位置
+                        _M = torch.view_as_complex(params["module.params_M.all_sites"][site_i_before])
+                        M[site_i, ..., :_M.shape[-2], :_M.shape[-1]] = _M # 对应填入现在参数对应的位置
+                        # logger.info((params["module.params_M.all_sites"][site_i].stride(), params["module.params_M.all_sites"][site_i].shape))
+                # 对应M[-1]，对应边界条件
+                _M = torch.view_as_complex(params["module.params_M.all_sites"][-1])
+                M[-1, ..., :_M.shape[-2], :_M.shape[-1]] = _M
+            if "module.params_v.all_sites" in params:
+                # 'module.parm_v.all_sites'
+                v = torch.view_as_complex(v_r)
+                _v = torch.view_as_complex(params["module.params_v.all_sites"])
+                v[..., :_v.shape[-1]] = _v
+            if "module.params_eta.all_sites" in params:
+                # 'module.parm_eta.all_sites'
+                eta = torch.view_as_complex(eta_r)
+                _eta = torch.view_as_complex(params["module.params_eta.all_sites"])
+                eta[..., :_eta.shape[-1]] = _eta                    
+            # Phase part
+            if "module.params_w.all_sites" in params:
+                # 'module.parm_w.all_sites'
+                w = torch.view_as_complex(w_r)
+                _w = torch.view_as_complex(params["module.params_w.all_sites"])
+                w[..., :_w.shape[-1]] = _w
+            if "module.params_c.all_sites" in params:
+                # 'module.parm_c.all_sites' is not attribute to "dcut"
+                c_r = params["module.params_c.all_sites"]
+        self.init_params(M_r,v_r,eta_r,w_r,c_r)
+    def param_init_two_site_double(self):
+        # 暂不支持实数情况加边
+        assert self.graph_before is None
+        self.complex = False
+        all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
+
+        shape00 = (self.nqubits // 2)
+        shape01 = (self.nqubits // 2, self.dcut)
+        shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut)
+        shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut)
+        # init. 
+        M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
+        v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
+        eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
+        w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
+        c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
+
+        if self.params_file is not None:
+            params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
+            if "module.params_M.all_sites" in params:    
+                # 'module.parm_M.all_sites'
+                for site in range(len(params["module.params_M.all_sites"])):
+                    _M = torch.tensor(params["module.params_M.all_sites"][site])
+                    M_r[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
+            if "module.params_v.all_sites" in params:
+                # 'module.parm_v.all_sites'
+                _v = torch.tensor(params["module.params_v.all_sites"])
+                v_r[..., :_v.shape[-1]] = _v
+            if "module.params_eta.all_sites" in params:
+                # 'module.parm_eta.all_sites'
+                _eta = torch.tensor(params["module.params_eta.all_sites"])
+                eta_r[..., :_eta.shape[-1]] = _eta                    
+            # Phase part
+            if "module.params_w.all_sites" in params:
+                # 'module.parm_w.all_sites'
+                _w = torch.tensor(params["module.params_w.all_sites"])
+                w_r[..., :_w.shape[-1]] = _w
+            if "module.params_c.all_sites" in params:
+                # 'module.parm_c.all_sites' is not attribute to "dcut"
+                c_r = params["module.params_c.all_sites"]
+        self.init_params(M_r,v_r,eta_r,w_r,c_r)
+    def param_init_two_site(self):
+        if self.params_file is not None:
+                self.iscale = 1e-14
+        if self.param_dtype == torch.complex128:
+            self.param_init_two_site_complex()
+        else:
+            assert self.param_dtype == torch.double
+            self.param_init_two_site_double()
+        
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
         """
         Constraints Fock space -> FCI space

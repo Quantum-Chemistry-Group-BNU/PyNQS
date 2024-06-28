@@ -7,49 +7,6 @@ import numpy as np
 from torch import Tensor
 
 
-def change_phy_index(
-    input_file: str | Tensor,
-    dim: int,
-    index_input: list[str],
-    output_file: str | Tensor = None,
-    device: str = "cpu",
-):
-    """
-    INPUT:
-    input_file(str or tensor):
-    output_file(str or tensor):
-    index_input: list: [c,d,e,f], c,d,e,f ∈ {'00','11','10','01'}
-
-    RETURN:
-    (file or tensor) order like ['00','10','01','11']
-    """
-    # breakpoint()
-    assert set(index_input) == {"00", "10", "01", "11"}
-    if isinstance(input_file, str):
-        input_file = torch.load(input_file, map_location=device)
-        print("input file =>", input_file)
-    output_tensor = input_file
-    for site, index in enumerate(index_input):
-        if index == "00":  # 00 -> 0
-            print("index=00")
-            output_tensor.select(dim, 0).copy(input_file.select(dim, site))
-        if index == "10":  # 10 -> 1
-            print("index=10")
-            output_tensor.select(dim, 1).copy(input_file.select(dim, site))
-        if index == "01":  # 01 -> 2
-            print("index=01")
-            output_tensor.select(dim, 2).copy(input_file.select(dim, site))
-        if index == "11":  # 11 -> 3
-            print("index=11")
-            output_tensor.select(dim, 3).copy(input_file.select(dim, site))
-        if output_file == None:
-            print("order", index_input, "=> ['00','10','01','11']")
-            return output_tensor
-        else:
-            torch.save(output_tensor, output_file)
-            print("output file =>", output_file)
-
-
 def Rmps2mpsrnn(
     fci_dump_file: str,
     nbas: int,
@@ -130,7 +87,7 @@ def Rmps2mpsrnn(
         index = torch.tensor([0, 2, 1, 3])
         M = torch.index_select(_M, 1, index)
         params2rnn_2site.append(M)
-        breakpoint()
+
     # split imag and real
     params2rnn = []
     for M in params2rnn_2site:
@@ -146,17 +103,7 @@ def Rmps2mpsrnn(
     params2rnn = params2rnn[1:] + params2rnn[:1]
 
     # save as checkpoint file
-    B = bond_dim_init
-    param_w = torch.zeros((len(params2rnn), B), dtype=torch.complex128)
-    param_c = torch.zeros((len(params2rnn),), dtype=torch.complex128)
-    # change the last term
-    param_w[-1, ...] = torch.ones_like(param_w[-1, ...])
-    # param_c[-1,...] = torch.zeros_like(param_c[-1,...])
-    # change the form be like: real-part & imag-part
-    param_w = param_w.reshape(len(params2rnn), B, 1)
-    param_c = param_c.reshape(len(params2rnn), 1)
-    param_w = torch.cat([param_w.real, param_w.imag], dim=-1)
-    param_c = torch.cat([param_c.real, param_c.imag], dim=-1)
+    param_w, param_c = add_phase_params(spatial_norbs, bond_dim_init)
 
     # see: vmc/optim/_base.py checkpoint, DDP module
     torch.save(
@@ -172,10 +119,31 @@ def Rmps2mpsrnn(
 
     # save mps wavefunction (in tensor product order(ci spacer(fock spacr)))
     # torch.save(torch.tensor(p_mps.todense()),"mps.pth")
-    # print("Warning! The mps wavefunction is equal to mpsrnn(reduce to mps) up to a Jordan--Wigner phase")
     print(f"Input Fci-dump=file is {fci_dump_file}")
     print(f"Save params. in {output_file}")
 
+
+def add_phase_params(
+    nbas: int,
+    B: int,
+):
+    """
+    to add phase term parameters from mps to mpsrnn
+    INPUT:
+    nbas(int): the number of spatial orbital
+    B(int): dcut
+    """
+    param_w = torch.zeros((nbas, B), dtype=torch.complex128)
+    param_c = torch.zeros((nbas,), dtype=torch.complex128)
+    # change the last term
+    param_w[-1, ...] = torch.ones_like(param_w[-1, ...])
+    # param_c[-1,...] = torch.zeros_like(param_c[-1,...])
+    # change the form be like: real-part & imag-part
+    param_w = param_w.reshape(nbas, B, 1)
+    param_c = param_c.reshape(nbas, 1)
+    param_w = torch.cat([param_w.real, param_w.imag], dim=-1)
+    param_c = torch.cat([param_c.real, param_c.imag], dim=-1)
+    return param_w, param_c
 
 if __name__ == "__main__":
     M = 30
