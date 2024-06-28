@@ -146,7 +146,7 @@ def num_count(graph:DiGraph) -> list[int]:
     return num
 
 
-def checkgraph(graph1: DiGraph, graph2: DiGraph): -> list[int]:
+def checkgraph(graph1: DiGraph, graph2: DiGraph) -> list[int]:
     """
     check graph1 ⊂ graph2
     RETURN(List[List[Int]]):
@@ -167,5 +167,4 @@ def checkgraph(graph1: DiGraph, graph2: DiGraph): -> list[int]:
         egde_index = [graph2_pre_site.index(element) for element in graph1_pre_site]
         # print(egde_index)
         add_edge.append(egde_index) # 这个顺序是按照graph对应一维顺序排列的
-    # breakpoint()
     return add_edge
