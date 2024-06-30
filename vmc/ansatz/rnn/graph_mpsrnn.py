@@ -281,9 +281,10 @@ class Graph_MPS_RNN(nn.Module):
         if graph_before is not None:
             self.edge_order = checkgraph(graph_before, graph)
         else:
-            self.edge_order = []
+            self.edge_order: list[list[int]] = []
             for site in list(graph.nodes):
-                self.edge_order.append(range(len(list(graph.predecessors(site)))))
+                _dim = len(list(graph.predecessors(site)))
+                self.edge_order.append([i for i in range(_dim)])
         self.graph = graph  # graph, is also the order of sampling
         self.graph_before = graph_before
         sample_order = torch.tensor(list(map(int, self.graph.adj)), device=self.device)  # (nqubits//2)
@@ -311,7 +312,7 @@ class Graph_MPS_RNN(nn.Module):
         self.factory_kwargs = {"device": self.device, "dtype": self.param_dtype}
         self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
         self.factory_kwargs_complex = {"device": self.device, "dtype": torch.complex128}
-        #  |->初始化
+        # |->初始化
         self.param_init_two_site()
 
         # 对称性
@@ -368,16 +369,24 @@ class Graph_MPS_RNN(nn.Module):
         s += "The below (in number meaning(1 complex number is 1 number)) \n"
         return s
 
-    def init_params(self,M_r,v_r,eta_r,w_r,c_r):
-        self.params_M = FrozeSites(M_r, self.froze_sites, self.opt_sites_pos, self.complex)
-        self.params_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos, self.complex)
-        self.params_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos, self.complex)
-        self.params_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos, self.complex)
-        self.params_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos, self.complex)
+    def init_params(self,
+        M_r: Tensor,
+        v_r: Tensor,
+        eta_r: Tensor,
+        w_r: Tensor,
+        c_r: Tensor,
+        use_complex: bool,
+    ) -> None:
+        self.params_M = FrozeSites(M_r, self.froze_sites, self.opt_sites_pos, use_complex)
+        self.params_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos, use_complex)
+        self.params_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos, use_complex)
+        self.params_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos, use_complex)
+        self.params_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos, use_complex)
 
     def param_init_two_site_complex(self):
-        self.complex = True
-        all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
+        # self.complex = True
+        # all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
+        all_in = sum([t[-1] for t in list(self.graph.in_degree)])
         shape00 = (self.nqubits // 2, 2)
         shape01 = (self.nqubits // 2, self.dcut, 2)
         shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut, 2)
@@ -399,8 +408,10 @@ class Graph_MPS_RNN(nn.Module):
                 for i_chain, site in enumerate(nodes): # 加边√可用
                     predecessors = list(self.graph.predecessors(site))
                     if self.graph_before is not None:
-                        predecessors_before = list(self.graph_before.predecessors(site)) # graph_before的边
-                        M_pos_before = num_count(self.graph_before) #  graph_before每一个node对应的M的索引终止位置
+                        # graph_before的边
+                        predecessors_before = list(self.graph_before.predecessors(site)) 
+                        # graph_before每一个node对应的M的索引终止位置
+                        M_pos_before = num_count(self.graph_before) 
                     else:
                         # 用来和不加边的情况兼容
                         predecessors_before = list(self.graph.predecessors(site))
@@ -408,10 +419,13 @@ class Graph_MPS_RNN(nn.Module):
                     # 对每一个node的graph_before的predecessors作循环（只需要指定填入之前的参数即可，其余默认用小数填充）
                     for i_pre, edge in enumerate(predecessors_before):
                         # 计算总顺序（在M中的位置） 注意：由于兼容采样缘故，M_pos是按照[0,1,...]排列，需要索引
-                        site_i = (self.M_pos[int(site)] - len(predecessors)) + self.edge_order[i_chain][i_pre]  # M_pos索引出是结束的顺序
-                        site_i_before = (M_pos_before[int(site)] - len(predecessors_before)) + i_pre # before参数下对应的位置
+                        # M_pos索引出是结束的顺序
+                        site_i = (self.M_pos[int(site)] - len(predecessors)) + self.edge_order[i_chain][i_pre]
+                        # before参数下对应的位置
+                        site_i_before = (M_pos_before[int(site)] - len(predecessors_before)) + i_pre
                         _M = torch.view_as_complex(params["module.params_M.all_sites"][site_i_before])
-                        M[site_i, ..., :_M.shape[-2], :_M.shape[-1]] = _M # 对应填入现在参数对应的位置
+                        # 对应填入现在参数对应的位置
+                        M[site_i, ..., :_M.shape[-2], :_M.shape[-1]] = _M 
                         # logger.info((params["module.params_M.all_sites"][site_i].stride(), params["module.params_M.all_sites"][site_i].shape))
                 # 对应M[-1]，对应边界条件
                 _M = torch.view_as_complex(params["module.params_M.all_sites"][-1])
@@ -425,7 +439,7 @@ class Graph_MPS_RNN(nn.Module):
                 # 'module.parm_eta.all_sites'
                 eta = torch.view_as_complex(eta_r)
                 _eta = torch.view_as_complex(params["module.params_eta.all_sites"])
-                eta[..., :_eta.shape[-1]] = _eta                    
+                eta[..., :_eta.shape[-1]] = _eta
             # Phase part
             if "module.params_w.all_sites" in params:
                 # 'module.parm_w.all_sites'
@@ -435,18 +449,20 @@ class Graph_MPS_RNN(nn.Module):
             if "module.params_c.all_sites" in params:
                 # 'module.parm_c.all_sites' is not attribute to "dcut"
                 c_r = params["module.params_c.all_sites"]
-        self.init_params(M_r,v_r,eta_r,w_r,c_r)
-    def param_init_two_site_double(self):
+        self.init_params(M_r,v_r,eta_r,w_r,c_r, use_complex=True)
+
+    def param_init_two_site_double(self) -> None:
         # 暂不支持实数情况加边
-        assert self.graph_before is None
-        self.complex = False
+        if self.graph_before is None:
+            raise NotImplementedError(f"Not Implement {self.param_dtype} when adding edges")
+        # self.complex = False
         all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
 
         shape00 = (self.nqubits // 2)
         shape01 = (self.nqubits // 2, self.dcut)
         shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut)
         shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut)
-        # init. 
+        # init.
         M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
         v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
         eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
@@ -467,7 +483,7 @@ class Graph_MPS_RNN(nn.Module):
             if "module.params_eta.all_sites" in params:
                 # 'module.parm_eta.all_sites'
                 _eta = torch.tensor(params["module.params_eta.all_sites"])
-                eta_r[..., :_eta.shape[-1]] = _eta                    
+                eta_r[..., :_eta.shape[-1]] = _eta
             # Phase part
             if "module.params_w.all_sites" in params:
                 # 'module.parm_w.all_sites'
@@ -476,16 +492,18 @@ class Graph_MPS_RNN(nn.Module):
             if "module.params_c.all_sites" in params:
                 # 'module.parm_c.all_sites' is not attribute to "dcut"
                 c_r = params["module.params_c.all_sites"]
-        self.init_params(M_r,v_r,eta_r,w_r,c_r)
-    def param_init_two_site(self):
+        self.init_params(M_r,v_r,eta_r,w_r,c_r, use_complex=False)
+
+    def param_init_two_site(self) -> None:
         if self.params_file is not None:
                 self.iscale = 1e-14
         if self.param_dtype == torch.complex128:
             self.param_init_two_site_complex()
-        else:
-            assert self.param_dtype == torch.double
+        elif self.param_dtype == torch.double:
             self.param_init_two_site_double()
-        
+        else:
+            raise NotImplementedError(f"Not implement dtype: {self.param_dtype}")
+
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
         """
         Constraints Fock space -> FCI space
@@ -1015,7 +1033,8 @@ if __name__ == "__main__":
     #     # tensor=False,
     # )
     # graph_nn = nx.read_graphml("./graph/H_Plane/H12-34-1.graphml")
-    graph_nn = nx.read_graphml("./graph/H6-maxdes.graphml")
+    # graph_nn = nx.read_graphml("./graph/H6-maxdes.graphml")
+    # graph_nn = nx.read_graphml("./graph/H12-34-maxdes2.graphml")
     # breakpoint()
     model = Graph_MPS_RNN(
         use_symmetry=True,
