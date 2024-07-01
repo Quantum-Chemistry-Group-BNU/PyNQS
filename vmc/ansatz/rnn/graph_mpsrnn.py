@@ -356,9 +356,13 @@ class Graph_MPS_RNN(nn.Module):
         s = f"The graph-MPSRNN is working on {self.device}.\n"
         s += f"The bond dim in MPS--RNN is {self.dcut}, the local dim of Hilbert space is {self.hilbert_local}.\n"
 
+        if self.graph_before is not None:
+            s += "Before-Graph:\n"
+            for node, neighbors in self.graph_before.pred.items():
+                s += f"{str(node)} <-- {list(neighbors)}\n"
         s += "Graph:\n"
         for node, neighbors in self.graph.pred.items():
-            s += f"{str(node)}: {list(neighbors)}\n"
+            s += f"{str(node)} <-- {list(neighbors)}\n"
         s += f"The cal.(and the sampling) order is (Spatial orbital).\n"
         s += f"-> {list(map(int, self.graph.adj))} ->.\n"
 
@@ -446,6 +450,8 @@ class Graph_MPS_RNN(nn.Module):
                 w = torch.view_as_complex(w_r)
                 _w = torch.view_as_complex(params["module.params_w.all_sites"])
                 w[..., :_w.shape[-1]] = _w
+                if self.dcut_before is None:
+                    self.dcut_before = _w.shape[-1]
             if "module.params_c.all_sites" in params:
                 # 'module.parm_c.all_sites' is not attribute to "dcut"
                 c_r = params["module.params_c.all_sites"]
