@@ -21,19 +21,22 @@
 
 ## Installation 
 
-#### Compile CPP sources
+#### Compile CPP/CUDA sources
 ```bash
 > cd cpp_src
 > sh compile.sh -h
 # Use shell script to Compile CPU or GPU code with conditional compilation.
 #         sh compile.sh -s CPU or -s GPU
-> sh compile.sh -s GPU 
+> sh compile.sh -s GPU
 > ls  # you can find the 'setup.py', Check compilers CC and CXX
 # cpu cuda common tensor compile.sh setup.py
 # set magma_DIR and torch_DIR in 'setup.py'
 # if not use magma, set 'use_magma: bool = False'
 # magma: Matrix Algebra on GPU and Multicore Architectures
 > python setup.py develop # begin compile
+> vim common/default.h # change MAX_SORB_LEN
+# sorb in (0, 64], MAX_SORB_LEN = 1; sorb in (64, 128], MAX_SORB_LEN = 2
+# sorb in (128, 192], MAX_SORB_LEN = 3, does not support sorb > 192.
 # ....
 > mv C_extension.so ../libs/   # move 'C_extension.so' to '../libs' 
 ```
@@ -44,8 +47,7 @@
 > ls # check main directory
 # ci  cpp_src  docs  libs  main.py  README.md  test  utils  vmc
 > mv test/example_H4.py ../
-> vi run.sh  # set export RUN_FILE="example_H4.py"
-> ./run.sh  # You can find the *.png, *.pth and *.npz file in ./tmp/  
+> ./run.sh example_H4.py # You can find the *.png, *.pth and *.npz file in ./tmp/  
 ```
 
 ## Flowchart
