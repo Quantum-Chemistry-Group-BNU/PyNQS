@@ -13,6 +13,7 @@ def Rmps2mpsrnn(
     nelec: tuple[int, int],
     bond_dim_init: int,
     output_file: str,
+    reorder_index: list[int] = None,
     bond_dim_procedure=None,
 ):
     """
@@ -22,10 +23,12 @@ def Rmps2mpsrnn(
     nelec([int, int]): the list of the electron => [#α, #β]
     bond_dim_init(int): init-mps's bond dim.
     bond_dim_procedure(list): mps bond dim. optimize procedure
+    reorder_index(list): sampling order of mps(spatial orbital)
     output_file(str): saved file
     """
+    import renormalizer_utils.h_qc as h_qc
+
     from renormalizer import Model, Mps, Mpo, optimize_mps
-    from renormalizer.model import h_qc
     from renormalizer.utils import log
 
     # the way to install renormalizer is simple just
@@ -41,7 +44,9 @@ def Rmps2mpsrnn(
 
     # load integral info from fcidump
     spatial_norbs = nbas
-    h1e, h2e, nuc = h_qc.read_fcidump(fci_dump_file, spatial_norbs)
+    if reorder_index is None:
+        reorder_index = range(spatial_norbs)
+    h1e, h2e, nuc = h_qc.read_fcidump(fci_dump_file, spatial_norbs, reorder_index)
 
     # build hamiltonian
     basis, ham_terms = h_qc.qc_model(h1e, h2e)
@@ -103,7 +108,7 @@ def Rmps2mpsrnn(
     params2rnn = params2rnn[1:] + params2rnn[:1]
 
     # save as checkpoint file
-    param_w, param_c = add_phase_params(spatial_norbs, bond_dim_init)
+    param_w, param_c = add_phase_params(spatial_norbs, bond_dim_init, reorder_index[-1])
 
     # see: vmc/optim/_base.py checkpoint, DDP module
     torch.save(
@@ -119,6 +124,7 @@ def Rmps2mpsrnn(
 
     # save mps wavefunction (in tensor product order(ci spacer(fock spacr)))
     # torch.save(torch.tensor(p_mps.todense()),"mps.pth")
+    # torch.save(torch.tensor(p_mps.expectation(mpo)),"mpo.pth")
     print(f"Input Fci-dump=file is {fci_dump_file}")
     print(f"Save params. in {output_file}")
 
@@ -126,17 +132,19 @@ def Rmps2mpsrnn(
 def add_phase_params(
     nbas: int,
     B: int,
+    dim: int = -1,
 ):
     """
     to add phase term parameters from mps to mpsrnn
     INPUT:
     nbas(int): the number of spatial orbital
+    dim(int): the index for the last of sampling order, flault=-1
     B(int): dcut
     """
     param_w = torch.zeros((nbas, B), dtype=torch.complex128)
     param_c = torch.zeros((nbas,), dtype=torch.complex128)
     # change the last term
-    param_w[-1, ...] = torch.ones_like(param_w[-1, ...])
+    param_w[dim, ...] = torch.ones_like(param_w[dim, ...])
     # param_c[-1,...] = torch.zeros_like(param_c[-1,...])
     # change the form be like: real-part & imag-part
     param_w = param_w.reshape(nbas, B, 1)
@@ -145,7 +153,13 @@ def add_phase_params(
     param_c = torch.cat([param_c.real, param_c.imag], dim=-1)
     return param_w, param_c
 
+
 if __name__ == "__main__":
+    # H6-chain-1Angstorm
+    # E = -3.236066279892  2S+1 = 1.0000000
+    import networkx as nx
+
+    graph_index = list(map(int, nx.read_graphml("./graph/H6-maxdes0.graphml").adj))
     M = 30
     Rmps2mpsrnn(
         fci_dump_file="H6-fcidump.txt",
@@ -162,5 +176,6 @@ if __name__ == "__main__":
             [M, 0],
             [M, 0],
         ],
+        reorder_index=graph_index,
         output_file="params.pth",
     )

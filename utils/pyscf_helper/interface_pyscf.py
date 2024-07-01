@@ -54,7 +54,10 @@ class Iface:
         # hmo = np.load("h.npz")["h1e"]
         # eri = np.load("h.npz")["h2e"]
         # For change the order of sorb (<kongjian> orbitial)
-        # order = numpy.array([0, 4, 8, 9, 5, 1, 2, 6, 10, 11, 7, 3])
+        # breakpoint()
+        # import networkx as nx
+        # graph_index = list(map(int,nx.read_graphml("./graph/H6-maxdes0.graphml").nodes))
+        # order = np.array(graph_index)
         # hmo = hmo[np.ix_(order,order)]
         # eri = eri[np.ix_(order,order,order,order)]
         return ecore, hmo, eri
@@ -107,8 +110,10 @@ class Iface:
         h2e[1::2, 1::2, 1::2, 1::2] = int2e  # BBBB
         h2e[0::2, 0::2, 1::2, 1::2] = int2e  # AABB
         h2e[1::2, 1::2, 0::2, 0::2] = int2e  # BBAA
+        numpy.savez("h.npz",h1e=h1e,h2e=h2e)
         h2e = h2e.transpose(0, 2, 1, 3)  # <ij|kl> = [ik|jl]
         h2e = h2e - h2e.transpose(0, 1, 3, 2)  # Antisymmetrize V[pqrs]=<pq||rs>
+        
         thresh = 1.0e-16
         with open(fname, "w+") as f:
             n = sbas
@@ -237,8 +242,12 @@ def interface(
         else:
             tools.fcidump.from_integrals(fci_dump_file, info[1], ao2mo.kernel(mol, mo_coeff), mol.nao, [nele//2,nele//2], info[0])
     Iface.dump(info, fname=integral_file)
-    # info = Iface.get_integral_FCIDUMP(fname=integral_file)
-
+    # np.savez("h.npz",h1e=info[1],h2e=info[2])
+    
+    # info1 = Iface.get_integral_FCIDUMP(fname="H6-fcidump.txt") # e, int1e, int2e
+    # from renormalizer.model import h_qc
+    # info2 = h_qc.read_fcidump(fci_dump_file, 6) # int1e, int2e, e
+    # breakpoint()
     # graph
     # from utils.graph import fielder, nxutils
     # import networkx as nx

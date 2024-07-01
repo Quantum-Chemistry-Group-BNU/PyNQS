@@ -33,10 +33,10 @@
 # set magma_DIR and torch_DIR in 'setup.py'
 # if not use magma, set 'use_magma: bool = False'
 # magma: Matrix Algebra on GPU and Multicore Architectures
-> python setup.py develop # begin compile
 > vim common/default.h # change MAX_SORB_LEN
 # sorb in (0, 64], MAX_SORB_LEN = 1; sorb in (64, 128], MAX_SORB_LEN = 2
 # sorb in (128, 192], MAX_SORB_LEN = 3, does not support sorb > 192.
+> python setup.py develop # begin compile
 # ....
 > mv C_extension.so ../libs/   # move 'C_extension.so' to '../libs' 
 ```
