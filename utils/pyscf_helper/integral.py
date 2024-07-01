@@ -1,7 +1,11 @@
 import time
 import os
+import warnings
 import torch
 import numpy as np
+import sys
+sys.path.append("./")
+
 from torch import Tensor
 from typing import Tuple
 
@@ -136,3 +140,77 @@ def read_integral(
             torch.save({"onstate": onstate}, f"{prefix}.pth")
 
     return (h1e, h2e, onstate, ecore, sorb)
+
+
+def change_integral_order(
+    h1e: Tensor,
+    h2e: Tensor,
+    sorb: int,
+    order: Tensor,
+) -> Tuple[Tensor, Tensor]:
+    """
+    decompress:
+        h1e/h2e -> (sorb, sorb)/(sorb, sorb, sorb, sorb)
+    change order:
+        h1e = h1e[np.ix_(order, order)]
+        h2e = h2e[np.ix_(order, order, order, order)]
+    compress:
+        pair = sorb * (sorb - 1) // 2
+        h1e/h2e -> (sorb * sorb)/((pair * (pair + 1)) // 2)
+    """
+    pair = sorb * (sorb - 1) // 2
+
+    # check size, h1e and h2e is 1D.
+    assert h1e.size(0) == sorb * sorb
+    assert h2e.size(0) == (pair * (pair + 1)) // 2
+
+    # check order
+    assert torch.allclose(torch.arange(sorb), order.sort()[0])
+
+    try:
+        from libs.C_extension import compress_h1e_h2e as compress
+        from libs.C_extension import decompress_h1e_h2e as decompress
+    except ImportError:
+        warnings.warn("Using compress h1e/h2e using python is pretty slower", stacklevel=2)
+        from .operator import _compress_h1e_h2e_py as compress
+        from .operator import _decompress_h1e_h2e_py as decompress
+
+    device = h1e.device
+    order = order.numpy()
+    _h1e, _h2e = decompress(h1e.cpu().numpy(), h2e.cpu().numpy(), sorb)
+
+    _h1e = _h1e[np.ix_(order, order)]
+    _h2e = _h2e[np.ix_(order, order, order, order)]
+
+    # compress h1e, h2e
+    h1e_order, h2e_order = compress(_h1e, _h2e, sorb)
+
+    h1e = torch.from_numpy(h1e_order).to(device=device)
+    h2e = torch.from_numpy(h2e_order).to(device=device)
+
+    return h1e, h2e
+
+if __name__ == "__main__":
+    from libs.C_extension import compress_h1e_h2e as compress
+    from libs.C_extension import decompress_h1e_h2e as decompress
+
+    sorb = 8
+    h1e = np.random.random((sorb,sorb))
+    h2e = np.random.random((sorb,sorb,sorb,sorb))
+    # Restore permutation symmetry
+    h1e = h1e + h1e.T
+    h2e = h2e + h2e.transpose(1,0,2,3)
+    h2e = h2e + h2e.transpose(0,1,3,2)
+    h2e = h2e + h2e.transpose(2,3,0,1)
+
+    h1e, h2e = compress(h1e, h2e, sorb)
+    h1e = torch.from_numpy(h1e)
+    h2e = torch.from_numpy(h2e)
+    order = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7]).long()
+    h1e1, h2e1 = change_integral_order(h1e, h2e, sorb, order)
+
+    order = order.argsort(stable=True)
+    h1e2, h2e2 = change_integral_order(h1e1, h2e1, sorb, order)
+    h1e2, h2e = h1e2.numpy(), h2e2.numpy()
+
+    assert np.allclose(h1e, h1e2) and np.allclose(h2e, h2e2)

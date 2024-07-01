@@ -411,3 +411,11 @@ def compress_h1e_h2e(h1e: ndarray, h2e: ndarray, sorb: int) -> Tuple[ndarray, nd
     h1e(sorb, sorb) -> sorb * sorb
     h2e(sorb, sorb, sorb, sorb) -> (pair * (pair + 1))/2, pair = sorb * (sorb -1)/2
     """
+
+def decompress_h1e_h2e(h1e: ndarray, h2e: ndarray, sorb: int) -> Tuple[ndarray, ndarray]:
+    """
+    decompress h1e/he2
+
+    h1e(sorb * sorb) -> (sorb, sorb)
+    h2e(pair * (pair + 1))/2, pair = sorb * (sorb -1)/2 -> (sorb, sorb, sorb, sorb)
+    """

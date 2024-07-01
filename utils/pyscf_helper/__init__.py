@@ -1,5 +1,5 @@
 from .interface_pyscf import interface
-from .intergral import read_integral
+from .integral import read_integral
 
-__all__ = ["interface", "intergral"]
+__all__ = ["interface", "integral"]
 

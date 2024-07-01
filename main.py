@@ -112,8 +112,8 @@ if __name__ == "__main__":
     # breakpoint()
     # from utils.pyscf_helper.dice_pyscf import read_dice_wf
     e = torch.load("./molecule/H8-1.60.pth", map_location="cpu")
-    h1e = e["h1e"]
-    h2e = e["h2e"]
+    h1e = e["h1e"].cuda()
+    h2e = e["h2e"].cuda()
     sorb = e["sorb"]
     noa = e["noa"]
     nob = e["nob"]
@@ -131,7 +131,7 @@ if __name__ == "__main__":
         "noa": noa,
         "nva": (sorb - nele) // 2,
     }
-    check_sorb(sorb)
+    check_sorb(sorb, nele)
     e_lst = e["e_lst"]
     if rank == 0:
         logger.info(f"e_lst: {e_lst}")
