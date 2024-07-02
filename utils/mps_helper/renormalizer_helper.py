@@ -118,7 +118,7 @@ def Rmps2mpsrnn(
     params2rnn = params2rnn[1:] + params2rnn[:1]
 
     # save as checkpoint file
-    param_w, param_c = add_phase_params(spatial_norbs, bond_dim_init, reorder_index[-1], dtype)
+    param_w, param_c = add_phase_params(spatial_norbs, bond_dim_init, reorder_index[-1])
 
     # see: vmc/optim/_base.py checkpoint, DDP module
     torch.save(

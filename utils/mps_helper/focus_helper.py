@@ -47,7 +47,7 @@ def Fmps2mpsrnn(
     # put the boundary condition of M to the end of the list of parameters
     params2rnn = params2rnn[1:] + params2rnn[:1]
 
-    param_w, param_c = add_phase_params(len(params2rnn), dcut, -1, dtype)
+    param_w, param_c = add_phase_params(len(params2rnn), dcut, -1)
     torch.save(
         {
             "model": {

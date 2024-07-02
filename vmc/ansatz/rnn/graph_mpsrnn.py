@@ -384,8 +384,8 @@ class Graph_MPS_RNN(nn.Module):
         self.params_M = FrozeSites(M_r, self.froze_sites, self.opt_sites_pos, use_complex)
         self.params_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos, use_complex)
         self.params_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos, use_complex)
-        self.params_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos, use_complex)
-        self.params_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos, use_complex)
+        self.params_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos, True)
+        self.params_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos, True)
 
     def param_init_two_site_complex(self):
         # self.complex = True
@@ -464,15 +464,16 @@ class Graph_MPS_RNN(nn.Module):
         # self.complex = False
         all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
 
-        shape00 = (self.nqubits // 2)
-        shape01 = (self.nqubits // 2, self.dcut)
+        shape00 = (self.nqubits // 2, 2)
+        shape01r = (self.nqubits // 2, self.dcut)
+        shape01c = (self.nqubits // 2, self.dcut, 2)
         shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut)
         shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut)
         # init.
         M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
         v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
-        eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
-        w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
+        eta_r = torch.ones(shape01r, **self.factory_kwargs_real) * (1/(2**0.5))
+        w_r = torch.zeros(shape01c, **self.factory_kwargs_real) * self.iscale
         c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
 
         if self.params_file is not None:
@@ -507,8 +508,9 @@ class Graph_MPS_RNN(nn.Module):
             # Phase part
             if "module.params_w.all_sites" in params:
                 # 'module.parm_w.all_sites'
-                _w = torch.tensor(params["module.params_w.all_sites"])
-                w_r[..., :_w.shape[-1]] = _w
+                w = torch.view_as_complex(w_r)
+                _w = torch.view_as_complex(params["module.params_w.all_sites"])
+                w[..., :_w.shape[-1]] = _w
                 if self.dcut_before is None:
                     self.dcut_before = _w.shape[-1]
             if "module.params_c.all_sites" in params:
@@ -731,8 +733,8 @@ class Graph_MPS_RNN(nn.Module):
             # (dcut) (dcut, n_batch)  -> (n_batch)
             index_phi = index.reshape(1, 1, -1).repeat(1, self.dcut, 1)
             h_i = h_ud.gather(0, index_phi).reshape(self.dcut, n_batch)
-            if self.param_dtype == torch.complex128:
-                h_i = h_i.to(torch.complex128)
+            # if self.param_dtype == torch.complex128:
+            h_i = h_i.to(torch.complex128)
             phi_i = w @ h_i + c
             phi = phi + torch.angle(phi_i)
 
