@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-
+# from renormalizer.model.h_qc(0.0.10)
 import itertools
 import logging
 
@@ -40,7 +40,7 @@ def read_fcidump(fname, norb, order):
             else:
                 nuc = integral
 
-    # reorder the integral
+    # reorder the
     order = np.array(order)
     h = h[np.ix_(order,order)]
     eri = eri[np.ix_(order,order,order,order)]

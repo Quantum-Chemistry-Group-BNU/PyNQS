@@ -459,8 +459,8 @@ class Graph_MPS_RNN(nn.Module):
 
     def param_init_two_site_double(self) -> None:
         # 暂不支持实数情况加边
-        if self.graph_before is None:
-            raise NotImplementedError(f"Not Implement {self.param_dtype} when adding edges")
+        # if self.graph_before is None:
+        #     raise NotImplementedError(f"Not Implement {self.param_dtype} when adding edges")
         # self.complex = False
         all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
 
@@ -477,11 +477,25 @@ class Graph_MPS_RNN(nn.Module):
 
         if self.params_file is not None:
             params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
-            if "module.params_M.all_sites" in params:    
+            if "module.params_M.all_sites" in params:
                 # 'module.parm_M.all_sites'
-                for site in range(len(params["module.params_M.all_sites"])):
-                    _M = torch.tensor(params["module.params_M.all_sites"][site])
-                    M_r[site, ..., :_M.shape[-2], :_M.shape[-1]] = _M
+                nodes = list(self.graph.nodes)
+                for i_chain, site in enumerate(nodes):
+                    predecessors = list(self.graph.predecessors(site))
+                    if self.graph_before is not None:
+                        predecessors_before = list(self.graph_before.predecessors(site)) 
+                        M_pos_before = num_count(self.graph_before) 
+                    else:
+                        predecessors_before = list(self.graph.predecessors(site))
+                        M_pos_before = self.M_pos
+                    for i_pre, edge in enumerate(predecessors_before):
+                        site_i = (self.M_pos[int(site)] - len(predecessors)) + self.edge_order[i_chain][i_pre]
+                        site_i_before = (M_pos_before[int(site)] - len(predecessors_before)) + i_pre
+                        _M = torch.tensor(params["module.params_M.all_sites"][site_i_before])
+                        M_r[site_i, ..., :_M.shape[-2], :_M.shape[-1]] = _M 
+                        # logger.info((params["module.params_M.all_sites"][site_i].stride(), params["module.params_M.all_sites"][site_i].shape))
+                _M = torch.tensor(params["module.params_M.all_sites"][-1])
+                M_r[-1, ..., :_M.shape[-2], :_M.shape[-1]] = _M
             if "module.params_v.all_sites" in params:
                 # 'module.parm_v.all_sites'
                 _v = torch.tensor(params["module.params_v.all_sites"])
@@ -495,6 +509,8 @@ class Graph_MPS_RNN(nn.Module):
                 # 'module.parm_w.all_sites'
                 _w = torch.tensor(params["module.params_w.all_sites"])
                 w_r[..., :_w.shape[-1]] = _w
+                if self.dcut_before is None:
+                    self.dcut_before = _w.shape[-1]
             if "module.params_c.all_sites" in params:
                 # 'module.parm_c.all_sites' is not attribute to "dcut"
                 c_r = params["module.params_c.all_sites"]
@@ -735,6 +751,8 @@ class Graph_MPS_RNN(nn.Module):
         # sample-phase
         extra_phase = permute_sgn(self.exchange_order, target.long(), self.nqubits)
         psi = psi * extra_phase
+        # breakpoint()
+        # torch.save(extra_phase,"extra_phase.pth")
         if use_unique:
             psi = psi[original_idx]
 
@@ -1053,6 +1071,7 @@ if __name__ == "__main__":
         graph=graph_nn,
         params_file="params.pth"
     )
+    
     breakpoint()
     psi = model(fock_space)
     

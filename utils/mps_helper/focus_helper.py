@@ -12,6 +12,7 @@ def Fmps2mpsrnn(
     input_file: str,
     output_file: str,
     dcut: int,
+    dtype: str = "complex",
 ):
     # loading
     ctns = ctns_loader.ctns_info()
@@ -29,10 +30,14 @@ def Fmps2mpsrnn(
         _M_real = param[:, index, :]
         # transpose the martix order
         _M_real = torch.permute(_M_real, (1, 2, 0))
-        # split real-part & imag-part
-        _M_real = _M_real.unsqueeze(-1)
-        _M_imag = torch.zeros_like(_M_real)
-        _M = torch.cat([_M_real, _M_imag], dim=-1)
+        if dtype == "complex":
+            # split real-part & imag-part
+            _M_real = _M_real.unsqueeze(-1)
+            _M_imag = torch.zeros_like(_M_real)
+            _M = torch.cat([_M_real, _M_imag], dim=-1)
+        else:
+            print("the parameters are real!")
+            _M = _M_real
         params2rnn.append(_M)
 
     # print shapes
@@ -42,7 +47,7 @@ def Fmps2mpsrnn(
     # put the boundary condition of M to the end of the list of parameters
     params2rnn = params2rnn[1:] + params2rnn[:1]
 
-    param_w, param_c = add_phase_params(len(params2rnn), dcut)
+    param_w, param_c = add_phase_params(len(params2rnn), dcut, -1, dtype)
     torch.save(
         {
             "model": {
@@ -62,4 +67,5 @@ if __name__ == "__main__":
         input_file="./focus/rcanon_isweep49.bin",
         output_file="./focus/H50_focus_dcu50_params.pth",
         dcut=50,
+        dtype="real",
     )
