@@ -13,7 +13,8 @@ def Fmps2mpsrnn(
     output_file: str,
     dcut: int,
     dtype: str = "complex",
-):
+    padding_scale: float = 0.0,
+) -> None:
     # loading
     ctns = ctns_loader.ctns_info()
     ctns.load(input_file)
@@ -23,6 +24,7 @@ def Fmps2mpsrnn(
     params2rnn = []
     # 0, 2, a, b => 0, a, b, 2
     index = torch.tensor([0, 2, 3, 1])
+    assert abs(padding_scale) <= 1e-10
     for param in mps_params:
         param = torch.from_numpy(param)
         # (dcut_l, 4, dcut_r) -> (4, dcut_r, dcut_l)
@@ -38,11 +40,17 @@ def Fmps2mpsrnn(
         else:
             print("the parameters are real!")
             _M = _M_real
+        mask = _M.flatten() == 0.0
+        _M.view(-1)[mask] = torch.rand(mask.sum(), dtype=torch.double) * padding_scale
         params2rnn.append(_M)
 
     # print shapes
+    N = 0
     for site, M in enumerate(params2rnn):
-        print("site", site, "==>", M.shape)
+        nonzero = (M.view(-1) != 0.0).sum().item()
+        N += nonzero
+        print(f"site: {site} ==> {tuple(M.shape)}, nonzero: {nonzero}")
+    print(f"All nonzero element: {N}")
 
     # put the boundary condition of M to the end of the list of parameters
     params2rnn = params2rnn[1:] + params2rnn[:1]
@@ -64,8 +72,9 @@ def Fmps2mpsrnn(
 
 if __name__ == "__main__":
     Fmps2mpsrnn(
-        input_file="./focus/rcanon_isweep49.bin",
-        output_file="./focus/H50_focus_dcu50_params.pth",
+        input_file="./rcanon_isweep49.bin",
+        output_file="./H50_focus_dcu50_params-1e-12.pth",
         dcut=50,
-        dtype="real",
+        dtype="complex",
+        padding_scale=0,
     )
