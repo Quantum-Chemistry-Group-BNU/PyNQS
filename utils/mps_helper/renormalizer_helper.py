@@ -94,7 +94,9 @@ def Rmps2mpsrnn(
         index = torch.tensor([0, 2, 1, 3])
         M = torch.index_select(_M, 1, index)
         params2rnn_2site.append(M)
-
+    
+    dtype = dtype.lower()
+    assert dtype in ("complex", "real")
     if dtype == "complex":
         # split imag and real
         params2rnn = []
@@ -178,7 +180,7 @@ if __name__ == "__main__":
     # E = -3.236066279892  2S+1 = 1.0000000
     import networkx as nx
 
-    graph_index = list(map(int, nx.read_graphml("./graph/H6-maxdes0.graphml").adj))
+    graph_index = list(map(int, nx.read_graphml("./graph/H6-2-maxdes0.graphml").adj))
     M = 30
     Rmps2mpsrnn(
         fci_dump_file="H6-fcidump.txt",
@@ -196,6 +198,6 @@ if __name__ == "__main__":
             [M, 0],
         ],
         reorder_index=graph_index,
-        dtype="comlplex",
+        dtype="complex",
         output_file="params.pth",
     )
