@@ -8,7 +8,7 @@
 #define MAX_NV MAX_SORB_LEN * 40    // max virtual orbital
 #define MAX_NVA MAX_NV / 2          //  alpha max virtual orbital / 2
 #define MAX_NVB MAX_NOA / 2         // beta max virtual orbital / 2
-#define THREAD 32
+#define THREAD 16
 #define VERBOSE false
 #define DEBUG false
 // #define GPU 1
