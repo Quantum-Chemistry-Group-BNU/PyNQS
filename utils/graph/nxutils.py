@@ -1,9 +1,10 @@
-import numpy as np
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import networkx as nx
-from networkx import Graph, DiGraph
+from __future__ import annotations
 
+import numpy as np
+import networkx as nx
+
+from typing import List
+from networkx import Graph, DiGraph
 
 def displayCircular(G):
     return nx.draw_circular(
@@ -17,6 +18,7 @@ def displayCircular(G):
 
 
 def displayGraph(G, kij):
+    import matplotlib.pyplot as plt
     labels = dict(zip(G.nodes, G.nodes))
     pos = nx.circular_layout(G)
 
@@ -46,6 +48,7 @@ def displayGraph(G, kij):
 
 
 def displayGraphHighlight(G, kij, fgraph):
+    import matplotlib.pyplot as plt
     labels = dict(zip(G.nodes, G.nodes))
     pos = nx.circular_layout(G)
 
@@ -133,7 +136,7 @@ def fromKijToGraph(kij):
     return graph
 
 
-def num_count(graph:DiGraph) -> list[int]:
+def num_count(graph:DiGraph) -> List[int]:
     """
     to calculate the pos. of site i in param M
     """
@@ -145,7 +148,7 @@ def num_count(graph:DiGraph) -> list[int]:
         num[int(i)] = all_in_num
     return num
 
-def checkgraph(graph1: DiGraph, graph2: DiGraph) -> list[list[int]]:
+def checkgraph(graph1: DiGraph, graph2: DiGraph) -> List[List[int]]:
     """
     check graph1 ⊂ graph2
     RETURN(List[List[Int]]):

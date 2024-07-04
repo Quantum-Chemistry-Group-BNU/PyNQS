@@ -10,7 +10,7 @@ import os
 import numpy as np
 import torch
 
-
+from typing import List, Tuple
 from pyscf import scf, gto, lo
 
 from libs.C_extension import tensor_to_onv
@@ -20,8 +20,8 @@ from utils.onv import ONV
 
 def run_shci(
     mf: scf.RHF,
-    cas: tuple[int, tuple[int, int]],
-    epsilon1: list[int] = [1.0e-3],
+    cas: Tuple[int, Tuple[int, int]],
+    epsilon1: List[int] = [1.0e-3],
     det_file: str = None,
     localized_orb: bool = False,
     localized_method: str = "lowdin",
@@ -77,7 +77,7 @@ def run_shci(
         mf.mo_coeff = old_coeff
 
 
-def _decode_dice_det(occs) -> tuple[list, list]:
+def _decode_dice_det(occs) -> Tuple[List, List]:
     occ_a = []
     occ_b = []
     for i, occ in enumerate(occs):

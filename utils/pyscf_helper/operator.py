@@ -1,6 +1,7 @@
 """
 Operator, e.g. S-S+, S^2
 """
+from __future__ import annotations
 
 import time
 import sys
@@ -11,12 +12,13 @@ sys.path.append("./")
 
 from numpy import ndarray
 from torch import Tensor
+from typing import Tuple
 
 def _compress_h1e_h2e_py(
     h1e: ndarray,
     h2e: ndarray,
     sorb: int,
-) -> tuple[ndarray, ndarray]:
+) -> Tuple[ndarray, ndarray]:
     pair = sorb * (sorb - 1) // 2
     int1e = np.zeros(sorb * sorb, dtype=np.float64)  # <i|O1|j>
     int2e = np.zeros((pair * (pair + 1)) // 2, dtype=np.float64)  # <ij||kl>
@@ -52,7 +54,7 @@ def _decompress_h1e_h2e_py(
     h1e: ndarray,
     h2e: ndarray,
     sorb: int,
-) -> tuple[ndarray, ndarray]:
+) -> Tuple[ndarray, ndarray]:
     pair = sorb * (sorb - 1) // 2
     assert h1e.shape[0] == sorb * sorb
     assert h2e.shape[0] == (pair * (pair + 1)) // 2

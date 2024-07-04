@@ -1,10 +1,11 @@
-import torch
+from __future__ import annotations
 
-from loguru import logger
+import torch
 
 from dataclasses import dataclass
 from collections import defaultdict
 from torch import Tensor
+from loguru import logger
 
 from utils.distributed import get_world_size
 from .dist_stats import dist_stats

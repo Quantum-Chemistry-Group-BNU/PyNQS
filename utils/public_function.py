@@ -1,5 +1,4 @@
 from __future__ import annotations
-import gc
 import random
 import sys
 import os
