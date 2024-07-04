@@ -6,6 +6,9 @@ from networkx import Graph, DiGraph
 
 
 def displayCircular(G):
+    """
+    draw picture looked like regular polygon by graph G.
+    """
     return nx.draw_circular(
         G,
         with_labels=True,
@@ -17,21 +20,23 @@ def displayCircular(G):
 
 
 def displayGraph(G, kij):
+    """
+    func "displayGraphHighlight" without egdes between two vertexes.
+    """
     labels = dict(zip(G.nodes, G.nodes))
     pos = nx.circular_layout(G)
 
     cmap = plt.cm.Blues
     edge_colors = [np.power(kij[x[0], x[1]], 0.25) for x in list(G.edges)]
-    edges = nx.draw_networkx_edges(
-        G,
-        pos,
+    nx.draw_networkx_edges(
+        G=G,
+        pos=pos,
         edge_color=edge_colors,
         edge_cmap=cmap,
         width=1,
     )
 
     nx.draw_networkx_nodes(G, pos, node_size=500, node_color="black")
-    labels = dict(zip(G.nodes, G.nodes))
     nx.draw_networkx_labels(G, pos, labels, font_size=15, font_color="whitesmoke")
     # nx.draw_networkx_edges(
     #     fgraph,
@@ -49,9 +54,10 @@ def displayGraphHighlight(G, kij, fgraph):
     labels = dict(zip(G.nodes, G.nodes))
     pos = nx.circular_layout(G)
 
+    # drwa other edges
     cmap = plt.cm.Blues
     edge_colors = [np.power(kij[x[0], x[1]], 0.25) for x in list(G.edges)]
-    edges = nx.draw_networkx_edges(
+    nx.draw_networkx_edges(
         G,
         pos,
         edge_color=edge_colors,
@@ -59,8 +65,9 @@ def displayGraphHighlight(G, kij, fgraph):
         width=1,
     )
 
+    # draw the order along vertexes
+    # draw vertexes & their labels
     nx.draw_networkx_nodes(G, pos, node_size=500, node_color="black")
-    labels = dict(zip(G.nodes, G.nodes))
     nx.draw_networkx_labels(G, pos, labels, font_size=15, font_color="whitesmoke")
     nx.draw_networkx_edges(
         fgraph,
@@ -71,10 +78,10 @@ def displayGraphHighlight(G, kij, fgraph):
         alpha=0.5,
     )
     plt.show()
-    return 0
 
 
 def fromOrderToDiGraph(order):
+    # to generate a digraph along the ver
     nodes = len(order)
     edges = []
     for i in range(nodes - 1):
@@ -83,13 +90,12 @@ def fromOrderToDiGraph(order):
     return nx.DiGraph(edges)
 
 
-def addEdgesByGreedySearch(graph, kij, maxdes=1):
-    debug = False
+def addEdgesByGreedySearch(graph, kij, maxdes=1, tensor=False, debug=False):
     graph2 = graph.copy()
     order = list(graph2.nodes)
     nodes = len(order)
     for node in order:
-        ancestors = list(nx.ancestors(graph2, node))
+        ancestors = list(nx.ancestors(graph2, node))  # list of vertexed before <node>
         adj = list(graph2.adj[node])  # childen
         weights = kij[node, :]
         wvec = []
@@ -101,6 +107,9 @@ def addEdgesByGreedySearch(graph, kij, maxdes=1):
                 continue  # new children cannot be in adj
             if i in ancestors:
                 continue  # edge go back is not allowed
+            if tensor:
+                if len(list(graph2.predecessors(i))) >= 2:
+                    continue  # the predecessor of i should less than 2
             ivec.append(i)
             wvec.append(weights[i])
         ivec = np.array(ivec)
@@ -123,17 +132,22 @@ def addEdgesByGreedySearch(graph, kij, maxdes=1):
 
 
 def fromKijToGraph(kij):
+    """
+    generate all the edges from kij matrix
+    """
     nodes = kij.shape[0]
     edges = []
+    # generate connections from kij matrix
     for i in range(nodes):
         for j in range(i):
             edges.append((j, i))
-    graph = nx.Graph()
+    # obtain digraph
+    graph = nx.DiGraph()
     graph.add_edges_from(edges)
     return graph
 
 
-def num_count(graph:DiGraph) -> list[int]:
+def num_count(graph: DiGraph) -> list[int]:
     """
     to calculate the pos. of site i in param M
     """
@@ -144,6 +158,7 @@ def num_count(graph:DiGraph) -> list[int]:
         all_in_num += len(all_in)
         num[int(i)] = all_in_num
     return num
+
 
 def checkgraph(graph1: DiGraph, graph2: DiGraph) -> list[list[int]]:
     """
@@ -165,5 +180,19 @@ def checkgraph(graph1: DiGraph, graph2: DiGraph) -> list[list[int]]:
         # print(site, "=small=>", graph1_pre_site)
         edge_index = [graph2_pre_site.index(element) for element in graph1_pre_site]
         # print(edge_index)
-        add_edge.append(edge_index)  # 这个顺序是按照graph对应一维顺序排列的
+        add_edge.append(edge_index)  # order along 1d order(nodes' order)
     return add_edge
+
+
+def scan_tensor(graph: DiGraph):
+    '''
+    return the the node of graph which can have tensor term 
+    '''
+    graph_node = list(graph.nodes)
+    tensor_index = []
+    for site in graph_node:
+        if len(list(graph.predecessors(site))) == 2:
+            tensor_index.append(site)
+    return tensor_index
+
+

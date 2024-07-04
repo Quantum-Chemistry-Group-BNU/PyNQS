@@ -133,8 +133,9 @@ def Rmps2mpsrnn(
     )
 
     # save mps wavefunction (in tensor product order(ci spacer(fock spacr)))
-    torch.save(torch.tensor(p_mps.todense()), "mps.pth")
-    torch.save(torch.tensor(p_mps.expectation(mpo)), "mpo.pth")
+    # torch.save(torch.tensor(p_mps.todense()), "mps.pth")
+    # torch.save(torch.tensor(p_mps.expectation(mpo)), "mpo.pth")
+    print(f"The last energy expectation is", p_mps.expectation(mpo))
     print(f"Input Fci-dump=file is {fci_dump_file}")
     print(f"Save params. in {output_file}")
 
@@ -195,6 +196,6 @@ if __name__ == "__main__":
             [M, 0],
         ],
         reorder_index=graph_index,
-        dtype="real",
+        dtype="comlplex",
         output_file="params.pth",
     )

@@ -18,7 +18,7 @@ from vmc.ansatz.utils import joint_next_samples
 from libs.C_extension import onv_to_tensor, permute_sgn
 
 from utils.det_helper import DetLUT
-from utils.graph import checkgraph, num_count
+from utils.graph import checkgraph, num_count, scan_tensor
 from utils.public_function import (
     get_fock_space,
     get_special_space,
@@ -251,11 +251,12 @@ class Graph_MPS_RNN(nn.Module):
         graph: Graph | DiGraph = None,
         graph_before: Graph | DiGraph = None,
         # 功能参数
+        use_unique: bool = True,
         use_symmetry: bool = False,
+        use_tensor: bool = False,
         alpha_nele: int = None,
         rank_independent_sampling: bool = False,
         det_lut: DetLUT = None,
-        use_unique: bool = True,
         J_W_phase: bool = False, 
     ) -> None:
         super(Graph_MPS_RNN, self).__init__()
@@ -272,6 +273,7 @@ class Graph_MPS_RNN(nn.Module):
         self.froze_sites = False
         self.opt_sites_pos = None
         self.J_W_phase = J_W_phase  # testing, aa..bb.. -> abab...
+        self.use_tensor = use_tensor
 
         if hilbert_local != 4:
             raise NotImplementedError(f"Please use the 2-sites mode")
@@ -296,6 +298,11 @@ class Graph_MPS_RNN(nn.Module):
         self.graph_nodes = list(map(int, self.graph.nodes))
         self.M_pos = num_count(graph)
         assert self.sample_order.size(0) == nqubits
+        if self.use_tensor:
+            # check the adj-relationship
+            for i in self.graph.nodes:
+                assert int(len(list(self.graph.predecessors(i)))) <= 2
+            self.tensor_index = scan_tensor(self.graph)
 
         # distributed
         self.rank = get_rank()
@@ -380,12 +387,15 @@ class Graph_MPS_RNN(nn.Module):
         w_r: Tensor,
         c_r: Tensor,
         use_complex: bool,
+        T_r: Tensor = None,
     ) -> None:
         self.params_M = FrozeSites(M_r, self.froze_sites, self.opt_sites_pos, use_complex)
         self.params_v = FrozeSites(v_r, self.froze_sites, self.opt_sites_pos, use_complex)
         self.params_eta = FrozeSites(eta_r, self.froze_sites, self.opt_sites_pos, use_complex)
         self.params_w = FrozeSites(w_r, self.froze_sites, self.opt_sites_pos, True)
         self.params_c = FrozeSites(c_r, self.froze_sites, self.opt_sites_pos, True)
+        if T_r is not None:
+             self.params_T = FrozeSites(T_r, self.froze_sites, self.opt_sites_pos, use_complex)
 
     def param_init_two_site_complex(self):
         # self.complex = True
@@ -401,7 +411,10 @@ class Graph_MPS_RNN(nn.Module):
         eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1/(2**0.5))
         w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
         c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
-
+        if self.use_tensor:
+            all_in_tensor = len(self.tensor_index)
+            shape3 = (all_in_tensor, self.hilbert_local, self.dcut, self.dcut, self.dcut, 2)
+            T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
         if self.params_file is not None:
             params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
             if "module.params_M.all_sites" in params:
@@ -434,6 +447,18 @@ class Graph_MPS_RNN(nn.Module):
                 # 对应M[-1]，对应边界条件
                 _M = torch.view_as_complex(params["module.params_M.all_sites"][-1])
                 M[-1, ..., :_M.shape[-2], :_M.shape[-1]] = _M
+            if "module.params_T.all_sites" in params:
+                # 'module.parm_T.all_sites'
+                T = torch.view_as_complex(T_r)
+                nodes = list(self.graph.nodes)
+                if self.graph_before is not None:
+                    tensor_index_before = scan_tensor(self.graph_before)
+                else:
+                    tensor_index_before = self.tensor_index
+                tensor_edge_index = [self.tensor_index.index(element) for element in tensor_index_before]
+                for i_pre, idx in enumerate(tensor_edge_index):
+                    _T = torch.view_as_complex(params["module.params_T.all_sites"][i_pre])
+                    T[idx, ..., :_T.shape[-3], :_T.shape[-2], :_T.shape[-1]] = _T
             if "module.params_v.all_sites" in params:
                 # 'module.parm_v.all_sites'
                 v = torch.view_as_complex(v_r)
@@ -455,7 +480,7 @@ class Graph_MPS_RNN(nn.Module):
             if "module.params_c.all_sites" in params:
                 # 'module.parm_c.all_sites' is not attribute to "dcut"
                 c_r = params["module.params_c.all_sites"]
-        self.init_params(M_r,v_r,eta_r,w_r,c_r, use_complex=True)
+        self.init_params(M_r,v_r,eta_r,w_r,c_r, use_complex=True,T_r=T_r)
 
     def param_init_two_site_double(self) -> None:
         # 暂不支持实数情况加边
@@ -475,9 +500,24 @@ class Graph_MPS_RNN(nn.Module):
         eta_r = torch.ones(shape01r, **self.factory_kwargs_real) * (1/(2**0.5))
         w_r = torch.zeros(shape01c, **self.factory_kwargs_real) * self.iscale
         c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
+        if self.use_tensor:
+            all_in_tensor = len(self.tensor_index)
+            shape3 = (all_in_tensor, self.hilbert_local, self.dcut, self.dcut, self.dcut)
+            T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
 
         if self.params_file is not None:
             params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
+            if "module.params_T.all_sites" in params:
+                # 'module.parm_T.all_sites'
+                nodes = list(self.graph.nodes)
+                if self.graph_before is not None:
+                    tensor_index_before = scan_tensor(self.graph_before)
+                else:
+                    tensor_index_before = self.tensor_index
+                tensor_edge_index = [self.tensor_index.index(element) for element in tensor_index_before]
+                for i_pre, idx in enumerate(tensor_edge_index):
+                    _T = torch.tensor(params["module.params_T.all_sites"][i_pre])
+                    T_r[idx, ..., :_T.shape[-3], :_T.shape[-2], :_T.shape[-1]] = _T
             if "module.params_M.all_sites" in params:
                 # 'module.parm_M.all_sites'
                 nodes = list(self.graph.nodes)
@@ -516,7 +556,7 @@ class Graph_MPS_RNN(nn.Module):
             if "module.params_c.all_sites" in params:
                 # 'module.parm_c.all_sites' is not attribute to "dcut"
                 c_r = params["module.params_c.all_sites"]
-        self.init_params(M_r,v_r,eta_r,w_r,c_r, use_complex=False)
+        self.init_params(M_r,v_r,eta_r,w_r,c_r, use_complex=False,T_r=T_r)
 
     def param_init_two_site(self) -> None:
         if self.params_file is not None:
@@ -622,9 +662,15 @@ class Graph_MPS_RNN(nn.Module):
             h_cat = torch.cat(_h_cat, dim=0)
             # logger.debug((M_cat.shape, M.shape, h_cat.shape))
             # logger.debug(f"M_cat: {M_cat.shape}, h_cat: {h_cat.shape}")
-            h_ud = torch.matmul(M_cat, h_cat)
+            h_ud = torch.matmul(M_cat, h_cat) # (4,dcut,ndcut) (ndcut,nbatch) -> (4,dcut,nbatch)
             # assert torch.allclose(h_ud, h_ud1)
             h_ud = h_ud + v.unsqueeze(-1)
+            if self.use_tensor:
+                if len(list(self.graph.predecessors(str(i_pos)))) == 2:
+                    T_pos = self.tensor_index.index(str(i_pos))
+                    T = self.params_T[T_pos, ...] # (4,dcut,dcut,dcut)
+                    # (4,dcut,dcut1,dcut2) (dcut1,nbatch) (dcut2,nbatch) -> (4,dcut,nbatch)
+                    h_ud = h_ud + torch.einsum("aijk,jn,kn->ain",T,_h_cat[0],_h_cat[1])
             del M_cat, h_cat
         # cal. prob. by h_ud
         _h_ud = h_ud.abs().pow(2)
@@ -734,8 +780,7 @@ class Graph_MPS_RNN(nn.Module):
             index_phi = index.reshape(1, 1, -1).repeat(1, self.dcut, 1)
             h_i = h_ud.gather(0, index_phi).reshape(self.dcut, n_batch)
             # if self.param_dtype == torch.complex128:
-            h_i = h_i.to(torch.complex128)
-            phi_i = w @ h_i + c
+            phi_i = w @ h_i.to(torch.complex128) + c
             phi = phi + torch.angle(phi_i)
 
             # alpha, beta
