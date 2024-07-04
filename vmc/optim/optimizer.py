@@ -10,17 +10,13 @@ import warnings
 import torch
 import torch.distributed as dist
 import numpy as np
-import matplotlib.pyplot as plt
 
 from typing import Callable
 from dataclasses import dataclass
-from memory_profiler import profile
-from line_profiler import LineProfiler
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from vmc.grad import energy_grad, sr_grad
 from vmc.optim._base import BaseVMCOptimizer
@@ -34,6 +30,8 @@ from utils.distributed import (
 from utils import ElectronInfo, Dtype
 from libs.C_extension import onv_to_tensor
 
+# from memory_profiler import profile
+# from line_profiler import LineProfiler
 
 TORCH_VERSION: str = torch.__version__
 if TORCH_VERSION >= "2.0.0":

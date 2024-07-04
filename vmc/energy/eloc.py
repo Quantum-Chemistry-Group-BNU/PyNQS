@@ -2,25 +2,18 @@ from __future__ import annotations
 
 import time
 import torch
+
 from functools import partial
 from typing import Callable, Tuple, List, Union
 from loguru import logger
 from torch import Tensor, nn
 
-from memory_profiler import profile
-from line_profiler import LineProfiler
-from torch.profiler import profile, record_function, ProfilerActivity
-
 from libs.C_extension import get_hij_torch, get_comb_tensor, onv_to_tensor
-from utils import check_para
-from utils.public_function import WavefunctionLUT, get_Num_SinglesDoubles
+from utils.public_function import WavefunctionLUT, get_Num_SinglesDoubles, check_para
 
 print = partial(print, flush=True)
 
-# USE_PROFILE = False
-# STOCHASTIC = True
-# N_SAMPLE = 100
-# SEMI_STOCHASTIC = True
+# from torch.profiler import profile, record_function, ProfilerActivity
 
 def local_energy(
     x: Tensor,
@@ -77,7 +70,7 @@ def local_energy(
             func = partial(_only_sample_space, index=index, alpha=alpha)
         else:
             if reduce_psi:
-                assert (eps >= 0.0 and eps_sample >= 0)
+                assert eps >= 0.0 and eps_sample >= 0
                 func = partial(_reduce_psi, n_sample=eps_sample)
             else:
                 func = _simple
@@ -298,7 +291,9 @@ def _reduce_psi(
         _index1, _count = _counts.unique(sorted=True, return_counts=True)
         # H[n, m]/p[m'] N_m/N_sample
         _prob = _prob.flatten()
-        comb_hij.view(-1)[_index1] = (_count / n_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
+        comb_hij.view(-1)[_index1] = (
+            (_count / n_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
+        )
         # if use_spin_raising:
         #     hij_spin.view(-1)[_index1] = (_count / N_SAMPLE) * hij_spin.flatten()[_index1] / _prob[_index1]
         gt_eps_idx = _index1
@@ -310,8 +305,12 @@ def _reduce_psi(
         gt_eps_idx = torch.where(comb_hij.reshape(-1).abs() >= eps)[0]
 
     rate = gt_eps_idx.size(0) / comb_hij.reshape(-1).size(0) * 100
-    logger.debug(f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}")
-    logger.debug(f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %")
+    logger.debug(
+        f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}"
+    )
+    logger.debug(
+        f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %"
+    )
     psi_x1 = torch.zeros(batch * n_comb, dtype=dtype, device=device)
 
     if comb_x.numel() != 0:

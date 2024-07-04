@@ -9,7 +9,6 @@ import sys
 import warnings
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
 
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -18,7 +17,6 @@ from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from vmc.sample import Sampler
 from utils.distributed import (
@@ -430,29 +428,23 @@ class BaseVMCOptimizer(ABC):
     def _save_model(
         self,
         prefix: str = "VMC",
-        nqs: bool = True,
-        sample: bool = True,
     ) -> None:
-        sample_file, model_file = [prefix + i for i in (".csv", ".pth")]
-        if not self.exact and sample and self.record_sample:
-            self.sampler.frame_sample.to_csv(sample_file)
-
-        if nqs:
-            torch.save(
-                {
-                    # DDP modules
-                    "model": self.model_raw.state_dict(),
-                    "optimizer": self.opt.state_dict(),
-                    # lambda function could not been Serialized
-                    # "lr_scheduler": self.lr_scheduler,
-                    "HF_init": self.HF_init,
-                    "sr": self.sr,
-                    "sampler_param": self.sampler_param,
-                    "h1e": self.h1e,
-                    "h2e": self.h2e,
-                },
-                model_file,
-            )
+        model_file = prefix + ".pth"
+        torch.save(
+            {
+                # DDP modules
+                "model": self.model_raw.state_dict(),
+                "optimizer": self.opt.state_dict(),
+                # lambda function could not been Serialized
+                # "lr_scheduler": self.lr_scheduler,
+                "HF_init": self.HF_init,
+                "sr": self.sr,
+                "sampler_param": self.sampler_param,
+                "h1e": self.h1e,
+                "h2e": self.h2e,
+            },
+            model_file,
+        )
 
     def _plot_figure(
         self,
@@ -462,6 +454,9 @@ class BaseVMCOptimizer(ABC):
     ) -> None:
         if self.rank != 0:
             return None
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
         fig = plt.figure()
         ax = fig.add_subplot(2, 1, 1)
         e = np.array(self.e_lst)

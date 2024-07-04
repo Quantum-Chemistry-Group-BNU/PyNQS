@@ -2,13 +2,10 @@ import os
 import torch
 import numpy as np
 import time
-import random
 import warnings
-import matplotlib.pyplot as plt
 
 from functools import partial
 from typing import List, Tuple, Union
-from pyscf import fci
 from numpy import ndarray
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer
@@ -686,6 +683,7 @@ class CITrain:
         return loss_sum, ovlp_sum
 
     def plot_figure(self, prefix: str = None) -> None:
+        import matplotlib.pyplot as plt
         prefix = prefix if prefix is not None else "CI"
         fig = plt.figure()
 
