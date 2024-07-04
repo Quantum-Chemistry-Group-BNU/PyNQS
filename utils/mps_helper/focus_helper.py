@@ -21,24 +21,29 @@ def Fmps2mpsrnn(
     # params from focus
     mps_params = ctns.toMPSdense()
 
-    params2rnn = []
     # 0, 2, a, b => 0, a, b, 2
     index = torch.tensor([0, 2, 3, 1])
+
+    dtype = dtype.lower()
     assert abs(padding_scale) <= 1e-10
+    assert dtype in ("complex", "real")
+    print(f"padding-scale: {padding_scale}")
+    print(f"param dtype: {dtype}")
+    params2rnn = []
     for param in mps_params:
         param = torch.from_numpy(param)
         # (dcut_l, 4, dcut_r) -> (4, dcut_r, dcut_l)
         # index the hilbert space
         _M_real = param[:, index, :]
         # transpose the martix order
-        _M_real = torch.permute(_M_real, (1, 2, 0))
+        _M_real = torch.permute_copy(_M_real, (1, 2, 0))
+        breakpoint()
         if dtype == "complex":
             # split real-part & imag-part
             _M_real = _M_real.unsqueeze(-1)
             _M_imag = torch.zeros_like(_M_real)
             _M = torch.cat([_M_real, _M_imag], dim=-1)
         else:
-            print("the parameters are real!")
             _M = _M_real
         mask = _M.flatten() == 0.0
         _M.view(-1)[mask] = torch.rand(mask.sum(), dtype=torch.double) * padding_scale
@@ -73,8 +78,8 @@ def Fmps2mpsrnn(
 if __name__ == "__main__":
     Fmps2mpsrnn(
         input_file="./rcanon_isweep49.bin",
-        output_file="./H50_focus_dcu50_params-1e-12.pth",
+        output_file="./H50_focus_dcu50_params-real.pth",
         dcut=50,
-        dtype="complex",
+        dtype="real",
         padding_scale=0,
     )

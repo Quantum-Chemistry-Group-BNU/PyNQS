@@ -78,7 +78,7 @@ class Sampler:
         therm_step: int = 2000,
         debug_exact: bool = False,
         seed: int = 100,
-        # record_sample: bool = False,
+        record_sample: bool = False,
         max_memory: float = 4,
         alpha: float = 0.25,
         dtype=torch.double,
@@ -902,8 +902,6 @@ class Sampler:
             + f"    Therm step: {self.therm_step}\n"
             + f"    Exact sampling: {self.debug_exact}\n"
             + f"    Given CI: {self.ci_space.size(0):.3E}\n"
-            
-            + f"    Record the sample: {self.record_sample}\n"
             + f"    Max unique sample: {self.max_unique_sample:3E}\n"
             + f"    Max sample: {self.max_n_sample:3E}\n"
             + f"    use-same-tree: {self.use_same_tree}\n"

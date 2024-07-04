@@ -166,7 +166,6 @@ class BaseVMCOptimizer(ABC):
             only_sample=only_sample,
             **self.sampler_param,
         )
-        self.record_sample = self.sampler_param.get("record_sample", False)
         self.only_sample = only_sample
 
         # add coeff <S-S+> in Hamiltonian
