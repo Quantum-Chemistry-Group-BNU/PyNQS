@@ -8,7 +8,16 @@ see: https://gitlab.com/zhendongli2008/ordering_and_graph
 from .fielder import orbitalOrdering
 from .greedy import greedyOrdering
 
-from .nxutils import displayGraphHighlight, fromOrderToDiGraph, fromKijToGraph, addEdgesByGreedySearch, checkgraph, num_count, scan_tensor
+from .nxutils import (
+    displayGraphHighlight,
+    fromOrderToDiGraph,
+    fromKijToGraph,
+    addEdgesByGreedySearch,
+    checkgraph,
+    num_count,
+    scan_tensor,
+    check_tesnor,
+)
 
 __all__ = [
     "orbitalOrdering",
@@ -18,6 +27,7 @@ __all__ = [
     "fromKijToGraph",
     "addEdgesByGreedySearch",
     "checkgraph",
+    "check_tesnor",
     "num_count",
     "scan_tensor",
 ]

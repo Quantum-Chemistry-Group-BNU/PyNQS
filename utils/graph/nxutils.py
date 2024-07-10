@@ -169,7 +169,7 @@ def checkgraph(graph1: DiGraph, graph2: DiGraph) -> list[list[int]]:
     graph1_node = list(graph1.nodes)
     graph2_node = list(graph2.nodes)
     assert graph1_node == graph2_node
-    add_edge = []
+    add_edge: dict[list[int]] = {}
     for site in graph1_node:
         graph1_pre_site = list(graph1.predecessors(site))
         graph2_pre_site = list(graph2.predecessors(site))
@@ -180,19 +180,29 @@ def checkgraph(graph1: DiGraph, graph2: DiGraph) -> list[list[int]]:
         # print(site, "=small=>", graph1_pre_site)
         edge_index = [graph2_pre_site.index(element) for element in graph1_pre_site]
         # print(edge_index)
-        add_edge.append(edge_index)  # order along 1d order(nodes' order)
+        add_edge[site] = edge_index  # order along 1d order(nodes' order)
     return add_edge
 
 
-def scan_tensor(graph: DiGraph):
-    '''
-    return the the node of graph which can have tensor term 
-    '''
+def scan_tensor(graph: DiGraph, max_degree: int = 2):
+    """
+    return the the node of graph which can have tensor term
+    """
     graph_node = list(graph.nodes)
     tensor_index = []
     for site in graph_node:
-        if len(list(graph.predecessors(site))) == 2:
+        if len(list(graph.predecessors(site))) > 1 and len(list(graph.predecessors(site))) <= max_degree:
             tensor_index.append(site)
     return tensor_index
 
 
+def check_tesnor(graph: DiGraph):
+    """
+    check this graph can use non-cmpr-tensor or not
+    """
+    graph_node = list(graph.nodes)
+    result = True
+    for site in graph_node:
+        if len(list(graph.predecessors(site))) >= 2:
+            result = False
+    return result

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import logging
 import torch
 import numpy as np
@@ -16,6 +17,7 @@ def Rmps2mpsrnn(
     reorder_index: list[int] = None,
     dtype: str = "complex",
     bond_dim_procedure=None,
+    debug: bool = False,
 ):
     """
     INPUT:
@@ -68,12 +70,40 @@ def Rmps2mpsrnn(
     # save params from mps
     params2rnn_1site = []
     for mt in p_mps:
-        # print((mt.array).shape)
         params2rnn_1site.append(torch.tensor(mt.array))
-    assert len(params2rnn_1site) == spatial_norbs * 2
 
+    print(f"The last energy expectation is", p_mps.expectation(mpo))
+    print(f"Input Fci-dump=file is {fci_dump_file}")
+    torch.save(params2rnn_1site, output_file)
+
+    if debug:
+        print(f"Params2rnn_1site-file saved in {output_file}")
+        torch.save(torch.tensor(p_mps.todense()), "mps.pth")
+        torch.save(torch.tensor(p_mps.expectation(mpo)), "mpo.pth")
+
+    if not debug:  # obtain mpsrnn's parameter file directly
+        mps2mpsrnn(
+            mps_file=output_file,
+            output_file=output_file,
+            dtype=dtype,
+            reorder_index=reorder_index,
+            nbas=nbas,
+            bond_dim_init=bond_dim_init,
+        )
+
+
+def mps2mpsrnn(
+    mps_file,
+    output_file: str,
+    nbas: int,
+    bond_dim_init: int,
+    dtype: str = "complex",
+    reorder_index: list[int] = None,
+    use_LCF: bool = False,
+):
+    params2rnn_1site = torch.load(mps_file)
     # transfer to 2site
-    params2rnn_2site = []
+    params2rnn_2site_ = []
     for site_num in range(0, len(params2rnn_1site), 2):
         M1 = params2rnn_1site[site_num]  # (dcut0,2,dcut1)
         M2 = params2rnn_1site[site_num + 1]  # (dcut1,2,dcut2)
@@ -93,8 +123,29 @@ def Rmps2mpsrnn(
         # a(renormalizer) -> b(PyNQS), b(renormalizer) -> a(PyNQS)
         index = torch.tensor([0, 2, 1, 3])
         M = torch.index_select(_M, 1, index)
-        params2rnn_2site.append(M)
-    
+        params2rnn_2site_.append(np.array(M))
+
+    if use_LCF:
+        from focus_utils.mps_simple import checkLCF, checkRCF, getLCFStateFromRCF
+
+        params2rnn_2site_2 = params2rnn_2site_
+        checkRCF(params2rnn_2site_)
+        print("The RCF mps parameter's shape is")
+        for site, M in enumerate(params2rnn_2site_):
+            print("site", site, "==>", M.shape)
+        params2rnn_2site_ = getLCFStateFromRCF(params2rnn_2site_, 0)
+        checkLCF(params2rnn_2site_)
+        print("The LCF mps parameter's shape is")
+        for site, M in enumerate(params2rnn_2site_):
+            print("site", site, "==>", M.shape)
+        from focus_utils.mps_simple import overlap
+
+        overlap(params2rnn_2site_, params2rnn_2site_2)
+
+    params2rnn_2site = []
+    for _M in params2rnn_2site_:
+        params2rnn_2site.append(torch.tensor(_M))
+
     dtype = dtype.lower()
     assert dtype in ("complex", "real")
     if dtype == "complex":
@@ -120,7 +171,7 @@ def Rmps2mpsrnn(
     params2rnn = params2rnn[1:] + params2rnn[:1]
 
     # save as checkpoint file
-    param_w, param_c = add_phase_params(spatial_norbs, bond_dim_init, reorder_index[-1])
+    param_w, param_c = add_phase_params(nbas, bond_dim_init, reorder_index[-1])
 
     # see: vmc/optim/_base.py checkpoint, DDP module
     torch.save(
@@ -135,10 +186,7 @@ def Rmps2mpsrnn(
     )
 
     # save mps wavefunction (in tensor product order(ci spacer(fock spacr)))
-    # torch.save(torch.tensor(p_mps.todense()), "mps.pth")
-    # torch.save(torch.tensor(p_mps.expectation(mpo)), "mpo.pth")
-    print(f"The last energy expectation is", p_mps.expectation(mpo))
-    print(f"Input Fci-dump=file is {fci_dump_file}")
+
     print(f"Save params. in {output_file}")
 
 
@@ -180,7 +228,7 @@ if __name__ == "__main__":
     # E = -3.236066279892  2S+1 = 1.0000000
     import networkx as nx
 
-    graph_index = list(map(int, nx.read_graphml("./graph/H6-2-maxdes0.graphml").adj))
+    graph_index = list(map(int, nx.read_graphml("./graph/H6-maxdes0.graphml").adj))
     M = 30
     Rmps2mpsrnn(
         fci_dump_file="H6-fcidump.txt",
@@ -199,5 +247,16 @@ if __name__ == "__main__":
         ],
         reorder_index=graph_index,
         dtype="complex",
+        output_file="params_1site.pth",
+        debug=True,
+    )
+    mps2mpsrnn(
+        mps_file="params_1site.pth",
+        nbas=6,
+        bond_dim_init=M,
+        reorder_index=graph_index,
+        dtype="complex",
         output_file="params.pth",
+        # use_LCF = True,
+        use_LCF=False,
     )
