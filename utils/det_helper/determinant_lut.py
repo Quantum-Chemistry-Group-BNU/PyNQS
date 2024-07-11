@@ -66,8 +66,9 @@ def get_special_fci_space(
     # check overflow
     if not (np.all(m1 > 0) and np.all(m2 > 0)):
         import warnings
-
         warnings.warn(f"comb number overflow int64")
+        m1 = np.zeros_like(k1, dtype=np.int64)
+        m2 = np.zeros_like(k2, dtype=np.int64)
 
     return m1 * m2
 

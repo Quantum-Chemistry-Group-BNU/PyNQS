@@ -10,17 +10,13 @@ import warnings
 import torch
 import torch.distributed as dist
 import numpy as np
-import matplotlib.pyplot as plt
 
 from typing import Callable
 from dataclasses import dataclass
-from memory_profiler import profile
-from line_profiler import LineProfiler
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from vmc.grad import energy_grad, sr_grad
 from vmc.optim._base import BaseVMCOptimizer
@@ -34,6 +30,8 @@ from utils.distributed import (
 from utils import ElectronInfo, Dtype
 from libs.C_extension import onv_to_tensor
 
+# from memory_profiler import profile
+# from line_profiler import LineProfiler
 
 TORCH_VERSION: str = torch.__version__
 if TORCH_VERSION >= "2.0.0":
@@ -76,8 +74,10 @@ class VMCOptimizer(BaseVMCOptimizer):
         MAX_AD_DIM: int = -1,
         kfac: KFACPreconditioner = None,  # type: ignore
         use_clip_grad: bool = False,
-        max_grad_norm: float = 0.01,
+        max_grad_norm: float = 1.0,
+        max_grad_value: float = 1.0,
         start_clip_grad: int = None,
+        clip_grad_method: str = "l2",
         clip_grad_scheduler: Callable[[int], float] = None,
         use_spin_raising: bool = False,
         spin_raising_coeff: float = 1.0,
@@ -107,7 +107,9 @@ class VMCOptimizer(BaseVMCOptimizer):
             MAX_AD_DIM=MAX_AD_DIM,
             kfac=kfac,
             use_clip_grad=use_clip_grad,
+            clip_grad_method=clip_grad_method,
             max_grad_norm=max_grad_norm,
+            max_grad_value=max_grad_value,
             clip_grad_scheduler=clip_grad_scheduler,
             start_clip_grad=start_clip_grad,
             use_spin_raising=use_spin_raising,

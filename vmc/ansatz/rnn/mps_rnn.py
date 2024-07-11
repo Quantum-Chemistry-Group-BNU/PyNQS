@@ -26,8 +26,8 @@ from utils.distributed import get_rank, get_world_size, synchronize
 
 import torch.autograd.profiler as profiler
 
-LTensor = NewType("LTensor", list[Tensor])
-MTensor = NewType("MTensor", list[LTensor])
+LTensor = NewType("LTensor", List[Tensor])
+MTensor = NewType("MTensor", List[LTensor])
 
 
 class HiddenStates:

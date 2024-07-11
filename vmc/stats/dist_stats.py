@@ -1,10 +1,12 @@
 """
 torch.distributed stats 'mean', 'var'
 """
+from __future__ import annotations
 
 import torch
 
 from torch import Tensor
+from typing import Tuple
 
 from utils.distributed import (
     all_gather_tensor,
@@ -46,7 +48,7 @@ def dist_var(
     x: Tensor,
     prob: Tensor = None,
     world_size: int = 1,
-) -> tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor]:
     """
     Compute tensors variance using 'torch.distributed'
     """
@@ -64,7 +66,7 @@ def dist_stats(
     prob: Tensor = None,
     counts: int = None,
     world_size: int = 1,
-) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """
     return 'mean', 'var', 'sd' , 'se'
     """

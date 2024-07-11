@@ -9,7 +9,6 @@ import sys
 import warnings
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
 
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -18,7 +17,6 @@ from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from vmc.sample import Sampler
 from utils.distributed import (
@@ -109,8 +107,10 @@ class BaseVMCOptimizer(ABC):
         MAX_AD_DIM: int = -1,
         kfac: KFACPreconditioner = None,  # type: ignore
         use_clip_grad: bool = False,
-        max_grad_norm: float = 0.01,
-        start_clip_grad: int = None,
+        clip_grad_method: str = "L2",
+        max_grad_norm: float = 1.0,
+        max_grad_value: float = 1.0,
+        start_clip_grad: int = 0,
         clip_grad_scheduler: Callable[[int], float] = None,
         use_spin_raising: bool = False,
         spin_raising_coeff: float = 1.0,
@@ -168,7 +168,6 @@ class BaseVMCOptimizer(ABC):
             only_sample=only_sample,
             **self.sampler_param,
         )
-        self.record_sample = self.sampler_param.get("record_sample", False)
         self.only_sample = only_sample
 
         # add coeff <S-S+> in Hamiltonian
@@ -194,9 +193,17 @@ class BaseVMCOptimizer(ABC):
         if use_clip_grad:
             if start_clip_grad is None or start_clip_grad >= max_iter:
                 raise ValueError(f"start-clip-grad:{start_clip_grad} must be in (0, {max_iter})")
-        self.start_clip_grad: int = start_clip_grad
-        self.max_grad_norm = max_grad_norm
-        self.initial_g0 = max_grad_norm
+            clip_grad_method = clip_grad_method.capitalize()
+            if clip_grad_method not in ("L2", "Value"):
+                raise ValueError(f"clip_grad_method: {clip_grad_method} excepted in ('L2', 'Value')")
+            self.clip_grad_method = clip_grad_method
+        self.start_clip_grad = start_clip_grad
+        
+        if self.clip_grad_method == "L2":
+            self.initial_g0 = max_grad_norm
+            self.max_grad_norm = max_grad_norm
+        elif self.clip_grad_method == "Value":
+            self.initial_g0 = max_grad_value
         self.clip_grad_scheduler = clip_grad_scheduler
 
         if self.rank == 0:
@@ -205,7 +212,8 @@ class BaseVMCOptimizer(ABC):
             s += f"The number param of NQS model: {params_num}\n"
             s += f"Optimizer:\n{self.opt}\n"
             if self.use_clip_grad:
-                s += f"Clip-grad: g0: {self.max_grad_norm} "
+                s += f"Clip-grad method: {self.clip_grad_method} "
+                s += f"g0: {self.initial_g0} "
                 s += f"after {self.start_clip_grad}-th iteration\n"
             if self.use_spin_raising:
                 s += f"penalty S-S+ coeff: {self.spin_raising_coeff:.5f}, "
@@ -328,6 +336,15 @@ class BaseVMCOptimizer(ABC):
             del x1, x2
 
     def clip_grad(self, epoch: int) -> None:
+        breakpoint()
+        if self.clip_grad_method == "L2":
+            self._clip_grad_L2(epoch)
+        elif self.clip_grad_method == "Value":
+            self._clip_grad_value(epoch)
+        else:
+            raise NotImplementedError
+
+    def _clip_grad_L2(self, epoch: int) -> None:
         """
         clip model grad use 2-norm
         """
@@ -341,17 +358,36 @@ class BaseVMCOptimizer(ABC):
         if self.use_clip_grad and epoch > self.start_clip_grad:
             x = nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=g0, foreach=True)
             if self.rank == 0:
-                logger.info(f"Clip-grad, g: {x:.4E}, g0: {g0:4E}", master=True)
+                logger.info(f"Clip-grad, g: {x:.4E}, L2-g0: {g0:4E}", master=True)
+
+    def _clip_grad_value(self, epoch: int) -> None:
+        """
+        clip model grad use max
+        """
+        if self.lr_scheduler is not None:
+            epoch = self.lr_scheduler.last_epoch
+        # change max clip-grad
+        if self.clip_grad_scheduler is not None:
+            g0 = self.clip_grad_scheduler(epoch) * self.initial_g0
+        else:
+            g0 = self.initial_g0
+        if self.use_clip_grad and epoch > self.start_clip_grad:
+            nn.utils.clip_grad_value_(self.model.parameters(), clip_value=g0, foreach=True)
+            if self.rank == 0:
+                logger.info(f"Clip-grad, max-g0: {g0:4E}", master=True)
+
 
     def update_param(self, epoch: int) -> None:
         """
         update model param, and adjust learning rate
         """
-        # TODO: synchronize
         if epoch < self.max_iter - 1:
             if self.kfac is not None:
                 self.kfac.step()
+            # x = list(self.model.parameters())[0].detach().clone()
             self.opt.step()
+            # x1 = list(self.model.parameters())[0].detach().clone()
+            # logger.info(f"diff: {(x - x1).norm()}")
             self.opt.zero_grad()
             if self.lr_scheduler is not None:
                 self.lr_scheduler.step()
@@ -430,29 +466,23 @@ class BaseVMCOptimizer(ABC):
     def _save_model(
         self,
         prefix: str = "VMC",
-        nqs: bool = True,
-        sample: bool = True,
     ) -> None:
-        sample_file, model_file = [prefix + i for i in (".csv", ".pth")]
-        if not self.exact and sample and self.record_sample:
-            self.sampler.frame_sample.to_csv(sample_file)
-
-        if nqs:
-            torch.save(
-                {
-                    # DDP modules
-                    "model": self.model_raw.state_dict(),
-                    "optimizer": self.opt.state_dict(),
-                    # lambda function could not been Serialized
-                    # "lr_scheduler": self.lr_scheduler,
-                    "HF_init": self.HF_init,
-                    "sr": self.sr,
-                    "sampler_param": self.sampler_param,
-                    "h1e": self.h1e,
-                    "h2e": self.h2e,
-                },
-                model_file,
-            )
+        model_file = prefix + ".pth"
+        torch.save(
+            {
+                # DDP modules
+                "model": self.model_raw.state_dict(),
+                "optimizer": self.opt.state_dict(),
+                # lambda function could not been Serialized
+                # "lr_scheduler": self.lr_scheduler,
+                "HF_init": self.HF_init,
+                "sr": self.sr,
+                "sampler_param": self.sampler_param,
+                "h1e": self.h1e,
+                "h2e": self.h2e,
+            },
+            model_file,
+        )
 
     def _plot_figure(
         self,
@@ -462,6 +492,9 @@ class BaseVMCOptimizer(ABC):
     ) -> None:
         if self.rank != 0:
             return None
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
         fig = plt.figure()
         ax = fig.add_subplot(2, 1, 1)
         e = np.array(self.e_lst)

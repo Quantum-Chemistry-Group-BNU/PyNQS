@@ -8,18 +8,18 @@ import torch.distributed as dist
 import tempfile
 import warnings
 import numpy as np
-import pandas as pd
+# import pandas as pd
 
 from functools import partial
 from typing import Callable, Tuple, List, Union
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
-from pandas import DataFrame
+# from pandas import DataFrame
 from scipy import special
 
-from memory_profiler import profile
-from line_profiler import LineProfiler
+# from memory_profiler import profile
+# from line_profiler import LineProfiler
 
 from vmc.energy import total_energy
 from vmc.stats import operator_statistics
@@ -65,7 +65,7 @@ class Sampler:
     METHOD_SAMPLE = ("MCMC", "AR", "RESTRICTED")
     n_accept: int
     str_full: List[str]
-    frame_sample: DataFrame
+    # frame_sample: DataFrame
 
     def __init__(
         self,
@@ -144,10 +144,10 @@ class Sampler:
         self.fci_size = n1 * n2
         if self.debug_exact and self.ci_space.size(0) != self.fci_size:
             raise ValueError(f"Dim of FCI space is {self.fci_size} != {self.ci_space.size(0)}")
-        self.record_sample = record_sample
-        if self.record_sample:
-            self.str_full = state_to_string(self.ci_space, self.sorb)
-            self.frame_sample = pd.DataFrame({"full_space": self.str_full})
+        # self.record_sample = record_sample
+        # if self.record_sample:
+        #     self.str_full = state_to_string(self.ci_space, self.sorb)
+        #     self.frame_sample = pd.DataFrame({"full_space": self.str_full})
         self.time_sample = 0
 
         # unique sample, apply to AR sample, about all-rank, not single-rank
@@ -902,8 +902,6 @@ class Sampler:
             + f"    Therm step: {self.therm_step}\n"
             + f"    Exact sampling: {self.debug_exact}\n"
             + f"    Given CI: {self.ci_space.size(0):.3E}\n"
-            
-            + f"    Record the sample: {self.record_sample}\n"
             + f"    Max unique sample: {self.max_unique_sample:3E}\n"
             + f"    Max sample: {self.max_n_sample:3E}\n"
             + f"    use-same-tree: {self.use_same_tree}\n"

@@ -171,11 +171,11 @@ def interface(
     fci_coeff: bool = False,
     cisd_coeff: bool = False,
     model_type: str = "chem",
-    hubbard_info: tuple = None,
+    hubbard_info: Tuple = None,
     localized_orb: bool = False,
     localized_method: str = "lowdin",
     fci_dump_file: str = None,
-) -> tuple[int, int, list[float], ndarray, ndarray, any]:
+) -> Tuple[int, int, List[float], ndarray, ndarray, any]:
     """
     PYSCF interface
 
