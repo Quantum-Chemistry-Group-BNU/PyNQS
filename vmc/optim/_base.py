@@ -34,9 +34,7 @@ else:
 try:
     from kfac.preconditioner import KFACPreconditioner
 except ImportError:
-    warnings.warn(
-        "KFAC not been found, see: https://github.com/gpauloski/kfac-pytorch", UserWarning
-    )
+    warnings.warn("KFAC not been found, see: https://github.com/gpauloski/kfac-pytorch", UserWarning)
     KFACPreconditioner = None
 
 
@@ -198,7 +196,7 @@ class BaseVMCOptimizer(ABC):
                 raise ValueError(f"clip_grad_method: {clip_grad_method} excepted in ('L2', 'Value')")
             self.clip_grad_method = clip_grad_method
         self.start_clip_grad = start_clip_grad
-        
+
         if self.clip_grad_method == "L2":
             self.initial_g0 = max_grad_norm
             self.max_grad_norm = max_grad_norm
@@ -336,7 +334,6 @@ class BaseVMCOptimizer(ABC):
             del x1, x2
 
     def clip_grad(self, epoch: int) -> None:
-        breakpoint()
         if self.clip_grad_method == "L2":
             self._clip_grad_L2(epoch)
         elif self.clip_grad_method == "Value":
@@ -375,7 +372,6 @@ class BaseVMCOptimizer(ABC):
             nn.utils.clip_grad_value_(self.model.parameters(), clip_value=g0, foreach=True)
             if self.rank == 0:
                 logger.info(f"Clip-grad, max-g0: {g0:4E}", master=True)
-
 
     def update_param(self, epoch: int) -> None:
         """
@@ -580,9 +576,7 @@ class GD(Optimizer):
                 if p.grad is not None:
                     params_with_grad.append(p)
                     d_p_list.append(p.grad)
-            _gd_update(
-                params_with_grad, d_p_list, lr=group["lr"], weight_decay=group["weight_decay"]
-            )
+            _gd_update(params_with_grad, d_p_list, lr=group["lr"], weight_decay=group["weight_decay"])
 
 
 def _gd_update(params: List[Tensor], grads: List[Tensor], lr: float, weight_decay: float):
