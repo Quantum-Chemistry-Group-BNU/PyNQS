@@ -99,6 +99,7 @@ class HiddenStates:
 
     def __setitem__(self, index, value: Tensor) -> None:
         i = index
+        assert self.hTensor[i].shape == value.shape
         self.hTensor[i] = value
 
     @property
@@ -299,7 +300,7 @@ class Graph_MPS_RNN(nn.Module):
             raise NotImplementedError(f"Please use the 2-sites mode")
 
         # Graph
-        self.h_boundary = torch.ones((self.hilbert_local, self.dcut), device=self.device, dtype=self.param_dtype)
+        self.h_boundary = torch.ones(self.dcut, device=self.device, dtype=self.param_dtype)
         if graph_before is not None:
             self.edge_order = checkgraph(graph_before, graph)
         else:
@@ -341,9 +342,8 @@ class Graph_MPS_RNN(nn.Module):
         self.rank_independent_sampling = rank_independent_sampling
 
         # 横向边界条件（for h）
-        self.left_boundary = torch.ones(
-            (self.hilbert_local, self.dcut), device=self.device, dtype=self.param_dtype
-        )  # 是按照一维链排列的最左端边界
+        self.left_boundary = torch.ones(self.dcut, device=self.device, dtype=self.param_dtype)
+        # 是按照一维链排列的最左端边界
         # 初始化部分
         self.factory_kwargs = {"device": self.device, "dtype": self.param_dtype}
         self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
@@ -768,7 +768,7 @@ class Graph_MPS_RNN(nn.Module):
         target: Tensor,
         n_batch: int,
         i_chain: int,  # 计算到第i个site（计算的序号而非采样的序号，此处i_site就是0到nqubits//2依次排列）
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         # 先查出采样的第i个元素是第i_pos个空间轨道
         # i_pos = list(self.graph.nodes)[i_site]
         i_pos = self.graph_nodes[i_chain]
@@ -784,112 +784,90 @@ class Graph_MPS_RNN(nn.Module):
 
         if i_chain == 0:
             M = self.params_M[-1, ...]  # 如果是第一个点的话，没有h，取边界条件h和最后一列M  # (4, dcut, dcut)
-            if not USE_EXPAND:
-                h_i_cond = (torch.unsqueeze(self.left_boundary, -1)).repeat(1, 1, n_batch)  # (4, dcut, nbatch)
-                q_i = torch.zeros(1, self.dcut, n_batch, device=self.device, dtype=torch.int64)  # 索引 # (1, dcut, nbatch)
-                h_i = h_i_cond.gather(0, q_i).reshape(self.dcut, n_batch)  # (dcut, nbatch)
-            else:
-                h_i = self.left_boundary.unsqueeze(-1)[0].expand(self.dcut, n_batch)
+            h_i = self.left_boundary.unsqueeze(-1).expand(self.dcut, n_batch)
             h_ud = torch.matmul(M, h_i) + v.unsqueeze(-1)  # (4, dcut, nbatch)
         else:
             M = self.params_M[_M_pos - len(pos) : _M_pos, ...]
             _M_cat = []
             _h_cat = []
             for j, _pos in enumerate(pos):
-                h_j_cond = h[int(_pos), ...]  # (4, dcut, nbatch)
-                _start = 2 * list(self.graph).index(_pos)
-                q_j = self.state_to_int(target[:, _start : _start + 2], sites=2)  # (nbatch, 1)
-                if not USE_EXPAND:
-                    q_j = (q_j.reshape(1, 1, -1)).repeat(1, self.dcut, 1)  # (1, dcut, nbatch)
-                else:
-                    q_j = q_j.reshape(1, 1, -1).expand(1, self.dcut, n_batch)
-                h_j = h_j_cond.gather(0, q_j).reshape(self.dcut, n_batch)  # (dcut, nbatch)
+                h_j = h[int(_pos), ...]  # (dcut, nbatch)
                 M_j = M[j, ...]  # (4, dcut, dcut)
-                # h_ud = h_ud + torch.matmul(M_j, h_j)  # (4, dcut, nbatch)
                 _M_cat.append(M_j)
                 _h_cat.append(h_j)
 
             M_cat = torch.cat(_M_cat, dim=-1)
             h_cat = torch.cat(_h_cat, dim=0)
-            h_ud = torch.matmul(M_cat, h_cat)
-
-            # logger.debug((M_cat.shape, M.shape, h_cat.shape))
-            # logger.debug(f"M_cat: {M_cat.shape}, h_cat: {h_cat.shape}")
-            # (4,dcut,ndcut) (ndcut,nbatch) -> (4,dcut,nbatch)
-            # assert torch.allclose(h_ud, h_ud1)
-            h_ud = h_ud + v.unsqueeze(-1)
-            if self.use_tensor:
-                if len(list(self.graph.predecessors(str(i_pos)))) >= 2 and self.max_degree >= len(
-                    list(self.graph.predecessors(str(i_pos)))
-                ):
-                    if self.tensor_cmpr:
-                        params_K_list: List[Tensor] = [0] * len(self.tensor_index)
-                        params_U_list: List[Tensor] = [0] * len(self.tensor_index)
-
-                        shape4, begin_K, end_K = self.shape4_dict[str(i_pos)]
-                        shape5, begin_U, end_U = self.shape5_dict[str(i_pos)]
-                        K = self.params_K[0][..., begin_K:end_K].view(shape4)  # (4,dcut_cmpr,dcut_cmpr,...)
-                        U = self.params_U[0][..., begin_U:end_U].view(shape5)  # (4,dcut,dcut_cmpr,degree_pred)
-                        
-                        if False:
-                            indices = 'abcdefghijklmnopqrstuvwxyz'
-                            indices2 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-                            _U_lst = []
-                            for i in range(U.shape[-1]):
-                                _U_lst.append(U[...,i])
+            # (4,dcut,ndcut) -> (ndcut,nbatch) -> (4,dcut,nbatch)
+            h_ud = torch.matmul(M_cat, h_cat) + v.unsqueeze(-1)
+            if (self.use_tensor and 
+                len(list(self.graph.predecessors(str(i_pos)))) >= 2 and
+                self.max_degree >= len(list(self.graph.predecessors(str(i_pos)))
+                )):
+                if self.tensor_cmpr:
+                    shape4, begin_K, end_K = self.shape4_dict[str(i_pos)]
+                    shape5, begin_U, end_U = self.shape5_dict[str(i_pos)]
+                    K = self.params_K[0][..., begin_K:end_K].view(shape4)  # (4,dcut_cmpr,dcut_cmpr,...)
+                    U = self.params_U[0][..., begin_U:end_U].view(shape5)  # (4,dcut,dcut_cmpr,degree_pred)
+                    if False:
+                        indices = 'abcdefghijklmnopqrstuvwxyz'
+                        indices2 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                        _U_lst = []
+                        for i in range(U.shape[-1]):
+                            _U_lst.append(U[...,i])
         
-                            K_indices = indices[:len(K.shape)]
-                            U_indices = []
-                            for i in range(U.shape[-1]):
-                                U_indices.append('a' + indices2[i] + indices[1+i])
-                            h_indices = []
-                            for i in range(1, U.shape[-1]):
-                                h_indices.append(indices2[i] + 'z')
-                            out_index = 'aAz'
-                            equation = f"{K_indices},{','.join(U_indices)},{','.join(h_indices)}->{out_index}"
-                            # equation
-                            _h_ud = torch.einsum(equation, K,*_U_lst,*_h_cat)
-                        if self.auto_contract:
-                            indices = 'abcdefghijklmnopqrstuvwxyz'
-                            K_indices = indices[:len(K.shape)]
-                            U_indices = []
-                            _U_cat = []
-                            for i_tensor in range(1, U.shape[-1]):
-                                # (4,dcut,dcut_cmpr) (dcut,nbatch) -> (4,dcut_cmpr,nbatch)
-                                _U_cat.append(torch.einsum("adc,dn->acn", U[..., i_tensor], _h_cat[i_tensor - 1]))
-                            for i in range(1,U.shape[-1]):
-                                U_indices.append('a' + indices[i+1] + 'z')
-                            equation = f"{K_indices},aAb,{','.join(U_indices)}->aAz"
-                            _h_ud = torch.einsum(equation, K, U[...,0], *_U_cat)
-                        else:
-                            # contract K with U output
-                            # (4,dcut_cmpr,dcut_cmpr,...) (4,dcut,dcut_cmpr) -> (4,dcut,dcut_cmpr,...)
-                            K = torch.einsum("ac...,adc->ad...", K, U[..., 0])
-                            # contract U with h (because dcut_cmpr is smaller than dcut)
+                        K_indices = indices[:len(K.shape)]
+                        U_indices = []
+                        for i in range(U.shape[-1]):
+                            U_indices.append('a' + indices2[i] + indices[1+i])
+                        h_indices = []
+                        for i in range(1, U.shape[-1]):
+                            h_indices.append(indices2[i] + 'z')
+                        out_index = 'aAz'
+                        equation = f"{K_indices},{','.join(U_indices)},{','.join(h_indices)}->{out_index}"
+                        # equation
+                        _h_ud = torch.einsum(equation, K,*_U_lst,*_h_cat)
+                    if self.auto_contract:
+                        indices = 'abcdefghijklmnopqrstuvwxyz'
+                        K_indices = indices[:len(K.shape)]
+                        U_indices = []
+                        _U_cat = []
+                        for i_tensor in range(1, U.shape[-1]):
                             # (4,dcut,dcut_cmpr) (dcut,nbatch) -> (4,dcut_cmpr,nbatch)
-                            _U_cat = torch.einsum("adc,dn->acn", U[..., 1], _h_cat[0])
-                            # (4,dcut,dcut_cmpr,...) (4,dcut_cmpr,nbatch) -> (4,dcut,...,nbatch)
-                            _h_ud = torch.einsum("adc...,acn->ad...n", K, _U_cat)
-                            for i_tensor in range(2, U.shape[-1]):
-                                # (4,dcut,dcut_cmpr) (dcut,nbatch) -> (4,dcut_cmpr,nbatch)
-                                _U_cat = torch.einsum("adc,dn->acn", U[..., i_tensor], _h_cat[i_tensor - 1])
-                                # contract Uh with KU
-                                # (4,dcut,dcut_cmpr,...,nbatch) (4,dcut_cmpr,nbatch) -> (4,dcut,...,nbatch)
-                                _h_ud = torch.einsum("adc...n,acn->ad...n", _h_ud, _U_cat)
+                            _U_cat.append(torch.einsum("adc,dn->acn", U[..., i_tensor], _h_cat[i_tensor - 1]))
+                        for i in range(1,U.shape[-1]):
+                            U_indices.append('a' + indices[i+1] + 'z')
+                        equation = f"{K_indices},aAb,{','.join(U_indices)}->aAz"
+                        _h_ud = torch.einsum(equation, K, U[...,0], *_U_cat)
                     else:
-                        T_pos = self.tensor_index.index(str(i_pos))
-                        T = self.params_T[T_pos, ...]  # (4,dcut,dcut,dcut)
-                        # construct T & h0, h1
-                        # (4,dcut,dcut1,dcut2) (dcut1,nbatch) (dcut2,nbatch) -> (4,dcut,nbatch)
-                        _h_ud = torch.einsum("aijk,jn,kn->ain", T, _h_cat[0], _h_cat[1])
-                    h_ud = h_ud + _h_ud
+                        # contract K with U output
+                        # (4,dcut_cmpr,dcut_cmpr,...) (4,dcut,dcut_cmpr) -> (4,dcut,dcut_cmpr,...)
+                        K = torch.einsum("ac...,adc->ad...", K, U[..., 0])
+                        # contract U with h (because dcut_cmpr is smaller than dcut)
+                        # (4,dcut,dcut_cmpr) (dcut,nbatch) -> (4,dcut_cmpr,nbatch)
+                        _U_cat = torch.einsum("adc,dn->acn", U[..., 1], _h_cat[0])
+                        # (4,dcut,dcut_cmpr,...) (4,dcut_cmpr,nbatch) -> (4,dcut,...,nbatch)
+                        _h_ud = torch.einsum("adc...,acn->ad...n", K, _U_cat)
+                        for i_tensor in range(2, U.shape[-1]):
+                            # (4,dcut,dcut_cmpr) (dcut,nbatch) -> (4,dcut_cmpr,nbatch)
+                            _U_cat = torch.einsum("adc,dn->acn", U[..., i_tensor], _h_cat[i_tensor - 1])
+                            # contract Uh with KU
+                            # (4,dcut,dcut_cmpr,...,nbatch) (4,dcut_cmpr,nbatch) -> (4,dcut,...,nbatch)
+                            _h_ud = torch.einsum("adc...n,acn->ad...n", _h_ud, _U_cat)
+                else:
+                    T_pos = self.tensor_index.index(str(i_pos))
+                    T = self.params_T[T_pos, ...]  # (4,dcut,dcut,dcut)
+                    # construct T & h0, h1
+                    # (4,dcut,dcut1,dcut2) (dcut1,nbatch) (dcut2,nbatch) -> (4,dcut,nbatch)
+                    _h_ud = torch.einsum("aijk,jn,kn->ain", T, _h_cat[0], _h_cat[1])
+                h_ud = h_ud + _h_ud
             del M_cat, h_cat
+
         # cal. prob. by h_ud
         _h_ud = h_ud.abs().pow(2)
         normal = (_h_ud).mean((0, 1)).sqrt()
         # normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
         h_ud = h_ud / normal  # (4, dcut, nbatch)
-        h[i_pos] = h_ud
         # cal. prob. and normalized
         eta = torch.abs(eta) ** 2  # (dcut)
         # P = torch.einsum("aij,i,aij->aj",h_ud,eta,h_ud.conj()).real
@@ -897,7 +875,7 @@ class Graph_MPS_RNN(nn.Module):
         P = (_h_ud * normal**2 * eta.reshape(1, -1, 1)).sum(1)
         # print(torch.exp(self.parm_eta[a, b]))
         P = torch.sqrt(P)
-        return P, h, h_ud, w, c
+        return h_ud, P, w, c
 
     def forward(self, x: Tensor) -> Tensor:
         #  x: (+1/-1)
@@ -911,7 +889,7 @@ class Graph_MPS_RNN(nn.Module):
 
         # remove duplicate onstate, dose not support auto-backward
         # torch.unique/torch_lexsort maybe is time consuming
-        use_unique = self.use_unique and (not x.requires_grad) and x > 1024
+        use_unique = self.use_unique and (not x.requires_grad) and n_batch > 1024
         global USE_EXPAND
         if x.requires_grad:
             USE_EXPAND = True
@@ -928,10 +906,10 @@ class Graph_MPS_RNN(nn.Module):
             original_idx = torch.argsort(sorted_idx, stable=True)
             target = target[sorted_idx]
 
-        # List[Tensor] (M, local_hilbert_dim, dcut, n_batch)
+        # List[Tensor] (dcut, n_batch) * nqubits//2
         h = HiddenStates(self.nqubits // 2, self.h_boundary.unsqueeze(-1), self.device, use_list=True)
         if not use_unique:
-            h.repeat(1, 1, n_batch)
+            h.repeat(1, n_batch)
         # breakpoint()
         phi = torch.zeros(n_batch, device=self.device)  # (n_batch,)
         amp = torch.ones(n_batch, device=self.device)  # (n_batch,)
@@ -947,26 +925,30 @@ class Graph_MPS_RNN(nn.Module):
                         _target: Tensor = None
                         _nbatch = 1
                         inverse_i = torch.zeros(n_batch, dtype=torch.int64, device=self.device)
+                        index_i = torch.zeros(1, dtype=torch.int64, device=self.device)
                     else:
                         # input tensor is already sorted, torch.unique_consecutive is faster.
                         _target, inverse_i, index_i = torch_consecutive_unique_idex(
                             target[..., : i * 2].squeeze(1), dim=0
                         )[:3]
                         _nbatch = _target.size(0)
-                    if i == 0:
-                        ...
-                    else:
-                        # change hidden-state (M, 4, dcut, nbatch->nbatch')
+
+                        # change hidden-state (nqubits//2, dcut, nbatch->nbatch')
                         h = h.index_select(inverse_before[index_i])
+                        # update hidden state
+                        _i_pos = self.graph_nodes[i-1]
+                        h[_i_pos] = h_i[..., index_i].reshape(self.dcut, -1)
                     inverse_before = inverse_i
                 else:
                     _target = target
                     _nbatch = n_batch
                 if i == unique_nqubits // 2 + 1:
                     h = h.index_select(inverse_i)
+                    _i_pos = self.graph_nodes[i-1]
+                    h[_i_pos] = h_i
                 # if i > 0:
                 #     logger.debug(f"i: {i} h: {h.shape}, _target: {_target.shape}, _nbatch: {_nbatch}")
-                P, h, h_ud, w, c = self.calculate_two_site(h, _target, _nbatch, i)
+                h_ud, P, w, c= self.calculate_two_site(h, _target, _nbatch, i)
                 if i <= unique_nqubits // 2:
                     P = P[..., inverse_i]
                     h_ud = h_ud[..., inverse_i]
@@ -974,11 +956,10 @@ class Graph_MPS_RNN(nn.Module):
                     logger.debug(f"Reduce {i}-th qubits : {n_batch} -> {_nbatch}, rate: {rate:.4f}%")
             else:
                 # h: (sorb//2, dcut, nbatch), target: (nbatch, sorb)
-                # P: (4, nbatch), h: (sorb//2, 4, dcut, nbatch), h_ud: (4, dcut, nbatch) w: (dcut,), c: scaler
-                P, h, h_ud, w, c = self.calculate_two_site(h, target, n_batch, i)
+                # h_ud: (4, dcut, nbatch), w: (dcut), c: scalar
+                h_ud, P, w, c = self.calculate_two_site(h, target, n_batch, i)
                 # logger.debug(f"P: {P.shape}, h: {h.shape}, h_ud: {h_ud.shape}, w: {w.shape}, c: {c}")
 
-            # logger.info(f"h: {h.shape}, h_ud: {h_ud.shape}")
             # symmetry
             psi_mask = self.symmetry_mask(2 * i, num_up, num_down)
             psi_orth_mask = self.orth_mask(target[..., : 2 * i], 2 * i, num_up, num_down)
@@ -993,11 +974,8 @@ class Graph_MPS_RNN(nn.Module):
             amp = amp * P.gather(0, index).reshape(-1)
 
             # calculate phase
-            # (dcut) (dcut, n_batch)  -> (n_batch)
-            if not USE_EXPAND:
-                index_phi = index.reshape(1, 1, -1).repeat(1, self.dcut, 1)
-            else:
-                index_phi = index.unsqueeze(0).expand(1, self.dcut, n_batch)
+            # (dcut) (dcut, n_batch) -> (n_batch)
+            index_phi = index.unsqueeze(0).expand(1, self.dcut, n_batch)
             h_i = h_ud.gather(0, index_phi).reshape(self.dcut, n_batch)
             if self.param_dtype == torch.complex128:
                 phi_i = w @ h_i.to(torch.complex128) + c
@@ -1011,6 +989,16 @@ class Graph_MPS_RNN(nn.Module):
             # alpha, beta
             num_up = num_up + target[..., 2 * i].long()
             num_down = num_down + target[..., 2 * i + 1].long()
+
+            # update hidden states
+            i_pos = self.graph_nodes[i]
+            if not use_unique:
+                h[i_pos] = h_i
+            else:
+                if i <= unique_nqubits // 2:
+                    ... # before the 'self.calculate_two_site'
+                else:
+                    h[i_pos] = h_i
 
         psi_amp = amp
         # phase by mps--rnn
@@ -1061,12 +1049,12 @@ class Graph_MPS_RNN(nn.Module):
             if self.hilbert_local == 4:
                 # h: (2, 4, 4, dcut, n-unique), h_ud: (4, dcut, n-unique)
                 with profiler.record_function("Update amp"):
-                    psi_amp_k, h, h_ud, w, c = self.calculate_two_site(h, x0, n_batch, i)
+                    # psi_amp_k, h, h_ud, w, c = self.calculate_two_site(h, x0, n_batch, i)
+                    h_ud, psi_amp_k, w, c = self.calculate_two_site(h, x0, n_batch, i)
             else:
                 raise NotImplementedError(f"Please use the 2-sites mode")
 
             # logger.info(f"psi_amp_K: {psi_amp_k.shape}, h :{h.shape}, h_ud: {h_ud.shape}")
-
             psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
             psi_orth_mask = self.orth_mask(states=x0, k=2 * i, num_up=num_up, num_down=num_down)
             psi_mask *= psi_orth_mask
@@ -1089,7 +1077,6 @@ class Graph_MPS_RNN(nn.Module):
                 # logger.debug(f"sample-unique: {sample_unique}") # for debug -> sample order and pos.
                 repeat_nums = mask_count.sum(dim=1)  # bool in [0, 4]
                 amps_value = torch.mul(amps_value.repeat_interleave(repeat_nums, 0), psi_amp_k[mask_count])
-                h.repeat_interleave(repeat_nums, -1)
 
             # calculate phase
             with profiler.record_function("calculate phase"):
@@ -1097,9 +1084,9 @@ class Graph_MPS_RNN(nn.Module):
                 # sample_unique是采样后的,因此 h_up, 需要重复
                 # phi_i 和 phi 也需要
                 index = self.state_to_int(sample_unique[:, -2:], sites=2).view(1, -1)
-                index_phi = index.view(1, 1, -1).repeat(1, self.dcut, 1)
+                index = index.view(1, 1, -1).expand(1, self.dcut, index.size(1))
                 h_ud = h_ud.repeat_interleave(repeat_nums, dim=-1)
-                h_i = h_ud.gather(0, index_phi).view(self.dcut, -1)
+                h_i = h_ud.gather(0, index).view(self.dcut, -1)
                 if self.param_dtype == torch.complex128:
                     phi_i = w @ h_i.to(torch.complex128) + c
                 else:
@@ -1109,6 +1096,12 @@ class Graph_MPS_RNN(nn.Module):
                     phi_i = torch.view_as_complex(phi_i.view(-1, 2))
                 phi = phi.repeat_interleave(repeat_nums, dim=-1)
                 phi = phi + torch.angle(phi_i)
+
+            # update hidden states
+            i_pos = self.graph_nodes[i]
+            h.repeat_interleave(repeat_nums, -1)
+            h[i_pos] = h_i
+
             l += interval
         return sample_unique, sample_counts, h, amps_value, phi, 2 * l
 
@@ -1196,10 +1189,10 @@ class Graph_MPS_RNN(nn.Module):
         sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
         sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
         psi_amp = torch.ones(1, **self.factory_kwargs)
-        h = self.h_boundary
+        # h = self.h_boundary
         h = HiddenStates(
             self.nqubits // 2,
-            self.h_boundary.unsqueeze(-1).repeat(self.nqubits // 2, 1, 1, 1),
+            self.h_boundary.unsqueeze(-1).repeat(self.nqubits // 2, 1, 1),
             self.device,
             use_list=False,
         )
@@ -1311,11 +1304,11 @@ if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
     device = "cpu"
-    sorb = 12
-    nele = 6
-    fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
+    sorb = 24
+    nele = 12
+    # fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     # length = fock_space.shape[0]
-    # fci_space = torch.load("./H12-FCI-space.pth", map_location="cpu").cuda()
+    fci_space = torch.load("./H12-FCI-space.pth", map_location="cpu")
     # fci_space = onv_to_tensor(get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb)
     # dim = fci_space.size(0)
     # print(fock_space)
@@ -1330,7 +1323,8 @@ if __name__ == "__main__":
     # )
     # graph_nn = nx.read_graphml("./graph/H_Plane/H12-34-1.graphml")
     # graph_nn = nx.read_graphml("./graph/H6-maxdes.graphml")
-    # graph_nn = nx.read_graphml("./graph/H12-34-maxdes2.graphml")
+    # x = onv_to_tensor(get_special_space(sorb, sorb, nele//2, nele//2), sorb)
+    graph_nn = nx.read_graphml("./graph/H12-2.00-Bohr.graphml")
     # breakpoint()
     model = Graph_MPS_RNN(
         use_symmetry=True,
@@ -1341,10 +1335,26 @@ if __name__ == "__main__":
         device=device,
         dcut=50,
         graph=graph_nn,
-        params_file="params.pth",
+        # params_file="params.pth",
     )
-
+    wf = model(fci_space[:10000])
+    # torch.save(wf.detach(), "new-wf.pth")
+    # x1 = torch.load("old-wf.pth")
+    # breakpoint()
+    # assert torch.allclose(x1, wf)
+    # exit()
+    sample, counts, wf = model.ar_sampling(
+        n_sample=int(1e5),
+        min_tree_height=5,
+        use_dfs_sample=True,
+        min_batch=50000,
+    )
+    x = sample = (sample * 2 - 1).double()
+    wf1 = model(x)
+    assert torch.allclose(wf, wf1)
+    # # torch.save()
     breakpoint()
+    exit()
     psi = model(fock_space)
 
     # params = model.state_dict()
@@ -1486,9 +1496,9 @@ if __name__ == "__main__":
     # wf1 = model(sample)
     # t1 = time.time_ns()
     # logger.debug(f"Delta: {(t1 - t0)/1.0e06:.3f} ms")
-    assert torch.allclose(wf, model(sample))
-    logger.info(f"p1 {(counts / counts.sum())[:30]}")
-    logger.info(f"p2: {wf.abs().pow(2)[:30]}")
+    # assert torch.allclose(wf, model(sample))
+    # logger.info(f"p1 {(counts / counts.sum())[:30]}")
+    # logger.info(f"p2: {wf.abs().pow(2)[:30]}")
     # # breakpoint()
     # loss = wf1.norm()
 
