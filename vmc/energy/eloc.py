@@ -249,7 +249,7 @@ def _reduce_psi(
     #     comb_x, x1 = get_comb_tensor(x, sorb, nele, noa, nob, True)
     #     x0 = x1[:, 0, :].reshape(1, -1)
     comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
-    x0 = onv_to_tensor(x, sorb).reshape(1, -1)
+    # x0 = onv_to_tensor(x, sorb).reshape(1, -1)
     batch, n_comb, bra_len = tuple(comb_x.size())
 
     # calculate matrix <x|H|x'>
@@ -260,13 +260,13 @@ def _reduce_psi(
     comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
 
     t2 = time.time_ns()
-    if use_LUT:
-        not_idx, psi_x = WF_LUT.lookup(x)[1:]
-        # WF_LUT coming from sampling x must been found in WF_LUT.
-        assert not_idx.size(0) == 0
-        psi_x = psi_x.unsqueeze(1)  # (batch, 1)
-    else:
-        psi_x = ansatz(x0).unsqueeze(1)  # (batch, 1)
+    # if use_LUT:
+    #     not_idx, psi_x = WF_LUT.lookup(x)[1:]
+    #     # WF_LUT coming from sampling x must been found in WF_LUT.
+    #     assert not_idx.size(0) == 0
+    #     psi_x = psi_x.unsqueeze(1)  # (batch, 1)
+    # else:
+    #     psi_x = ansatz(x0).unsqueeze(1)  # (batch, 1)
 
     # n_sample = 1000
     stochastic = True if n_sample > 0 else False
@@ -365,7 +365,7 @@ def _reduce_psi(
         f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, "
         + f"nqs time: {delta2:.3E} ms"
     )
-    del comb_hij, comb_x, psi_gt_eps, gt_eps_idx, psi_x  # index, unique_x1, unique
+    del comb_hij, comb_x, psi_gt_eps, gt_eps_idx  # index, unique_x1, unique
 
     if use_LUT:
         del raw_idx, gt_not_lut_idx, gt_in_lut_idx, lut_idx, lut_not_idx, lut_value

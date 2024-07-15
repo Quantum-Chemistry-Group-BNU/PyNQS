@@ -12,7 +12,7 @@ import numpy as np
 
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from typing import List, Callable
+from typing import List, Callable, Tuple
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -106,6 +106,8 @@ class BaseVMCOptimizer(ABC):
         kfac: KFACPreconditioner = None,  # type: ignore
         use_clip_grad: bool = False,
         clip_grad_method: str = "L2",
+        use_3sigma: bool = False,
+        k_step_clip: int = 100,
         max_grad_norm: float = 1.0,
         max_grad_value: float = 1.0,
         start_clip_grad: int = 0,
@@ -139,6 +141,9 @@ class BaseVMCOptimizer(ABC):
         else:
             self.lr_scheduler: LRScheduler = None
 
+        # record optim, grad_L2, grad_max
+        self.grad_e_lst: Tuple[List[float], List[float]] = ([], [])
+        self.e_lst: List[float] = []
         # read checkpoint file:
         if check_point is not None:
             self.read_checkpoint(check_point, read_model_only)
@@ -182,10 +187,6 @@ class BaseVMCOptimizer(ABC):
         self.read_electron_info(self.sampler.ele_info)
         self.dim = self.onstate.shape[0]
 
-        # record optim
-        self.grad_e_lst = [[], []]  # grad_L2, grad_max
-        self.e_lst: List[float] = []
-
         # clip grad
         self.use_clip_grad: bool = use_clip_grad
         if use_clip_grad:
@@ -203,6 +204,9 @@ class BaseVMCOptimizer(ABC):
         elif self.clip_grad_method == "Value":
             self.initial_g0 = max_grad_value
         self.clip_grad_scheduler = clip_grad_scheduler
+        # grad upper bond 3σ
+        self.use_3sigma = use_3sigma
+        self.k_step_clip = k_step_clip
 
         if self.rank == 0:
             params_num = sum(map(torch.numel, self.model.parameters()))
@@ -210,7 +214,9 @@ class BaseVMCOptimizer(ABC):
             s += f"The number param of NQS model: {params_num}\n"
             s += f"Optimizer:\n{self.opt}\n"
             if self.use_clip_grad:
-                s += f"Clip-grad method: {self.clip_grad_method} "
+                s += f"Clip-grad method: {self.clip_grad_method}, "
+                if self.use_3sigma and self.clip_grad_method == "L2":
+                    s += f"Use 3σ clip grad in {self.k_step_clip}-step, "
                 s += f"g0: {self.initial_g0} "
                 s += f"after {self.start_clip_grad}-th iteration\n"
             if self.use_spin_raising:
@@ -279,6 +285,10 @@ class BaseVMCOptimizer(ABC):
             self.opt.load_state_dict(x["optimizer"])
             if self.lr_scheduler is not None:
                 self.lr_scheduler.load_state_dict(x["scheduler"])
+        if "l2_grad" in x.keys():
+            self.grad_e_lst[0].extend(x["l2_grad"])
+        if "max_grad" in x.keys():
+            self.grad_e_lst[1].extend(x["max_grad"])
 
     def dump_input(self) -> None:
         """
@@ -319,19 +329,18 @@ class BaseVMCOptimizer(ABC):
         r"""
         Save L2-grad, max-grad and energy to list in each iteration, for plotting.
         """
-        if self.rank == 0:
-            x1: List[Tensor] = []
-            x2: List[Tensor] = []
-            for param in self.model.parameters():
-                if param.grad is not None:
-                    x1.append(param.grad.detach().norm().reshape(-1))
-                    x2.append(param.grad.detach().abs().max().reshape(-1))
-            l2_grad = torch.cat(x1).norm().item()
-            max_grad = torch.cat(x2).max().item()
-            self.e_lst.append(e_total)
-            self.grad_e_lst[0].append(l2_grad)
-            self.grad_e_lst[1].append(max_grad)
-            del x1, x2
+        x1: List[Tensor] = []
+        x2: List[Tensor] = []
+        for param in self.model.parameters():
+            if param.grad is not None:
+                x1.append(param.grad.detach().norm().reshape(-1))
+                x2.append(param.grad.detach().abs().max().reshape(-1))
+        l2_grad = torch.cat(x1).norm().item()
+        max_grad = torch.cat(x2).max().item()
+        self.e_lst.append(e_total)
+        self.grad_e_lst[0].append(l2_grad)
+        self.grad_e_lst[1].append(max_grad)
+        del x1, x2
 
     def clip_grad(self, epoch: int) -> None:
         if self.clip_grad_method == "L2":
@@ -345,16 +354,33 @@ class BaseVMCOptimizer(ABC):
         """
         clip model grad use 2-norm
         """
+        epoch0 = epoch
         if self.lr_scheduler is not None:
             epoch = self.lr_scheduler.last_epoch
+        # read checkpoint
+        if len(self.grad_e_lst[0]) > epoch:
+            epoch0 = epoch
         # change max clip-grad
+        self.use_3sigma = False
+        self.k_step_clip = 100
+        upper: float = None
         if self.clip_grad_scheduler is not None:
             g0 = self.clip_grad_scheduler(epoch) * self.initial_g0
         else:
             g0 = self.initial_g0
+        # 3sigma
+        if self.use_3sigma and epoch0 > self.k_step_clip:
+            k_th = self.k_step_clip
+            grad = np.asarray(self.grad_e_lst[0][-k_th:])
+            std, mean = np.std(grad), np.mean(grad)
+            upper = mean + 3 * std
+            g0 = min(upper, g0)
+
         if self.use_clip_grad and epoch > self.start_clip_grad:
             x = nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=g0, foreach=True)
             if self.rank == 0:
+                if upper is not None and x > upper:
+                    logger.info(f"3sigma-upper: {upper:.4E}", master=True)
                 logger.info(f"Clip-grad, g: {x:.4E}, L2-g0: {g0:4E}", master=True)
 
     def _clip_grad_value(self, epoch: int) -> None:
@@ -403,6 +429,8 @@ class BaseVMCOptimizer(ABC):
                         "model": self.model_raw.state_dict(),
                         "optimizer": self.opt.state_dict(),
                         "scheduler": lr,
+                        "l2_grad": self.grad_e_lst[0],
+                        "max_grad": self.grad_e_lst[1],
                     },
                     checkpoint_file,
                 )

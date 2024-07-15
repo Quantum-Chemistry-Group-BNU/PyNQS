@@ -36,6 +36,7 @@ import torch.autograd.profiler as profiler
 
 hTensor = NewType("hTensor", List[Tensor])
 
+USE_EXPAND = True
 
 class HiddenStates:
     def __init__(
@@ -783,9 +784,12 @@ class Graph_MPS_RNN(nn.Module):
 
         if i_chain == 0:
             M = self.params_M[-1, ...]  # 如果是第一个点的话，没有h，取边界条件h和最后一列M  # (4, dcut, dcut)
-            h_i_cond = (torch.unsqueeze(self.left_boundary, -1)).repeat(1, 1, n_batch)  # (4, dcut, nbatch)
-            q_i = torch.zeros(1, self.dcut, n_batch, device=self.device, dtype=torch.int64)  # 索引 # (1, dcut, nbatch)
-            h_i = h_i_cond.gather(0, q_i).reshape(self.dcut, n_batch)  # (dcut, nbatch)
+            if not USE_EXPAND:
+                h_i_cond = (torch.unsqueeze(self.left_boundary, -1)).repeat(1, 1, n_batch)  # (4, dcut, nbatch)
+                q_i = torch.zeros(1, self.dcut, n_batch, device=self.device, dtype=torch.int64)  # 索引 # (1, dcut, nbatch)
+                h_i = h_i_cond.gather(0, q_i).reshape(self.dcut, n_batch)  # (dcut, nbatch)
+            else:
+                h_i = self.left_boundary.unsqueeze(-1)[0].expand(self.dcut, n_batch)
             h_ud = torch.matmul(M, h_i) + v.unsqueeze(-1)  # (4, dcut, nbatch)
         else:
             M = self.params_M[_M_pos - len(pos) : _M_pos, ...]
@@ -795,7 +799,10 @@ class Graph_MPS_RNN(nn.Module):
                 h_j_cond = h[int(_pos), ...]  # (4, dcut, nbatch)
                 _start = 2 * list(self.graph).index(_pos)
                 q_j = self.state_to_int(target[:, _start : _start + 2], sites=2)  # (nbatch, 1)
-                q_j = (q_j.reshape(1, 1, -1)).repeat(1, self.dcut, 1)  # (1, dcut, nbatch)
+                if not USE_EXPAND:
+                    q_j = (q_j.reshape(1, 1, -1)).repeat(1, self.dcut, 1)  # (1, dcut, nbatch)
+                else:
+                    q_j = q_j.reshape(1, 1, -1).expand(1, self.dcut, n_batch)
                 h_j = h_j_cond.gather(0, q_j).reshape(self.dcut, n_batch)  # (dcut, nbatch)
                 M_j = M[j, ...]  # (4, dcut, dcut)
                 # h_ud = h_ud + torch.matmul(M_j, h_j)  # (4, dcut, nbatch)
@@ -815,7 +822,6 @@ class Graph_MPS_RNN(nn.Module):
                 if len(list(self.graph.predecessors(str(i_pos)))) >= 2 and self.max_degree >= len(
                     list(self.graph.predecessors(str(i_pos)))
                 ):
-                    
                     if self.tensor_cmpr:
                         params_K_list: List[Tensor] = [0] * len(self.tensor_index)
                         params_U_list: List[Tensor] = [0] * len(self.tensor_index)
@@ -905,7 +911,12 @@ class Graph_MPS_RNN(nn.Module):
 
         # remove duplicate onstate, dose not support auto-backward
         # torch.unique/torch_lexsort maybe is time consuming
-        use_unique = self.use_unique and (not x.requires_grad)
+        use_unique = self.use_unique and (not x.requires_grad) and x > 1024
+        global USE_EXPAND
+        if x.requires_grad:
+            USE_EXPAND = True
+        else:
+            USE_EXPAND = True
         # use_unique = True
         if use_unique:
             # avoid sorted much orbital, unique_nqubits >= 2
@@ -983,7 +994,10 @@ class Graph_MPS_RNN(nn.Module):
 
             # calculate phase
             # (dcut) (dcut, n_batch)  -> (n_batch)
-            index_phi = index.reshape(1, 1, -1).repeat(1, self.dcut, 1)
+            if not USE_EXPAND:
+                index_phi = index.reshape(1, 1, -1).repeat(1, self.dcut, 1)
+            else:
+                index_phi = index.unsqueeze(0).expand(1, self.dcut, n_batch)
             h_i = h_ud.gather(0, index_phi).reshape(self.dcut, n_batch)
             if self.param_dtype == torch.complex128:
                 phi_i = w @ h_i.to(torch.complex128) + c
