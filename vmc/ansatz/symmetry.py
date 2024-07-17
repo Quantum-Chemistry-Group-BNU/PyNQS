@@ -48,22 +48,21 @@ def _two_sites_symmetry(
 ) -> Tensor:
     device = num_down.device
     nbatch = num_up.size(0)
-    activations = torch.ones(nbatch, device=device, dtype=torch.bool)
     baseline_up = alpha - sorb // 2
     baseline_down = beta - sorb // 2
     lower_up = baseline_up + k // 2
     lower_down = baseline_down + k // 2
 
     if k >= min_k:
-        activations_occ0 = torch.logical_and(alpha > num_up, activations)
-        activations_unocc0 = torch.logical_and(lower_up < num_up, activations)
-        activations_occ1 = torch.logical_and(beta > num_down, activations)
-        activations_unocc1 = torch.logical_and(lower_down < num_down, activations)
+        activations_occ0 = (alpha > num_up) * 1
+        activations_unocc0 = (lower_up < num_up) * 2
+        activations_occ1 = (beta > num_down) * 4
+        activations_unocc1 = (lower_down < num_down) * 8
         sym_index = torch.stack(
             [activations_occ0, activations_unocc0, activations_occ1, activations_unocc1],
             dim=1,
-        )
-        sym_index = (sym_index * torch.tensor([1, 2, 4, 8], device=device)).sum(dim=1).long()
+        ).long().sum(dim=1)
+        # sym_index = (sym_index * torch.tensor([1, 2, 4, 8], device=device)).sum(dim=1).long()
         sym_index = constrain_make_charts(sym_index)
     else:
         nbatch = num_up.size(0)

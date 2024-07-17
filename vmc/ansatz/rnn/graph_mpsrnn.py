@@ -7,7 +7,7 @@ import networkx as nx
 import torch.nn.functional as F
 
 from functools import partial
-from typing import Tuple, List, NewType
+from typing import Tuple, List, NewType, Union
 from typing_extensions import Self
 from torch import nn, Tensor
 from loguru import logger
@@ -604,9 +604,9 @@ class Graph_MPS_RNN(nn.Module):
                     graph=self.graph, dcut=self.dcut, use_complex=True
                 )
                 shape4 = (self.hilbert_local, shape4_num, 2)
-                K_r = torch.rand((shape4), **self.factory_kwargs_real) * self.iscale
+                K_r = torch.rand((shape4), **self.factory_kwargs_real) * 0.1
                 shape5 = (self.hilbert_local, self.dcut, shape5_num, 2)
-                U_r = torch.rand((shape5), **self.factory_kwargs_real) * self.iscale
+                U_r = torch.rand((shape5), **self.factory_kwargs_real) * 0.1
             else:
                 shape3 = (len(self.tensor_index), self.hilbert_local, self.dcut, self.dcut, self.dcut, 2)
                 T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
@@ -664,9 +664,9 @@ class Graph_MPS_RNN(nn.Module):
                     graph=self.graph, dcut=self.dcut_before, use_complex=False
                 )
                 shape4 = (self.hilbert_local, shape4_num)
-                K_r = torch.rand((shape4), **self.factory_kwargs_real) * self.iscale
+                K_r = torch.rand((shape4), **self.factory_kwargs_real) * 0.1
                 shape5 = (self.hilbert_local, self.dcut, shape5_num)
-                U_r = torch.rand((shape5), **self.factory_kwargs_real) * self.iscale
+                U_r = torch.rand((shape5), **self.factory_kwargs_real) * 0.1
             else:
                 shape3 = (self.all_in_tensor, self.hilbert_local, self.dcut, self.dcut, self.dcut)
                 T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
@@ -762,6 +762,31 @@ class Graph_MPS_RNN(nn.Module):
             idxs = x
         return idxs
 
+    def _calculate_prob(self, h_ud: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
+        # cal. prob. by h_ud
+        if self.param_dtype == torch.complex128:
+            _h_ud = h_ud.abs().pow(2)
+            normal = (_h_ud).mean((0, 1)).sqrt()
+            # normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
+            h_ud = h_ud / normal  # (4, dcut, nbatch)
+            # cal. prob. and normalized
+            eta = torch.abs(eta) ** 2  # (dcut)
+            # P = torch.einsum("aij,i,aij->aj",h_ud,eta,h_ud.conj()).real
+            # P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
+            P = (_h_ud / normal**2 * eta.reshape(1, -1, 1)).sum(1)
+            # print(torch.exp(self.parm_eta[a, b]))
+            P = torch.sqrt(P)
+        elif self.param_dtype == torch.double:
+            _h_ud = h_ud.pow(2)
+            normal = (_h_ud).mean((0, 1)).sqrt()
+            h_ud = h_ud / normal  # (4, dcut, nbatch)
+            eta = eta**2  # (dcut)
+            P = (_h_ud / normal**2 * eta.reshape(1, -1, 1)).sum(1)
+            P = torch.sqrt(P)
+        else:
+            raise NotImplementedError
+        return h_ud, P
+
     def calculate_two_site(
         self,
         h: HiddenStates,
@@ -799,7 +824,8 @@ class Graph_MPS_RNN(nn.Module):
             M_cat = torch.cat(_M_cat, dim=-1)
             h_cat = torch.cat(_h_cat, dim=0)
             # (4,dcut,ndcut) -> (ndcut,nbatch) -> (4,dcut,nbatch)
-            h_ud = torch.matmul(M_cat, h_cat) + v.unsqueeze(-1)
+            with profiler.record_function("M @ h + v"):
+                h_ud = torch.matmul(M_cat, h_cat) + v.unsqueeze(-1)
             if (self.use_tensor and 
                 len(list(self.graph.predecessors(str(i_pos)))) >= 2 and
                 self.max_degree >= len(list(self.graph.predecessors(str(i_pos)))
@@ -863,18 +889,8 @@ class Graph_MPS_RNN(nn.Module):
                 h_ud = h_ud + _h_ud
             del M_cat, h_cat
 
-        # cal. prob. by h_ud
-        _h_ud = h_ud.abs().pow(2)
-        normal = (_h_ud).mean((0, 1)).sqrt()
-        # normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
-        h_ud = h_ud / normal  # (4, dcut, nbatch)
-        # cal. prob. and normalized
-        eta = torch.abs(eta) ** 2  # (dcut)
-        # P = torch.einsum("aij,i,aij->aj",h_ud,eta,h_ud.conj()).real
-        # P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
-        P = (_h_ud * normal**2 * eta.reshape(1, -1, 1)).sum(1)
-        # print(torch.exp(self.parm_eta[a, b]))
-        P = torch.sqrt(P)
+        with profiler.record_function("calculate prob"):
+            h_ud, P = self._calculate_prob(h_ud, eta)
         return h_ud, P, w, c
 
     def forward(self, x: Tensor) -> Tensor:
@@ -957,34 +973,37 @@ class Graph_MPS_RNN(nn.Module):
             else:
                 # h: (sorb//2, dcut, nbatch), target: (nbatch, sorb)
                 # h_ud: (4, dcut, nbatch), w: (dcut), c: scalar
-                h_ud, P, w, c = self.calculate_two_site(h, target, n_batch, i)
+                with profiler.record_function("calculate two-sites"):
+                    h_ud, P, w, c = self.calculate_two_site(h, target, n_batch, i)
                 # logger.debug(f"P: {P.shape}, h: {h.shape}, h_ud: {h_ud.shape}, w: {w.shape}, c: {c}")
 
             # symmetry
-            psi_mask = self.symmetry_mask(2 * i, num_up, num_down)
-            psi_orth_mask = self.orth_mask(target[..., : 2 * i], 2 * i, num_up, num_down)
-            psi_mask = psi_mask * psi_orth_mask
-            P = self.mask_input(P.T, psi_mask, 0.0).T
+            with profiler.record_function("symmetry"):
+                psi_mask = self.symmetry_mask(2 * i, num_up, num_down)
+                psi_orth_mask = self.orth_mask(target[..., : 2 * i], 2 * i, num_up, num_down)
+                psi_mask = psi_mask * psi_orth_mask
+                P = P * psi_mask.T
 
             # normalize, and avoid numerical error
-            P = P / P.max(dim=0, keepdim=True)[0]
-            P = F.normalize(P, dim=0, eps=1e-15)
-            index = self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).reshape(1, -1)
-            # (local_hilbert_dim, n_batch) -> (n_batch)
-            amp = amp * P.gather(0, index).reshape(-1)
+            with profiler.record_function("amplitude/phase"):
+                P = P / P.max(dim=0, keepdim=True)[0]
+                P = F.normalize(P, dim=0, eps=1e-15)
+                index = self.state_to_int(target[:, 2 * i : 2 * i + 2], sites=2).reshape(1, -1)
+                # (local_hilbert_dim, n_batch) -> (n_batch)
+                amp = amp * P.gather(0, index).reshape(-1)
 
-            # calculate phase
-            # (dcut) (dcut, n_batch) -> (n_batch)
-            index_phi = index.unsqueeze(0).expand(1, self.dcut, n_batch)
-            h_i = h_ud.gather(0, index_phi).reshape(self.dcut, n_batch)
-            if self.param_dtype == torch.complex128:
-                phi_i = w @ h_i.to(torch.complex128) + c
-            else:
-                phi_i = torch.empty(h_i.size(1) * 2, device=self.device, dtype=torch.double)
-                phi_i[0::2] = torch.matmul(w.real, h_i) + c.real  # Real-part
-                phi_i[1::2] = torch.matmul(w.imag, h_i) + c.imag  # Imag-part
-                phi_i = torch.view_as_complex(phi_i.view(-1, 2))
-            phi = phi + torch.angle(phi_i)
+                # calculate phase
+                # (dcut) (dcut, n_batch) -> (n_batch)
+                index_phi = index.unsqueeze(0).expand(1, self.dcut, n_batch)
+                h_i = h_ud.gather(0, index_phi).reshape(self.dcut, n_batch)
+                if self.param_dtype == torch.complex128:
+                    phi_i = w @ h_i.to(torch.complex128) + c
+                else:
+                    phi_i = torch.empty(h_i.size(1) * 2, device=self.device, dtype=torch.double)
+                    phi_i[0::2] = torch.matmul(w.real, h_i) + c.real  # Real-part
+                    phi_i[1::2] = torch.matmul(w.imag, h_i) + c.imag  # Imag-part
+                    phi_i = torch.view_as_complex(phi_i.view(-1, 2))
+                phi = phi + torch.angle(phi_i)
 
             # alpha, beta
             num_up = num_up + target[..., 2 * i].long()
@@ -1058,10 +1077,11 @@ class Graph_MPS_RNN(nn.Module):
             psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
             psi_orth_mask = self.orth_mask(states=x0, k=2 * i, num_up=num_up, num_down=num_down)
             psi_mask *= psi_orth_mask
-            psi_amp_k = self.mask_input(psi_amp_k.T, psi_mask, 0.0)
+            psi_amp_k = psi_amp_k.T * psi_mask
+
             # avoid numerical error
             psi_amp_k /= psi_amp_k.max(dim=1, keepdim=True)[0]
-            psi_amp_k = F.normalize(psi_amp_k, dim=1, eps=1e-14)
+            F.normalize(psi_amp_k, dim=1, eps=1e-14, out=psi_amp_k)
 
             with profiler.record_function("updating unique sample"):
                 prob = psi_amp_k.pow(2)

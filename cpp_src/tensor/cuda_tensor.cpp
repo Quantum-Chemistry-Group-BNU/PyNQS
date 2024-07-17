@@ -147,7 +147,7 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
     comb_bit = onv_to_tensor_tensor_cuda(bra_tensor, sorb)
                    .unsqueeze(1)
                    .repeat({1, ncomb, 1});
-    torch::cuda::synchronize();
+    // torch::cuda::synchronize();
   } else {
     comb_bit = torch::ones({1}, torch::TensorOptions().dtype(torch::kDouble));
   }
@@ -312,7 +312,7 @@ Tensor merge_sample_cuda(const Tensor &idx, const Tensor &counts,
     // Notice: AtomicAdd or split block.
     merge_idx_cuda(merge_counts_ptr, &idx_ptr[begin], &counts_ptr[begin],
                    batch);
-    c10::cuda::device_synchronize();
+    // c10::cuda::device_synchronize();
   }
 
   return merge_counts;
