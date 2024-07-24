@@ -277,6 +277,7 @@ class Graph_MPS_RNN(nn.Module):
         rank_independent_sampling: bool = False,
         det_lut: DetLUT = None,
         J_W_phase: bool = False,
+        numerical_type: str = "power"
     ) -> None:
         super(Graph_MPS_RNN, self).__init__()
         # 模型输入参数
@@ -295,6 +296,7 @@ class Graph_MPS_RNN(nn.Module):
         self.use_tensor = use_tensor
         self.tensor_cmpr = tensor_cmpr
         self.auto_contract = auto_contract # auto contract
+        self.numerical_type = numerical_type
 
         if hilbert_local != 4:
             raise NotImplementedError(f"Please use the 2-sites mode")
@@ -655,7 +657,12 @@ class Graph_MPS_RNN(nn.Module):
         # initialize parameters
         M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
         v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
-        eta_r = torch.ones(shape01r, **self.factory_kwargs_real) * (1 / (2**0.5))
+        if self.numerical_type == "power":
+            eta_r = torch.ones(shape01r, **self.factory_kwargs_real) * (1 / (2**0.5))
+        elif self.numerical_type == "sigmoid":
+            eta_r = torch.ones(shape01r, **self.factory_kwargs_real) * 1e2
+        else:
+            raise NotImplementedError("please use power or sigmoid")
         w_r = torch.zeros(shape01c, **self.factory_kwargs_real) * self.iscale
         c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
         if self.use_tensor:
@@ -705,7 +712,7 @@ class Graph_MPS_RNN(nn.Module):
 
     def param_init_two_site(self) -> None:
         if self.params_file is not None:
-            self.iscale = 1e-14
+            self.iscale = 1e-4  # this parameter could be different when use different dcut and model
         if self.param_dtype == torch.complex128:
             self.param_init_two_site_complex()
         elif self.param_dtype == torch.double:
@@ -763,24 +770,32 @@ class Graph_MPS_RNN(nn.Module):
         return idxs
 
     def _calculate_prob(self, h_ud: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
-        # cal. prob. by h_ud
+        '''
+        To caculate probility by h_ud
+        '''
         if self.param_dtype == torch.complex128:
             _h_ud = h_ud.abs().pow(2)
-            normal = (_h_ud).mean((0, 1)).sqrt()
+            normal = (_h_ud.conj() * _h_ud).mean((0, 1)).real.sqrt()
             # normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
             h_ud = h_ud / normal  # (4, dcut, nbatch)
-            # cal. prob. and normalized
+            # calculate probility and normalize it 
             eta = torch.abs(eta) ** 2  # (dcut)
+            if self.numerical_type == "sigmoid":
+                raise NotImplementedError("sigmoid function can not be used in Complex number")
             # P = torch.einsum("aij,i,aij->aj",h_ud,eta,h_ud.conj()).real
             # P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
             P = (_h_ud / normal**2 * eta.reshape(1, -1, 1)).sum(1)
-            # print(torch.exp(self.parm_eta[a, b]))
             P = torch.sqrt(P)
         elif self.param_dtype == torch.double:
             _h_ud = h_ud.pow(2)
-            normal = (_h_ud).mean((0, 1)).sqrt()
+            normal = (_h_ud.conj() * _h_ud).mean((0, 1)).real.sqrt()
             h_ud = h_ud / normal  # (4, dcut, nbatch)
-            eta = eta**2  # (dcut)
+            if self.numerical_type == "power":
+                eta = eta**2  # (dcut)
+            elif self.numerical_type == "sigmoid":
+                eta = torch.sigmoid(eta)  # real only
+            else:
+                raise NotImplementedError("Please use power or sigmoid to caculate eta")
             P = (_h_ud / normal**2 * eta.reshape(1, -1, 1)).sum(1)
             P = torch.sqrt(P)
         else:
@@ -969,7 +984,7 @@ class Graph_MPS_RNN(nn.Module):
                     P = P[..., inverse_i]
                     h_ud = h_ud[..., inverse_i]
                     rate = _nbatch / n_batch * 100
-                    logger.debug(f"Reduce {i}-th qubits : {n_batch} -> {_nbatch}, rate: {rate:.4f}%")
+                    # logger.debug(f"Reduce {i}-th qubits : {n_batch} -> {_nbatch}, rate: {rate:.4f}%")
             else:
                 # h: (sorb//2, dcut, nbatch), target: (nbatch, sorb)
                 # h_ud: (4, dcut, nbatch), w: (dcut), c: scalar
