@@ -262,7 +262,7 @@ class BaseVMCOptimizer(ABC):
         """
         Read Nqs state_dict, h1e, he2e from external model.
         """
-        warnings.warn("This functions will be removed in future", DeprecationWarning)
+        warnings.warn("This functions will be removed in future, use checkpoint", DeprecationWarning)
         if self.rank == 0:
             s = f"Read nqs model/h1e-h2e from '.pth' file {external_model}"
             logger.info(s, master=True)
@@ -289,6 +289,8 @@ class BaseVMCOptimizer(ABC):
             self.grad_e_lst[0].extend(x["l2_grad"])
         if "max_grad" in x.keys():
             self.grad_e_lst[1].extend(x["max_grad"])
+        if "energy" in x.keys():
+            self.e_lst.extend(x["energy"])
 
     def dump_input(self) -> None:
         """
@@ -431,6 +433,7 @@ class BaseVMCOptimizer(ABC):
                         "scheduler": lr,
                         "l2_grad": self.grad_e_lst[0],
                         "max_grad": self.grad_e_lst[1],
+                        "energy": self.e_lst,
                     },
                     checkpoint_file,
                 )
@@ -484,7 +487,8 @@ class BaseVMCOptimizer(ABC):
         if prefix is None:
             prefix = self.prefix
         if self.rank == 0:
-            self._save_model(prefix)
+            # old version and use checkpoint-file
+            # self._save_model(prefix)
             self._plot_figure(e_ref, e_lst, prefix)
 
     def _save_model(

@@ -207,7 +207,14 @@ def interface(
         mf.level_shift = 0.0
         mf.max_cycle = 200
         mf.conv_tol = 1.0e-14
-        e_hf = mf.scf()
+        mf.kernel()
+
+        mo1,_,stable,_ = mf.stability(return_status=True)
+        while (not stable):
+            dm1 = mf.make_rdm1(mo1, mf.mo_occ)
+            mf.kernel(dm1)
+            mo1,_,stable,_ = mf.stability(return_status=True)
+        e_hf = mf.energy_tot()
 
         # Integral interface
         iface = Iface()
