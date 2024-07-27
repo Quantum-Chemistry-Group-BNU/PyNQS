@@ -337,6 +337,8 @@ class Sampler:
         epoch: int,
         n_sweep: int = None,
     ) -> tuple[Tensor, Tensor, tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
+        # using WF_LUT
+        self.WF_LUT = self.construct_FCI_lut()
         if self.remove_det:
             # avoid wf is 0.00, if not found, set to -1
             array_idx = self.det_lut.lookup(self.ci_space, is_onv=True)[0]
@@ -344,8 +346,8 @@ class Sampler:
         else:
             ci_space = self.ci_space
         ci_space_rank = scatter_tensor(ci_space, self.device, torch.uint8, self.world_size)
+        eloc, sloc, sample_prob = self.calculate_energy(ci_space_rank, WF_LUT=self.WF_LUT)
         synchronize()
-        eloc, sloc, sample_prob = self.calculate_energy(ci_space_rank)
         # All-Reduce mean local energy
 
         stats_eloc = operator_statistics(eloc, sample_prob, float("inf"), "E")
@@ -946,3 +948,58 @@ class Sampler:
             self.n_sample = self.last_n_sample
             self.max_n_sample = self.last_max_n_sample
             self.min_n_sample = self.n_sample
+
+    def construct_FCI_lut(self) -> WavefunctionLUT:
+        """
+        FCI-space LUT
+        """
+        # using simple-eloc
+        self.use_sample_space == False
+        self.reduce_psi == False
+        fp_batch: int = self.eloc_param["fp_batch"]
+
+        def ansatz_batch(x: Tensor) -> Tensor:
+            assert x.dtype == torch.uint8
+            nonlocal fp_batch
+            if fp_batch == -1 or fp_batch > x.size(0):
+                fp_batch = x.size(0)
+            idx_lst = [0] + split_batch_idx(x.size(0), fp_batch)
+            result = torch.empty(x.size(0), device=self.device, dtype=self.dtype)
+            for i in range(len(idx_lst) - 1):
+                _start = idx_lst[i]
+                _end = idx_lst[i + 1]
+                result[_start:_end] = self.nqs(onv_to_tensor(x[_start:_end], self.sorb))
+            return result
+
+        # split rank
+        dim = self.ci_space.size(0)
+        idx_rank_lst = [0] + split_length_idx(dim, length=self.world_size)
+        begin = idx_rank_lst[self.rank]
+        end = idx_rank_lst[self.rank + 1]
+        ci_space_rank = self.ci_space[begin: end]
+        if self.rank == 0:
+            s = f"Begin construct FCI-space LUT, FCI-space: {self.fci_size}\n"
+            s += f"All-dim: {ci_space_rank.size(0)}, Split-batch: {fp_batch}"
+            logger.info(s, master=True)
+
+        t0 = time.time_ns()
+        with torch.no_grad():
+            psi_rank = ansatz_batch(ci_space_rank)
+        t1 = time.time_ns()
+        if self.rank == 0:
+            logger.info(f"Rank-psi: {(t1-t0)/1.0e9:.3E} s", master=True)
+
+        psi_all = all_gather_tensor(psi_rank, self.device, self.world_size)
+        synchronize()
+        if self.world_size == 1:
+            psi_all = psi_all[0]  # avoid memory copy
+        else:
+            psi_all = torch.cat(psi_all)
+        WF_LUT = WavefunctionLUT(
+            self.ci_space,
+            psi_all,
+            self.sorb,
+            self.device,
+        )
+        del psi_all
+        return WF_LUT
