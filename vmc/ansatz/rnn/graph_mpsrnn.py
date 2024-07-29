@@ -679,7 +679,7 @@ class Graph_MPS_RNN(nn.Module):
                 T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
         # fill the params. input
         if self.params_file is not None:
-            params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
+            params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device, weights_only=False)["model"]
             if "module.params_v.all_sites" in params:
                 self.fill_data(params, use_complex=True, data_r=v_r, fill_params="v")
             if "module.params_eta.all_sites" in params:
@@ -753,7 +753,7 @@ class Graph_MPS_RNN(nn.Module):
                 T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
         # fill the params. input
         if self.params_file is not None:
-            params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device)["model"]
+            params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device, weights_only=False)["model"]
             if "module.params_v.all_sites" in params:
                 self.fill_data(params, use_complex=False, data_r=v_r, fill_params="v")
             if "module.params_eta.all_sites" in params:
@@ -1014,7 +1014,7 @@ class Graph_MPS_RNN(nn.Module):
 
         inverse_before: Tensor = None
         assert self.hilbert_local == 4
-        for i in range(0, self.nqubits // 2):
+        for i in range(0, self.nqubits // 2):  # Cycles over the number of orbitals
             if use_unique:
                 if i <= unique_nqubits // 2:
                     if i == 0:
@@ -1033,19 +1033,22 @@ class Graph_MPS_RNN(nn.Module):
                         h = h.index_select(inverse_before[index_i])
                         # update hidden state
                         _i_pos = self.graph_nodes[i-1]
-                        h[_i_pos] = h_out_i[..., index_i].reshape(self.dcut, -1)
-                        for index_out, site_out in enumerate(self.eta_index[0][0][1]):
-                            index_h = self.eta_index[0][-1][site_out]
+                        for index_out, site_out in enumerate(self.eta_index[0][_i_pos][0][1]):
+                            index_h = self.eta_index[0][_i_pos][1][site_out]
                             # (dcut,nbatch->nbatch')
                             h[index_h] = h_out_i[index_out,...][..., index_i].reshape(self.dcut, -1)
                     inverse_before = inverse_i
+                    # breakpoint()
                 else:
                     _target = target
                     _nbatch = n_batch
                 if i == unique_nqubits // 2 + 1:
                     h = h.index_select(inverse_i)
                     _i_pos = self.graph_nodes[i-1]
-                    h[_i_pos] = h_out_i
+                    for index_out, site_out in enumerate(self.eta_index[0][_i_pos][0][1]):
+                        index_h = self.eta_index[0][_i_pos][1][site_out]
+                        h[index_h] = h_out_i[index_out,...]
+                    # h[_i_pos] = h_out_i
                 # if i > 0:
                 #     logger.debug(f"i: {i} h: {h.shape}, _target: {_target.shape}, _nbatch: {_nbatch}")
                 h_out, P, w_out, c_out= self.calculate_two_site(h, _nbatch, i)
@@ -1096,7 +1099,7 @@ class Graph_MPS_RNN(nn.Module):
             # index & update hidden states
             _i_pos = str(self.graph_nodes[i])
             # cycle by site out
-            for index_out, site_out in enumerate(self.matrix_index[0][_i_pos][0][1]):
+            for index_out, site_out in enumerate(self.eta_index[0][_i_pos][0][1]):
                 index_h = self.eta_index[0][_i_pos][1][site_out]
                 if not use_unique:
                     h[index_h] = h_out_i[index_out,...]
@@ -1191,8 +1194,8 @@ class Graph_MPS_RNN(nn.Module):
                 # phi_i 和 phi 也需要
                 index = self.state_to_int(sample_unique[:, -2:], sites=2).view(1, -1)
                 index = index.view(1, 1, -1).expand(h_out.shape[0], 1, self.dcut, index.size(1))  # (out,1,dcut,nbatch)
-                h_out = h_out.repeat_interleave(repeat_nums, dim=-1)  # (out,1,dcut,nbatch')
-                h_out_i = h_out.gather(1, index).reshape(h_out.shape[0], self.dcut, n_batch)  # (out,dcut,nbatch)
+                h_out = h_out.repeat_interleave(repeat_nums, dim=-1)  # (out,4,dcut,nbatch) -> (out,4,dcut,nbatch')
+                h_out_i = h_out.gather(1, index).reshape(h_out.shape[0], self.dcut, -1)  # (out,dcut,nbatch')
                 if self.param_dtype == torch.complex128:
                     # (out,dcut,1) (out,dcut,nbatch) -> (out,nbatch)
                     phi_i = (torch.unsqueeze(w_out,-1) * h_out_i.to(torch.complex128)).sum(1) + c_out.reshape(-1,1)
@@ -1209,7 +1212,7 @@ class Graph_MPS_RNN(nn.Module):
             # update hidden states
             i_pos = self.graph_nodes[i]
             h.repeat_interleave(repeat_nums, -1)
-            for index_out, site_out in enumerate(self.matrix_index[0][i_pos][0][1]):
+            for index_out, site_out in enumerate(self.eta_index[0][i_pos][0][1]):
                 index_h = self.eta_index[0][i_pos][1][site_out]
                 h[index_h] = h_out_i[index_out,...]
 
@@ -1228,7 +1231,7 @@ class Graph_MPS_RNN(nn.Module):
         min_batch: int = -1,
         interval: int = 1,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        # h: [nqubits//2, dcut, n-unique]
+        # h: [sum_out, dcut, n-unique]
         # phi: [n-unique]
         if min_batch == -1:
             min_batch = float("inf")
@@ -1302,8 +1305,8 @@ class Graph_MPS_RNN(nn.Module):
         psi_amp = torch.ones(1, **self.factory_kwargs)
         # h = self.h_boundary
         h = HiddenStates(
-            self.nqubits // 2,
-            self.h_boundary.unsqueeze(-1).repeat(self.nqubits // 2, 1, 1),
+            self.eta_index[1],
+            self.h_boundary.unsqueeze(-1).repeat(self.eta_index[1], 1, 1),
             self.device,
             use_list=False,
         )
@@ -1418,7 +1421,7 @@ if __name__ == "__main__":
     nele = 12
     # fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     # length = fock_space.shape[0]
-    fci_space = torch.load("./H12-FCI-space.pth", map_location="cpu")
+    fci_space = torch.load("./H12-FCI-space.pth", map_location="cpu", weights_only=False)
     # fci_space = onv_to_tensor(get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb)
     # dim = fci_space.size(0)
     # print(fock_space)
@@ -1449,7 +1452,7 @@ if __name__ == "__main__":
     )
     wf = model(fci_space[:10000])
     # torch.save(wf.detach(), "new-wf.pth")
-    # x1 = torch.load("old-wf.pth")
+    # x1 = torch.load("old-wf.pth", weights_only=False)
     # breakpoint()
     # assert torch.allclose(x1, wf)
     # exit()
