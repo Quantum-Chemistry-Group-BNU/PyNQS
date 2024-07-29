@@ -203,10 +203,8 @@ def _simple(
             _psi = ansatz_extra(x1)
 
         # f(n).conj() Hnm * f(m) / extra_norm**2
-        _psi = _psi.reshape(batch, -1) / extra_norm**2
-        _psi[:, 0] = _psi[:, 0].conj()
-        # update hij/hij_spin
-        comb_hij = comb_hij * _psi
+        _psi = _psi.reshape(batch, -1)
+        comb_hij = comb_hij * _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
         if use_spin_raising:
             hij_spin *= _psi.real
 
@@ -382,12 +380,10 @@ def _reduce_psi(
         # TODO: split batch
         _psi = ansatz_extra(onv_to_tensor(_comb, sorb))
         # f*(n) Hnm f(m) / extra_norm**2
-        psi_extra[gt_eps_idx] = (_psi / extra_norm**2).to(dtype)
+        psi_extra[gt_eps_idx] = _psi.to(dtype)
         psi_extra = psi_extra.reshape(batch, -1)
         # (batch, n_SD)
-        psi_extra[:, 0] = psi_extra[:, 0].conj()
-
-        comb_hij = comb_hij * psi_extra
+        comb_hij = comb_hij * psi_extra * (psi_extra[:, 0].reshape(-1, 1).conj() / extra_norm**2)
         # comb_hij *= psi_extra.real
         if use_spin_raising:
             hij_spin *= psi_extra

@@ -19,12 +19,16 @@ class MultiPsi(AnsatzARBase):
         self,
         ansatz_sample: nn.Module,
         ansatz_extra: Union[nn.Module, Callable[[Tensor], Any]],
+        debug: bool = False
     ) -> None:
         super(MultiPsi, self).__init__()
 
         #TODO: 不兼容之前的文件了 checkpoints
         self.sample = ansatz_sample
-        self.extra = ansatz_extra
+        if debug:
+            self.extra = self.call
+        else:
+            self.extra = ansatz_extra
         # self.extra = self.call
 
         if not hasattr(self.sample, "ar_sampling"):
@@ -46,4 +50,4 @@ class MultiPsi(AnsatzARBase):
 
     def call(self, x):
         device = self.sample.device
-        return torch.ones(x.size(0), device=device, dtype=torch.double)
+        return torch.ones(x.size(0), device=device, dtype=torch.double) * 0.10
