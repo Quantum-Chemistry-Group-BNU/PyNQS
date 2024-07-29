@@ -5,6 +5,7 @@ from .rbm.ar_rbm import RBMSites
 from .transformer.decoder import DecoderWaveFunction
 from .hybrid.hybrid import HybridWaveFunction
 from .hybrid.hqc import HybridQCWaveFunction
+from .hybrid.multi import MultiPsi
 from .transformer.mps_transformer import MPSdecoder
 from .rnn.mps_rnn import MPS_RNN_2D
 from .rnn.graph_mpsrnn import Graph_MPS_RNN
@@ -27,4 +28,5 @@ __all__ = [
     "MPSdecoder",
     "MPS_RNN_2D",
     "Graph_MPS_RNN",
+    "MultiPsi",
 ]

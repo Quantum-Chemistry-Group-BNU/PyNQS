@@ -8,6 +8,7 @@ import torch.distributed as dist
 import tempfile
 import warnings
 import numpy as np
+
 # import pandas as pd
 
 from functools import partial
@@ -15,6 +16,7 @@ from typing import Callable, Tuple, List, Union
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
+
 # from pandas import DataFrame
 from scipy import special
 
@@ -52,6 +54,8 @@ from utils.public_function import (
 from utils.det_helper import DetLUT
 from utils.pyscf_helper.operator import spin_raising
 from utils.enums import ElocMethod
+
+from vmc.ansatz import MultiPsi
 
 print = partial(print, flush=True)
 
@@ -229,8 +233,12 @@ class Sampler:
         self.only_sample = only_sample
 
         # nbatch-rank AR-sampling, only implemented in Transformer/MPS-RNN/Graph-MPS-RNN
-        flag1 = hasattr(self.nqs.module, "min_batch")
-        flag2 = hasattr(self.nqs.module, "min_tree_height")
+        if hasattr(self.nqs.module, "use_multi_psi"):
+            ansatz = self.nqs.module.sample
+        else:
+            ansatz = self.nqs.module
+        flag1 = hasattr(ansatz, "min_batch")
+        flag2 = hasattr(ansatz, "min_tree_height")
         self.sampling_batch_rank: bool = flag1 and flag2
         self.sample_min_sample_batch = min_batch
         if min_tree_height is not None:
@@ -271,6 +279,12 @@ class Sampler:
             if given_state.shape[1] != self.sorb:
                 raise TypeError(f"Given-state: {tuple(given_state)} must be (nbatch, sorb)")
             self._init_restricted(given_state=given_state)
+
+        self.use_multi_psi = False
+        self.extra_norm: Tensor = None
+        self.extra_psi_pow: Tensor = None
+        if isinstance(self.nqs.module, MultiPsi):
+            self.use_multi_psi = True
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -338,18 +352,25 @@ class Sampler:
         n_sweep: int = None,
     ) -> tuple[Tensor, Tensor, tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
         # using WF_LUT
-        self.WF_LUT = self.construct_FCI_lut()
+        self.WF_LUT, sample_prob = self.construct_FCI_lut()
         if self.remove_det:
             # avoid wf is 0.00, if not found, set to -1
             array_idx = self.det_lut.lookup(self.ci_space, is_onv=True)[0]
-            ci_space = self.ci_space[~array_idx.gt(-1)]
+            idx = ~array_idx.gt(-1)
+            ci_space = self.ci_space[idx]
+            sample_prob = sample_prob[idx]
         else:
             ci_space = self.ci_space
+        # TODO: remove
         ci_space_rank = scatter_tensor(ci_space, self.device, torch.uint8, self.world_size)
-        eloc, sloc, sample_prob = self.calculate_energy(ci_space_rank, WF_LUT=self.WF_LUT)
+        eloc, sloc, _ = self.calculate_energy(
+            ci_space_rank,
+            state_prob=sample_prob,
+            WF_LUT=self.WF_LUT,
+        )
         synchronize()
         # All-Reduce mean local energy
-
+        # Testing
         stats_eloc = operator_statistics(eloc, sample_prob, float("inf"), "E")
         eloc_mean = stats_eloc["mean"]
         # e_total = eloc_mean + self.ecore
@@ -390,7 +411,6 @@ class Sampler:
         if self.rank == 0:
             # print(stats_eloc)
             logger.info(str(stats_eloc), master=True)
-
         if self.use_spin_raising:
             stats_sloc = operator_statistics(sloc, sample_prob, self.n_sample, "S-S+")
             sloc_mean = stats_sloc["mean"]
@@ -619,7 +639,7 @@ class Sampler:
         """
         t0 = time.time_ns()
         # Gather unique, counts, wf_value
-        unique = tensor_to_onv(unique.byte(), self.sorb) # compress uint64 -> uint8
+        unique = tensor_to_onv(unique.byte(), self.sorb)  # compress uint64 -> uint8
         unique_all = gather_tensor(unique, self.device, self.world_size, master_rank=0)
         count_all = gather_tensor(counts, self.device, self.world_size, master_rank=0)
         if self.use_LUT:
@@ -858,6 +878,12 @@ class Sampler:
             use_spin_raising = self.use_spin_raising
             if self.h1e_spin is None and self.h2e_spin is None:
                 use_spin_raising = False
+
+            if self.use_multi_psi:
+                extra_norm, extra_psi_pow = self.gather_extra_psi(sample, state_prob)
+                self.extra_norm = extra_norm
+                self.extra_psi_pow = extra_psi_pow
+
             eloc, sloc, placeholders = total_energy(
                 sample,
                 nbatch,
@@ -882,6 +908,8 @@ class Sampler:
                 eps_sample=self.eps_sample,
                 use_sample_space=self.use_sample_space,
                 alpha=self.alpha,
+                use_multi_psi=self.use_multi_psi,
+                extra_norm=self.extra_norm,
             )
         else:
             # e_total = -2.33233
@@ -924,7 +952,7 @@ class Sampler:
             fp_batch = self.eloc_param["fp_batch"]
             auto_batch = False
         return (
-             f"Eloc-param: (\n"
+            f"Eloc-param: (\n"
             + f"    Eloc-method: {self.eloc_param['method']}:\n"
             + f"    Using LUT: {self.use_LUT}\n"
             + f"    Singles + Doubles: {self.n_SinglesDoubles}\n"
@@ -949,7 +977,7 @@ class Sampler:
             self.max_n_sample = self.last_max_n_sample
             self.min_n_sample = self.n_sample
 
-    def construct_FCI_lut(self) -> WavefunctionLUT:
+    def construct_FCI_lut(self) -> Tuple[WavefunctionLUT, Tensor]:
         """
         FCI-space LUT
         """
@@ -958,25 +986,27 @@ class Sampler:
         self.reduce_psi == False
         fp_batch: int = self.eloc_param["fp_batch"]
 
-        def ansatz_batch(x: Tensor) -> Tensor:
-            assert x.dtype == torch.uint8
-            nonlocal fp_batch
-            if fp_batch == -1 or fp_batch > x.size(0):
-                fp_batch = x.size(0)
-            idx_lst = [0] + split_batch_idx(x.size(0), fp_batch)
-            result = torch.empty(x.size(0), device=self.device, dtype=self.dtype)
-            for i in range(len(idx_lst) - 1):
-                _start = idx_lst[i]
-                _end = idx_lst[i + 1]
-                result[_start:_end] = self.nqs(onv_to_tensor(x[_start:_end], self.sorb))
-            return result
+        # def ansatz_batch(x: Tensor) -> Tensor:
+        #     assert x.dtype == torch.uint8
+        #     nonlocal fp_batch
+        #     if fp_batch == -1 or fp_batch > x.size(0):
+        #         fp_batch = x.size(0)
+        #     idx_lst = [0] + split_batch_idx(x.size(0), fp_batch)
+        #     result = torch.empty(x.size(0), device=self.device, dtype=self.dtype)
+        #     for i in range(len(idx_lst) - 1):
+        #         _start = idx_lst[i]
+        #         _end = idx_lst[i + 1]
+        #         result[_start:_end] = self.nqs(onv_to_tensor(x[_start:_end], self.sorb))
+        #     return result
 
         # split rank
         dim = self.ci_space.size(0)
         idx_rank_lst = [0] + split_length_idx(dim, length=self.world_size)
         begin = idx_rank_lst[self.rank]
         end = idx_rank_lst[self.rank + 1]
-        ci_space_rank = self.ci_space[begin: end]
+        ci_space_rank = self.ci_space[begin:end]
+        if fp_batch == -1 or fp_batch > ci_space_rank.size(0):
+            fp_batch = ci_space_rank.size(0)
         if self.rank == 0:
             s = f"Begin construct FCI-space LUT, FCI-space: {self.fci_size}\n"
             s += f"All-dim: {ci_space_rank.size(0)}, Split-batch: {fp_batch}"
@@ -984,7 +1014,7 @@ class Sampler:
 
         t0 = time.time_ns()
         with torch.no_grad():
-            psi_rank = ansatz_batch(ci_space_rank)
+            psi_rank = self.ansatz_batch(ci_space_rank, self.nqs, fp_batch)
         t1 = time.time_ns()
         if self.rank == 0:
             logger.info(f"Rank-psi: {(t1-t0)/1.0e9:.3E} s", master=True)
@@ -1001,5 +1031,43 @@ class Sampler:
             self.sorb,
             self.device,
         )
-        del psi_all
-        return WF_LUT
+        # calculate prob
+        prob_all = ((psi_all * psi_all.conj())).real / psi_all.norm() ** 2
+        state_prob = prob_all[begin: end] * self.world_size
+        del psi_all, prob_all
+        return WF_LUT, state_prob
+
+    # TODO: merge public_function.py/ansatz_batch
+    def ansatz_batch(
+        self,
+        x: Tensor,
+        ansatz: Callable[[Tensor], Tensor],
+        fp_batch: int = -1,
+    ) -> Tensor:
+        assert x.dtype == torch.uint8
+        if fp_batch == -1 or fp_batch > x.size(0):
+            fp_batch = x.size(0)
+        idx_lst = [0] + split_batch_idx(x.size(0), fp_batch)
+        result = torch.empty(x.size(0), device=self.device, dtype=self.dtype)
+        for i in range(len(idx_lst) - 1):
+            _start = idx_lst[i]
+            _end = idx_lst[i + 1]
+            result[_start:_end] = ansatz(onv_to_tensor(x[_start:_end], self.sorb))
+        return result
+
+    def gather_extra_psi(self, x: Tensor, prob: Tensor):
+        """
+        return:
+            ||f(n)|| / norm**2, norm()
+        """
+        fp_batch: int = self.eloc_param["fp_batch"]
+        extra_psi = self.ansatz_batch(x, self.nqs.module.extra, fp_batch)
+        extra_norm = (extra_psi.conj() * extra_psi * prob).sum().real * self.world_size
+
+        all_reduce_tensor(extra_norm, world_size=self.world_size)
+        extra_norm = extra_norm.sqrt()
+        extra_psi_pow = extra_psi * extra_psi.conj().real / extra_norm**2
+        if self.rank == 0:
+            logger.info(f"B: {extra_norm:.4E}", master=True)
+
+        return extra_norm, extra_psi_pow

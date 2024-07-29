@@ -8,7 +8,7 @@ import numpy as np
 
 from torch import Tensor
 from torch.distributions import Binomial
-from typing import List, Type, Tuple, Union, Literal
+from typing import List, Type, Tuple, Union, Literal, Callable
 from typing_extensions import Self  # 3.11 support Self
 from dataclasses import dataclass
 from loguru import logger
@@ -16,6 +16,7 @@ from loguru import logger
 from libs.C_extension import onv_to_tensor, tensor_to_onv, wavefunction_lut
 from .onv import ONV
 from .distributed import get_rank, get_world_size
+
 # from libs.bak.C_extension import wavefunction_lut as v1
 
 USE_HASH = False
@@ -24,7 +25,9 @@ try:
     from libs.C_extension import hash_build, hash_lookup, HashTable
 except ImportError:
     import warnings
+
     warnings.warn("Not implement hashtable", UserWarning)
+
 
 def check_para(bra: Tensor):
     r"""
@@ -139,6 +142,7 @@ def get_Num_SinglesDoubles(sorb: int, noA: int, noB: int) -> int:
     nDab = noA * noB * nvA * nvB
     return sum((nSa, nSb, nDaa, nDbb, nDab))
 
+
 def get_index_SingleDoubles(sorb: int, noA: int, noB: int) -> List[int]:
     """
     (1, aa + bb, aaaa + bbbb + abab)
@@ -152,6 +156,7 @@ def get_index_SingleDoubles(sorb: int, noA: int, noB: int) -> List[int]:
     nDbb = noB * (noB - 1) // 2 * nvB * (nvB - 1) // 2
     nDab = noA * noB * nvA * nvB
     return [1, nSa + nSb, nDaa + nDbb + nDab]
+
 
 def get_nbatch(
     sorb: int,
@@ -726,6 +731,7 @@ def split_length_idx(dim: int, length: int) -> List[int]:
     idx_lst = idx_lst.cumsum(dim=0).tolist()
     return idx_lst
 
+
 class WavefunctionLUT:
     r"""
     wavefunction Lookup-Table in order to reduce psi(x) calculation in local energy
@@ -826,7 +832,7 @@ class WavefunctionLUT:
         begin = self.rank_begin + begin
         end = self.rank_begin + end
         assert self.rank_end >= end, "Index date must be in the same rank"
-        return self.wf_value[self.idx_sorted[begin: end]]
+        return self.wf_value[self.idx_sorted[begin:end]]
 
     def clean_memory(self) -> None:
         """
@@ -908,6 +914,27 @@ class MemoryTrack:
     def clean_memory_cache(device: torch.device) -> None:
         if device.type == "cuda":
             torch.cuda.empty_cache()
+
+
+def ansatz_batch(
+    batch: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    func: Callable[[Tensor], Tensor],
+    x: Tensor,
+) -> Tensor:
+    """
+    split-batch
+    """
+    if batch == -1 or x.size(0) == 0:
+        return func(x)
+    else:
+        idx_lst = [0] + split_batch_idx(x.size(0), batch)
+        result = torch.empty(x.size(0), device=device, dtype=dtype)
+        for i in range(len(idx_lst) - 1):
+            start, end = idx_lst[i], idx_lst[i + 1]
+            result[start:end] = func(x[start:end])
+        return result
 
 
 if __name__ == "__main__":

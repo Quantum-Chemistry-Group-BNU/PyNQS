@@ -183,16 +183,31 @@ class VMCOptimizer(BaseVMCOptimizer):
                 if self.only_output_spin_raising:
                     sloc = torch.zeros_like(eloc)
                     sloc_mean = torch.zeros_like(eloc_mean)
-                psi = energy_grad(
-                    self.model,
-                    sample_state,
-                    state_prob,
-                    eloc + sloc,
-                    eloc_mean + sloc_mean,
-                    self.MAX_AD_DIM,
-                    self.dtype,
-                    self.method_grad,
-                )
+
+                if self.sampler.use_multi_psi:
+                    extra_norm = self.sampler.extra_norm
+                    from vmc.grad.energy_grad import new_grad
+                    psi = new_grad(
+                        self.model,
+                        sample_state,
+                        state_prob,
+                        eloc + sloc,
+                        eloc_mean + sloc_mean,
+                        extra_norm,
+                        self.dtype,
+                        self.MAX_AD_DIM,
+                    )
+                else:
+                    psi = energy_grad(
+                        self.model,
+                        sample_state,
+                        state_prob,
+                        eloc + sloc,
+                        eloc_mean + sloc_mean,
+                        self.MAX_AD_DIM,
+                        self.dtype,
+                        self.method_grad,
+                    )
             delta_grad = (time.time_ns() - t1) / 1.00e09
 
             # save the energy grad and clip-grad
@@ -200,6 +215,11 @@ class VMCOptimizer(BaseVMCOptimizer):
             e_total = (eloc_mean + sloc_mean).real.item() + self.ecore
             self.save_grad_energy(e_total)
 
+            # for key in self.model.state_dict().keys():
+            #     logger.info(f"key: {key}, norm: {self.model.state_dict()[key].grad.norm()}")
+            for param, key in zip(self.model.parameters(), self.model.state_dict().keys()):
+                logger.info(f"key: {key}, norm: {param.grad.norm()}")
+            # breakpoint()
             t2 = time.time_ns()
             self.update_param(epoch=epoch)
             delta_update = (time.time_ns() - t2) / 1.00e09
