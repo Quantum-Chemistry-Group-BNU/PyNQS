@@ -472,9 +472,9 @@ class Graph_MPS_RNN(nn.Module):
             if fill_params == "M":
                 data_index, data_dict = self.matrix_index[0][site]
                 if self.graph_before is not None:
-                    data_before_index, data_before_dict = scan_matrix(self.graph_before,different_h=self.use_different_h)[0][site]
+                    data_before_index, data_before_dict = scan_matrix(self.graph_before,different_h=self.use_different_h_before)[0][site]
                 else:
-                    data_before_index, data_before_dict = data_index, data_dict
+                    data_before_index, data_before_dict = scan_matrix(self.graph,different_h=self.use_different_h_before)[0][site]
                 # fill parameters in before-graph
                 for i_out, site_out in enumerate(data_before_index[1]):
                     for i_in, site_in in enumerate(data_before_index[0]):
@@ -503,9 +503,9 @@ class Graph_MPS_RNN(nn.Module):
             else:
                 data_index, data_dict = self.eta_index[0][site]
                 if self.graph_before is not None:
-                    data_before_index, data_before_dict = scan_eta(self.graph_before,different_h=self.use_different_h)[0][site]
+                    data_before_index, data_before_dict = scan_eta(self.graph_before,different_h=self.use_different_h_before)[0][site]
                 else:
-                    data_before_index, data_before_dict = data_index, data_dict
+                    data_before_index, data_before_dict = scan_eta(self.graph,different_h=self.use_different_h_before)[0][site]
                 # fill parameters
                 for i_out, site_out in enumerate(data_before_index[1]):
                     _matrix_index = data_before_dict[site_out]
@@ -646,7 +646,7 @@ class Graph_MPS_RNN(nn.Module):
         shape2 = (self.matrix_index[1], self.hilbert_local, self.dcut, self.dcut, 2)
         # initialize parameters
         M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
-        v_r = torch.zeros(shape1, **self.factory_kwargs_real) * self.iscale
+        v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
         eta_r = torch.ones(shape01, **self.factory_kwargs_real) * (1 / (2**0.5))
         w_r = torch.zeros(shape01, **self.factory_kwargs_real) * self.iscale
         c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
@@ -657,7 +657,7 @@ class Graph_MPS_RNN(nn.Module):
             if self.use_different_h and self.graph_before is not None:
                 data_index, data_dict = self.eta_index[0][site]
                 if self.graph_before is not None:
-                    data_before_index, _ = scan_eta(self.graph_before,different_h=self.use_different_h)[0][site]
+                    data_before_index, _ = scan_eta(self.graph_before,different_h=self.use_different_h_before)[0][site]
                 else:
                     data_before_index = data_index
                 # fill parameters in diff
@@ -680,6 +680,11 @@ class Graph_MPS_RNN(nn.Module):
         # fill the params. input
         if self.params_file is not None:
             params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device, weights_only=False)["model"]
+            self.use_different_h_before = True
+            if params["module.params_w.all_sites"].shape[0] == self.nqubits // 2:
+                self.use_different_h_before = False
+            if "module.params_M.all_sites" in params:
+                self.fill_data(params, use_complex=True, data_r=M_r, fill_params="M")
             if "module.params_v.all_sites" in params:
                 self.fill_data(params, use_complex=True, data_r=v_r, fill_params="v")
             if "module.params_eta.all_sites" in params:
@@ -697,8 +702,6 @@ class Graph_MPS_RNN(nn.Module):
                         self.fill_T(params, use_complex=True, K_r=K_r, U_r=U_r)
                     else:
                         self.fill_T(params, use_complex=True, T_r=T_r)
-            if "module.params_M.all_sites" in params:
-                self.fill_data(params, use_complex=True, data_r=M_r, fill_params="M")
         self.init_params(M_r, v_r, eta_r, w_r, c_r, use_complex=True)
         if self.use_tensor:
             if self.tensor_cmpr:
@@ -730,7 +733,7 @@ class Graph_MPS_RNN(nn.Module):
             if self.use_different_h and self.graph_before is not None:
                 data_index, data_dict = self.eta_index[0][site]
                 if self.graph_before is not None:
-                    data_before_index, _ = scan_eta(self.graph_before,different_h=self.use_different_h)[0][site]
+                    data_before_index, _ = scan_eta(self.graph_before,different_h=self.use_different_h_before)[0][site]
                 else:
                     data_before_index = data_index
                 # fill parameters in diff
@@ -754,6 +757,9 @@ class Graph_MPS_RNN(nn.Module):
         # fill the params. input
         if self.params_file is not None:
             params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device, weights_only=False)["model"]
+            self.use_different_h_before = True
+            if params["module.params_w.all_sites"].shape[0] == self.nqubits // 2:
+                self.use_different_h_before = False
             if "module.params_v.all_sites" in params:
                 self.fill_data(params, use_complex=False, data_r=v_r, fill_params="v")
             if "module.params_eta.all_sites" in params:
@@ -782,7 +788,7 @@ class Graph_MPS_RNN(nn.Module):
 
     def param_init_two_site(self) -> None:
         if self.params_file is not None:
-            self.iscale = 1e-14  # this parameter could be different when use different dcut and model
+            self.iscale = 1e-4  # this parameter could be different when use different dcut and model
         if self.param_dtype == torch.complex128:
             self.param_init_two_site_complex()
         elif self.param_dtype == torch.double:
