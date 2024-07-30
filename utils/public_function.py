@@ -6,11 +6,12 @@ import torch
 import itertools
 import numpy as np
 
-from torch import Tensor
-from torch.distributions import Binomial
+from dataclasses import dataclass
+from functools import partial
 from typing import List, Type, Tuple, Union, Literal, Callable
 from typing_extensions import Self  # 3.11 support Self
-from dataclasses import dataclass
+from torch import Tensor
+from torch.distributions import Binomial
 from loguru import logger
 
 from libs.C_extension import onv_to_tensor, tensor_to_onv, wavefunction_lut
@@ -917,23 +918,30 @@ class MemoryTrack:
 
 
 def ansatz_batch(
-    batch: int,
-    device: torch.device,
-    dtype: torch.dtype,
     func: Callable[[Tensor], Tensor],
     x: Tensor,
+    batch: int,
+    sorb: int,
+    device: torch.device,
+    dtype: torch.dtype,
 ) -> Tensor:
     """
     split-batch
     """
+    if x.dtype == torch.uint8:
+        convert = partial(onv_to_tensor, sorb=sorb)
+    else:
+        assert x.size(1) == sorb
+        convert = lambda x: x
+
     if batch == -1 or x.size(0) == 0:
-        return func(x)
+        return func(convert(x))
     else:
         idx_lst = [0] + split_batch_idx(x.size(0), batch)
         result = torch.empty(x.size(0), device=device, dtype=dtype)
         for i in range(len(idx_lst) - 1):
             start, end = idx_lst[i], idx_lst[i + 1]
-            result[start:end] = func(x[start:end])
+            result[start:end] = func(convert(x[start:end]))
         return result
 
 

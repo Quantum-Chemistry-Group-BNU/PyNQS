@@ -185,7 +185,7 @@ class VMCOptimizer(BaseVMCOptimizer):
                     sloc_mean = torch.zeros_like(eloc_mean)
 
                 if self.sampler.use_multi_psi:
-                    extra_norm = self.sampler.extra_norm
+                    extra_psi_pow = self.sampler.extra_psi_pow
                     from vmc.grad.energy_grad import new_grad
                     psi = new_grad(
                         self.model,
@@ -193,7 +193,7 @@ class VMCOptimizer(BaseVMCOptimizer):
                         state_prob,
                         eloc + sloc,
                         eloc_mean + sloc_mean,
-                        extra_norm,
+                        extra_psi_pow,
                         self.dtype,
                         self.MAX_AD_DIM,
                     )

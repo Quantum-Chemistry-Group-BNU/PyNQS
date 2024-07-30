@@ -50,6 +50,7 @@ from utils.public_function import (
     split_length_idx,
     split_batch_idx,
     setup_seed,
+    ansatz_batch,
 )
 from utils.det_helper import DetLUT
 from utils.pyscf_helper.operator import spin_raising
@@ -1033,29 +1034,20 @@ class Sampler:
         )
         # calculate prob
         prob_all = ((psi_all * psi_all.conj())).real / psi_all.norm() ** 2
-        state_prob = prob_all[begin: end] * self.world_size
+        state_prob = prob_all[begin:end] * self.world_size
         del psi_all, prob_all
         return WF_LUT, state_prob
 
-    # TODO: merge public_function.py/ansatz_batch
+    @torch.no_grad
     def ansatz_batch(
         self,
         x: Tensor,
         ansatz: Callable[[Tensor], Tensor],
         fp_batch: int = -1,
     ) -> Tensor:
-        assert x.dtype == torch.uint8
-        if fp_batch == -1 or fp_batch > x.size(0):
-            fp_batch = x.size(0)
-        idx_lst = [0] + split_batch_idx(x.size(0), fp_batch)
-        result = torch.empty(x.size(0), device=self.device, dtype=self.dtype)
-        for i in range(len(idx_lst) - 1):
-            _start = idx_lst[i]
-            _end = idx_lst[i + 1]
-            result[_start:_end] = ansatz(onv_to_tensor(x[_start:_end], self.sorb))
-        return result
+        return ansatz_batch(ansatz, x, fp_batch, self.sorb, self.device, self.dtype)
 
-    def gather_extra_psi(self, x: Tensor, prob: Tensor):
+    def gather_extra_psi(self, x: Tensor, prob: Tensor) -> Tuple[Tensor, Tensor]:
         """
         return:
             ||f(n)|| / norm**2, norm()
@@ -1066,7 +1058,7 @@ class Sampler:
 
         all_reduce_tensor(extra_norm, world_size=self.world_size)
         extra_norm = extra_norm.sqrt()
-        extra_psi_pow = extra_psi * extra_psi.conj().real / extra_norm**2
+        extra_psi_pow = extra_psi * extra_psi.conj() / extra_norm**2
         if self.rank == 0:
             logger.info(f"B: {extra_norm:.4E}", master=True)
 

@@ -223,12 +223,13 @@ def new_grad(
 
         state_prob_batch = state_prob[begin:end].real.to(dtype)
         eloc_batch = eloc[begin:end].to(dtype)
+        extra_psi_pow_batch = extra_psi_pow[begin: end].to(dtype)
 
         if torch.any(torch.isnan(log_psi)):
             raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
 
         loss1 = log_psi.conj() + log_f.conj()
-        loss2 = eloc_batch - e_total * extra_psi_pow
+        loss2 = eloc_batch - e_total * extra_psi_pow_batch
         loss = 2 * (loss1 * loss2 * state_prob_batch).sum().real
         loss.backward()
         loss_sum += loss.detach()

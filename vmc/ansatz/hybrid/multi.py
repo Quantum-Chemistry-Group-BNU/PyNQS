@@ -48,6 +48,7 @@ class MultiPsi(AnsatzARBase):
     def forward(self, x: Tensor):
         return self.sample(x)
 
+    @torch.no_grad
     def call(self, x):
         device = self.sample.device
         return torch.ones(x.size(0), device=device, dtype=torch.double) * 0.10

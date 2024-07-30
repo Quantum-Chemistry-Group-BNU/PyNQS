@@ -77,7 +77,7 @@ def total_energy(
     idx_lst = split_batch_idx(dim, min_batch=nbatch)
 
     def _ansatz_batch(x: Tensor, func: Callable[[Tensor], Tensor]) -> Tensor:
-        return ansatz_batch(batch=fp_batch, device=device, dtype=dtype, func=func, x=x)
+        return ansatz_batch(func, x, nbatch, sorb, device, dtype)
 
     if rank == 0:
         s = f"eloc: nbatch: {nbatch}, dim: {dim}, split: {len(idx_lst)}"
@@ -150,41 +150,6 @@ def total_energy(
     if torch.any(torch.isnan(eloc)):
         raise ValueError(f"The Local energy exists nan")
 
-    if False:
-        t_exact0 = time.time_ns()
-        world_size = get_world_size()
-        # gather psi_lst from all rank
-        psi_all = gather_tensor(psi, device, world_size, master_rank=0)
-        # eloc_all = gather_tensor(eloc, device, world_size, master_rank=0)
-        synchronize()
-        t_exact1 = time.time_ns()
-        if rank == 0:
-            psi_all = torch.cat(psi_all)
-            # eloc_all = torch.cat(eloc_all)
-            state_prob_all = (psi_all * psi_all.conj()).real / psi_all.norm() ** 2
-            state_prob_all = state_prob_all.to(dtype)
-        else:
-            state_prob_all = None
-        # Scatter state_prob to very rank
-        t_exact2 = time.time_ns()
-        state_prob = scatter_tensor(state_prob_all, device, dtype, world_size, master_rank=0)
-        state_prob *= world_size
-        synchronize()
-        t_exact3 = time.time_ns()
-
-        # logger
-        if rank == 0:
-            delta_all = (t_exact3 - t_exact0) / 1.0e09
-            delta_gather = (t_exact1 - t_exact0) / 1.0e09
-            delta_scatter = (t_exact3 - t_exact2) / 1.0e09
-            delta_cal = (t_exact2 - t_exact1) / 1.0e09
-            s = f"Exact-prob: {delta_all:.3E} s, Calculate: {delta_cal:.3E} s, "
-            s += f"Gather: {delta_gather:.3E} s, Scatter: {delta_scatter:.3E} s"
-            logger.info(s, master=True)
-
-        # assure length is true.
-        assert state_prob.shape[0] == dim
-        del psi_all, state_prob_all
 
     t1 = time.time_ns()
     time_lst = np.stack(time_lst, axis=0)
@@ -200,8 +165,5 @@ def total_energy(
     if x.is_cuda:
         torch.cuda.empty_cache()
 
-    if exact:
-        return eloc, sloc, state_prob.real
-    else:
-        placeholders = torch.zeros(1, device=device, dtype=dtype)
-        return eloc, sloc, placeholders
+    placeholders = torch.zeros(1, device=device, dtype=dtype)
+    return eloc, sloc, placeholders
