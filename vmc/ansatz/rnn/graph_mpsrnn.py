@@ -712,7 +712,7 @@ class Graph_MPS_RNN(nn.Module):
 
     def param_init_two_site(self) -> None:
         if self.params_file is not None:
-            self.iscale = 1e-4  # this parameter could be different when use different dcut and model
+            self.iscale = 1e-3
         if self.param_dtype == torch.complex128:
             self.param_init_two_site_complex()
         elif self.param_dtype == torch.double:
@@ -770,32 +770,29 @@ class Graph_MPS_RNN(nn.Module):
         return idxs
 
     def _calculate_prob(self, h_ud: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
-        '''
-        To caculate probility by h_ud
-        '''
+        # cal. prob. by h_ud
         if self.param_dtype == torch.complex128:
             _h_ud = h_ud.abs().pow(2)
-            normal = (_h_ud.conj() * _h_ud).mean((0, 1)).real.sqrt()
+            normal = (_h_ud).mean((0, 1)).sqrt()
             # normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
             h_ud = h_ud / normal  # (4, dcut, nbatch)
-            # calculate probility and normalize it 
+            # cal. prob. and normalized
             eta = torch.abs(eta) ** 2  # (dcut)
-            if self.numerical_type == "sigmoid":
-                raise NotImplementedError("sigmoid function can not be used in Complex number")
             # P = torch.einsum("aij,i,aij->aj",h_ud,eta,h_ud.conj()).real
             # P = (h_ud.abs().pow(2) * eta.reshape(1, -1, 1)).sum(1)
             P = (_h_ud / normal**2 * eta.reshape(1, -1, 1)).sum(1)
+            # print(torch.exp(self.parm_eta[a, b]))
             P = torch.sqrt(P)
         elif self.param_dtype == torch.double:
             _h_ud = h_ud.pow(2)
-            normal = (_h_ud.conj() * _h_ud).mean((0, 1)).real.sqrt()
+            normal = (_h_ud).mean((0, 1)).sqrt()
             h_ud = h_ud / normal  # (4, dcut, nbatch)
             if self.numerical_type == "power":
                 eta = eta**2  # (dcut)
             elif self.numerical_type == "sigmoid":
-                eta = torch.sigmoid(eta)  # real only
+                eta = torch.sigmoid(eta)
             else:
-                raise NotImplementedError("Please use power or sigmoid to caculate eta")
+                raise NotImplementedError("please use power or sigmoid to caculate eta")
             P = (_h_ud / normal**2 * eta.reshape(1, -1, 1)).sum(1)
             P = torch.sqrt(P)
         else:
