@@ -77,7 +77,7 @@ def total_energy(
     idx_lst = split_batch_idx(dim, min_batch=nbatch)
 
     def _ansatz_batch(x: Tensor, func: Callable[[Tensor], Tensor]) -> Tensor:
-        return ansatz_batch(func, x, nbatch, sorb, device, dtype)
+        return ansatz_batch(func, x, fp_batch, sorb, device, dtype)
 
     if rank == 0:
         s = f"eloc: nbatch: {nbatch}, dim: {dim}, split: {len(idx_lst)}"
