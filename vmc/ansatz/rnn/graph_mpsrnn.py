@@ -511,9 +511,17 @@ class Graph_MPS_RNN(nn.Module):
                     _matrix_index = data_before_dict[site_out]
                     matrix_index = data_dict[site_out]
                     if use_complex:
-                        data[matrix_index,...] = torch.view_as_complex(params[data_name][_matrix_index])
+                        _data = torch.view_as_complex(params[data_name][_matrix_index])
+                        if fill_params == "c":
+                            data[matrix_index,...] = _data
+                        else:
+                            data[matrix_index,...][...,:_data.shape[-1]] = _data
                     else:
-                        data[matrix_index,...] = params[data_name][_matrix_index]
+                        _data = params[data_name][_matrix_index]
+                        if fill_params == "c":
+                            data[matrix_index,...] = _data
+                        else:
+                            data[matrix_index,...][...,:_data.shape[-1]] = _data
                 #     list_out = []
                 #     for i_out, site_out in enumerate(data_before_index[1]):
                 #         _matrix_index = data_before_dict[site_out]
@@ -558,7 +566,10 @@ class Graph_MPS_RNN(nn.Module):
                 _shape4, _begin_K, _end_K = _shape4_dict[node]
                 _shape5, _begin_U, _end_U = _shape5_dict[node]
                 _K = _K_r[..., _begin_K:_end_K].view(_shape4)  # (4,dcut_cmpr_before,...)
-                _U = _U_r[..., _begin_U:_end_U].view(_shape5)  # (4,dcut_before,dcut_cmpr_before,#pred_degree)
+                try:
+                    _U = _U_r[..., _begin_U:_end_U].view(_shape5)  # (4,dcut_before,dcut_cmpr_before,#pred_degree)
+                except:
+                    breakpoint()
                 # reshape the params
                 shape4, begin_K, end_K = self.shape4_dict[node]
                 shape5, begin_U, end_U = self.shape5_dict[node]
@@ -671,9 +682,9 @@ class Graph_MPS_RNN(nn.Module):
                     graph=self.graph, dcut=self.dcut, use_complex=True
                 )
                 shape4 = (self.hilbert_local, shape4_num, 2)
-                K_r = torch.rand((shape4), **self.factory_kwargs_real) * 0.1
+                K_r = torch.rand((shape4), **self.factory_kwargs_real) * 0.001
                 shape5 = (self.hilbert_local, self.dcut, shape5_num, 2)
-                U_r = torch.rand((shape5), **self.factory_kwargs_real) * 0.1
+                U_r = torch.rand((shape5), **self.factory_kwargs_real) * 0.001
             else:
                 shape3 = (len(self.tensor_index), self.hilbert_local, self.dcut, self.dcut, self.dcut, 2)
                 T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
@@ -692,7 +703,7 @@ class Graph_MPS_RNN(nn.Module):
             # Phase part
             if "module.params_w.all_sites" in params:
                 self.fill_data(params, use_complex=True, data_r=w_r, fill_params="w")
-                self.dcut_before = w_r.shape[-2]
+                self.dcut_before = params["module.params_w.all_sites"].shape[-2]
             if "module.params_c.all_sites" in params:
                 self.fill_data(params, use_complex=True, data_r=c_r, fill_params="c")
             if self.use_tensor:
@@ -748,9 +759,9 @@ class Graph_MPS_RNN(nn.Module):
                     graph=self.graph, dcut=self.dcut_before, use_complex=False
                 )
                 shape4 = (self.hilbert_local, shape4_num)
-                K_r = torch.rand((shape4), **self.factory_kwargs_real) * 0.1
+                K_r = torch.rand((shape4), **self.factory_kwargs_real) * 0.001
                 shape5 = (self.hilbert_local, self.dcut, shape5_num)
-                U_r = torch.rand((shape5), **self.factory_kwargs_real) * 0.1
+                U_r = torch.rand((shape5), **self.factory_kwargs_real) * 0.001
             else:
                 shape3 = (self.all_in_tensor, self.hilbert_local, self.dcut, self.dcut, self.dcut)
                 T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
@@ -767,7 +778,7 @@ class Graph_MPS_RNN(nn.Module):
             # Phase part
             if "module.params_w.all_sites" in params:
                 self.fill_data(params, use_complex=False, data_r=w_r, fill_params="w")
-                self.dcut_before = w_r.shape[-2]
+                self.dcut_before = params["module.params_w.all_sites"].shape[-2]
             if "module.params_c.all_sites" in params:
                 self.fill_data(params, use_complex=False, data_r=c_r, fill_params="c")
             if self.use_tensor:
@@ -1127,7 +1138,7 @@ class Graph_MPS_RNN(nn.Module):
         extra_phase = permute_sgn(self.exchange_order, target.long(), self.nqubits)
         psi = psi * extra_phase
         # breakpoint()
-        torch.save(extra_phase,"extra_phase.pth")
+        # torch.save(extra_phase,"extra_phase.pth")
         if use_unique:
             psi = psi[original_idx]
         if self.J_W_phase:  # for debug
