@@ -983,8 +983,8 @@ class Sampler:
         FCI-space LUT
         """
         # using simple-eloc
-        self.use_sample_space == False
-        self.reduce_psi == False
+        self.use_sample_space = False
+        self.reduce_psi = False
         fp_batch: int = self.eloc_param["fp_batch"]
 
         # split rank

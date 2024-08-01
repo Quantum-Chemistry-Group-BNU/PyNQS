@@ -168,12 +168,6 @@ def _simple(
     comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)  # shape (1, comb)/(batch, comb)
 
     t2 = time.time_ns()
-    # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
-    # TODO: torch.unique comb_x is faster, but convert -> -1/1 or 0/1 maybe is not order
-    # so, fully testing.
-    # FIXME: What time remove duplicate onstate, memory consuming,
-    # and has been implemented in wavefunction ansatz,
-    # if testing, use keyword: 'use_unique = False/True'.
     if comb_x.numel() != 0:
         if use_LUT:
             batch_before_lut = batch * comb_x.size(1)  # batch * comb
@@ -203,7 +197,6 @@ def _simple(
         psi_x1 = torch.zeros(batch, comb, device=device, dtype=dtype)
 
     if use_multi_psi:
-        # breakpoint()
         if use_unique:
             unique_comb, inverse = torch.unique(
                 comb_x.reshape(-1, bra_len), dim=0, return_inverse=True
@@ -216,13 +209,12 @@ def _simple(
 
         # f(n).conj() Hnm * f(m) / extra_norm**2
         _psi = _psi.reshape(batch, -1)
+        # TODO: in-place, if value is real, and save memory
         value = _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
         comb_hij = comb_hij * value
         if use_spin_raising:
             hij_spin = hij_spin * value
 
-    if x.is_cuda:
-        torch.cuda.synchronize(device)
     t3 = time.time_ns()
 
     if batch == 1:
@@ -243,8 +235,6 @@ def _simple(
     )
     del comb_hij, comb_x  # index, unique_x1, unique
 
-    # if x.is_cuda:
-    #     torch.cuda.empty_cache()
 
     if not use_spin_raising:
         sloc = torch.zeros_like(eloc)
@@ -480,7 +470,7 @@ def _only_sample_space(
     # sd_le_sample = False
 
     if use_multi_psi:
-        raise NotImplementedError
+        raise NotImplementedError(f"Not implement in multi-psi")
         ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
 
     if sd_le_sample:

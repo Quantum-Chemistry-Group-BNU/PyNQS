@@ -938,6 +938,7 @@ def ansatz_batch(
         return func(convert(x))
     else:
         idx_lst = [0] + split_batch_idx(x.size(0), batch)
+        # TODO: using list[Tensor] maybe better
         result = torch.empty(x.size(0), device=device, dtype=dtype)
         for i in range(len(idx_lst) - 1):
             start, end = idx_lst[i], idx_lst[i + 1]
