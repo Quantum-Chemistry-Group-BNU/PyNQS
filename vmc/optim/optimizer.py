@@ -217,9 +217,10 @@ class VMCOptimizer(BaseVMCOptimizer):
 
             # for key in self.model.state_dict().keys():
             #     logger.info(f"key: {key}, norm: {self.model.state_dict()[key].grad.norm()}")
-            for param, key in zip(self.model.parameters(), self.model.state_dict().keys()):
-                logger.info(f"key: {key}, norm: {param.grad.norm()}")
-            # breakpoint()
+            if self.sampler.use_multi_psi and self.rank == 0:
+                for param, key in zip(self.model.parameters(), self.model.state_dict().keys()):
+                    if param.grad is not None:
+                        logger.info(f"key: {key}, norm: {param.grad.norm()}")
             t2 = time.time_ns()
             self.update_param(epoch=epoch)
             delta_update = (time.time_ns() - t2) / 1.00e09

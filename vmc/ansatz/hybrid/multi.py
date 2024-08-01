@@ -25,11 +25,9 @@ class MultiPsi(AnsatzARBase):
 
         #TODO: 不兼容之前的文件了 checkpoints
         self.sample = ansatz_sample
+        self.extra = ansatz_extra
         if debug:
-            self.extra = self.call
-        else:
-            self.extra = ansatz_extra
-        # self.extra = self.call
+            self.extra.forward = self.call
 
         if not hasattr(self.sample, "ar_sampling"):
             raise NotImplementedError(f"{self.sample} not have 'ar_sampling'")
@@ -51,4 +49,4 @@ class MultiPsi(AnsatzARBase):
     @torch.no_grad
     def call(self, x):
         device = self.sample.device
-        return torch.ones(x.size(0), device=device, dtype=torch.double) * 0.10
+        return torch.ones(x.size(0), device=device, dtype=torch.double) * 1.0

@@ -987,19 +987,6 @@ class Sampler:
         self.reduce_psi == False
         fp_batch: int = self.eloc_param["fp_batch"]
 
-        # def ansatz_batch(x: Tensor) -> Tensor:
-        #     assert x.dtype == torch.uint8
-        #     nonlocal fp_batch
-        #     if fp_batch == -1 or fp_batch > x.size(0):
-        #         fp_batch = x.size(0)
-        #     idx_lst = [0] + split_batch_idx(x.size(0), fp_batch)
-        #     result = torch.empty(x.size(0), device=self.device, dtype=self.dtype)
-        #     for i in range(len(idx_lst) - 1):
-        #         _start = idx_lst[i]
-        #         _end = idx_lst[i + 1]
-        #         result[_start:_end] = self.nqs(onv_to_tensor(x[_start:_end], self.sorb))
-        #     return result
-
         # split rank
         dim = self.ci_space.size(0)
         idx_rank_lst = [0] + split_length_idx(dim, length=self.world_size)
@@ -1054,12 +1041,18 @@ class Sampler:
         """
         fp_batch: int = self.eloc_param["fp_batch"]
         extra_psi = self.ansatz_batch(x, self.nqs.module.extra, fp_batch)
-        extra_norm = (extra_psi.conj() * extra_psi * prob).sum().real * self.world_size
+        _psi = extra_psi.conj() * extra_psi
 
-        all_reduce_tensor(extra_norm, world_size=self.world_size)
-        extra_norm = extra_norm.sqrt()
-        extra_psi_pow = extra_psi * extra_psi.conj() / extra_norm**2
+        # stats
+        if self.debug_exact:
+            n_sample = float("inf")
+        else:
+            n_sample = self.n_sample
+        stats_norm = operator_statistics(_psi.real, prob, n_sample, "f(n)²")
+        extra_norm = stats_norm["mean"].sqrt()
+        extra_psi_pow = _psi / extra_norm**2
+
         if self.rank == 0:
-            logger.info(f"B: {extra_norm:.4E}", master=True)
+            logger.info(str(stats_norm), master=True)
 
         return extra_norm, extra_psi_pow

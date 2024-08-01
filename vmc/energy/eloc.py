@@ -15,6 +15,7 @@ print = partial(print, flush=True)
 
 # from torch.profiler import profile, record_function, ProfilerActivity
 
+
 def local_energy(
     x: Tensor,
     h1e: Tensor,
@@ -74,9 +75,18 @@ def local_energy(
         else:
             if reduce_psi:
                 assert eps >= 0.0 and eps_sample >= 0
-                func = partial(_reduce_psi, n_sample=eps_sample, use_multi_psi=use_multi_psi, extra_norm=extra_norm)
+                func = partial(
+                    _reduce_psi,
+                    n_sample=eps_sample,
+                    use_multi_psi=use_multi_psi,
+                    extra_norm=extra_norm,
+                )
             else:
-                func = partial(_simple, use_multi_psi=use_multi_psi, extra_norm=extra_norm)
+                func = partial(
+                    _simple,
+                    use_multi_psi=use_multi_psi,
+                    extra_norm=extra_norm,
+                )
         # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         #              record_shapes=True, profile_memory=True) as prof:
         #     value = func(x, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype, WF_LUT, use_unique, eps)
@@ -195,7 +205,9 @@ def _simple(
     if use_multi_psi:
         # breakpoint()
         if use_unique:
-            unique_comb, inverse = torch.unique(comb_x.reshape(-1, bra_len), dim=0, return_inverse=True)
+            unique_comb, inverse = torch.unique(
+                comb_x.reshape(-1, bra_len), dim=0, return_inverse=True
+            )
             x1 = onv_to_tensor(unique_comb, sorb)
             _psi = torch.index_select(ansatz_extra(x1), 0, inverse)
         else:
@@ -204,9 +216,10 @@ def _simple(
 
         # f(n).conj() Hnm * f(m) / extra_norm**2
         _psi = _psi.reshape(batch, -1)
-        comb_hij = comb_hij * _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
+        value = _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
+        comb_hij = comb_hij * value
         if use_spin_raising:
-            hij_spin *= _psi.real
+            hij_spin = hij_spin * value
 
     if x.is_cuda:
         torch.cuda.synchronize(device)
@@ -377,16 +390,16 @@ def _reduce_psi(
 
     if use_multi_psi:
         _comb = comb_x.reshape(-1, bra_len)[gt_eps_idx]
-        # TODO: split batch
         _psi = ansatz_extra(onv_to_tensor(_comb, sorb))
         # f*(n) Hnm f(m) / extra_norm**2
         psi_extra[gt_eps_idx] = _psi.to(dtype)
         psi_extra = psi_extra.reshape(batch, -1)
         # (batch, n_SD)
-        comb_hij = comb_hij * psi_extra * (psi_extra[:, 0].reshape(-1, 1).conj() / extra_norm**2)
+        value = psi_extra * (psi_extra[:, 0].reshape(-1, 1).conj() / extra_norm**2)
+        comb_hij = comb_hij * value
         # comb_hij *= psi_extra.real
         if use_spin_raising:
-            hij_spin *= psi_extra
+            hij_spin = hij_spin * value
 
     if batch == 1:
         if use_spin_raising:
@@ -429,6 +442,7 @@ def _only_sample_space(
     h1e: Tensor,
     h2e: Tensor,
     ansatz: nn.Module | Callable[[Tensor], Tensor],
+    ansatz_batch: Callable[[Callable], Tensor],
     sorb: int,
     nele: int,
     noa: int,
@@ -442,6 +456,8 @@ def _only_sample_space(
     eps: float = 1.0e-12,
     index: tuple[int, int] = None,
     alpha: float = 2,
+    use_multi_psi: bool = False,
+    extra_norm: Tensor = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
 
@@ -462,6 +478,10 @@ def _only_sample_space(
     alpha = max(alpha, 1)
     sd_le_sample = n_comb_sd * (2 + is_complex + _len) * alpha <= n_sample
     # sd_le_sample = False
+
+    if use_multi_psi:
+        raise NotImplementedError
+        ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
 
     if sd_le_sample:
         # (batch, n_comb_sd, bra_len)
@@ -493,6 +513,16 @@ def _only_sample_space(
         # T2 = time.time_ns()
 
         psi_x = psi_x1[..., 0].view(-1).clone()
+
+        if use_multi_psi:
+            x1 = onv_to_tensor(comb_x.reshape(-1, bra_len), sorb)
+            _psi = ansatz_extra(x1)
+            # f(n).conj() Hnm * f(m) / extra_norm**2
+            _psi = _psi.reshape(batch, -1)
+            value = _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
+            comb_hij = comb_hij * value
+            if use_spin_raising:
+                hij_spin = hij_spin * value
 
         if use_spin_raising:
             sloc = psi_x1.mul(hij_spin).sum(-1).divide(psi_x)
