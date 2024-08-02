@@ -200,7 +200,7 @@ def new_grad(
     AD_MAX_DIM: int = -1,
 ):
     """
-    2 Re<[(ln psi_n* + ln f_n*)(eloc_new - E * extra_phi_pow)]>
+    loss = 2 Re<[(ln psi_n* + ln f_n*)(eloc_new - E * extra_phi_pow)]>
     """
     device = states.device
     dim = states.size(0)
@@ -218,23 +218,22 @@ def new_grad(
     def batch_loss_backward(begin: int, end: int) -> None:
         nonlocal loss_sum
         state = states[begin: end].requires_grad_()
-        log_psi = nqs.module.sample(state).to(dtype).log()
-        log_f = nqs.module.extra(state).to(dtype).log()
+        log_psi_f = nqs(state).to(dtype).log()
 
         state_prob_batch = state_prob[begin:end].real.to(dtype)
         eloc_batch = eloc[begin:end].to(dtype)
         extra_psi_pow_batch = extra_psi_pow[begin: end].to(dtype)
 
-        if torch.any(torch.isnan(log_psi)):
+        if torch.any(torch.isnan(log_psi_f)):
             raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
 
-        loss1 = log_psi.conj() + log_f.conj()
+        loss1 = log_psi_f.conj()
         loss2 = eloc_batch - e_total * extra_psi_pow_batch
         loss = 2 * (loss1 * loss2 * state_prob_batch).sum().real
         loss.backward()
         loss_sum += loss.detach()
 
-        del state_prob_batch, log_psi, loss
+        del state_prob_batch, log_psi_f, loss
 
     with MemoryTrack(device) as track:
         begin = 0

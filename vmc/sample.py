@@ -362,7 +362,6 @@ class Sampler:
             sample_prob = sample_prob[idx]
         else:
             ci_space = self.ci_space
-        # TODO: remove
         ci_space_rank = scatter_tensor(ci_space, self.device, torch.uint8, self.world_size)
         eloc, sloc, _ = self.calculate_energy(
             ci_space_rank,
@@ -706,7 +705,6 @@ class Sampler:
             # XXX: unique_rank split merge_unique when broadcast to all-rank,
             # this maybe efficiency than scatter->broadcast
             merge_unique = broadcast_tensor(merge_unique, self.device, torch.uint8, master_rank=0)
-            # breakpoint()
             wf_value_unique = broadcast_tensor(
                 wf_value_unique, self.device, self.dtype, master_rank=0
             )
@@ -1002,7 +1000,11 @@ class Sampler:
 
         t0 = time.time_ns()
         with torch.no_grad():
-            psi_rank = self.ansatz_batch(ci_space_rank, self.nqs, fp_batch)
+            if self.use_multi_psi:
+                model = self.nqs.module.sample
+            else:
+                model = self.nqs
+            psi_rank = self.ansatz_batch(ci_space_rank, model, fp_batch)
         t1 = time.time_ns()
         if self.rank == 0:
             logger.info(f"Rank-psi: {(t1-t0)/1.0e9:.3E} s", master=True)

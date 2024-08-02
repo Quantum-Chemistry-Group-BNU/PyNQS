@@ -43,10 +43,10 @@ class MultiPsi(AnsatzARBase):
     ) -> Tuple[Tensor, Tensor, Tensor]:
         return self.sample.ar_sampling(n_sample, min_batch, min_tree_height, use_dfs_sample)
 
-    def forward(self, x: Tensor):
-        return self.sample(x)
+    def forward(self, x: Tensor) -> Tensor:
+        return self.sample(x) * self.extra(x)
 
     @torch.no_grad
-    def call(self, x):
+    def call(self, x) -> Tensor:
         device = self.sample.device
         return torch.ones(x.size(0), device=device, dtype=torch.double) * 1.0
