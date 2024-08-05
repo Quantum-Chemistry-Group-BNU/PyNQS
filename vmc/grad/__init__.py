@@ -1,4 +1,4 @@
-from .energy_grad import energy_grad
+from .energy_grad import energy_grad, multi_grad
 
 try:
     from ._jacobian import jacobian
@@ -14,4 +14,4 @@ except:
         raise NotImplementedError
 
     warnings.warn("Not support SR method", ImportWarning)
-__all__ = ["energy_grad", "jacobian", "sr_grad"]
+__all__ = ["energy_grad", "jacobian", "sr_grad", "multi_grad"]
