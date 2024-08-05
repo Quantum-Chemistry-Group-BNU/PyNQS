@@ -18,7 +18,7 @@ from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
 
-from vmc.grad import energy_grad, sr_grad
+from vmc.grad import energy_grad, sr_grad, multi_grad
 from vmc.optim._base import BaseVMCOptimizer
 from ci import CITrain, CIWavefunction
 from utils.distributed import (
@@ -186,8 +186,7 @@ class VMCOptimizer(BaseVMCOptimizer):
 
                 if self.sampler.use_multi_psi:
                     extra_psi_pow = self.sampler.extra_psi_pow
-                    from vmc.grad.energy_grad import new_grad
-                    psi = new_grad(
+                    psi = multi_grad(
                         self.model,
                         sample_state,
                         state_prob,
@@ -215,8 +214,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             e_total = (eloc_mean + sloc_mean).real.item() + self.ecore
             self.save_grad_energy(e_total)
 
-            # for key in self.model.state_dict().keys():
-            #     logger.info(f"key: {key}, norm: {self.model.state_dict()[key].grad.norm()}")
+            # Testing
             if self.sampler.use_multi_psi and self.rank == 0:
                 for param, key in zip(self.model.parameters(), self.model.state_dict().keys()):
                     if param.grad is not None:

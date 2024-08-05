@@ -67,7 +67,7 @@ class RBMWavefunction(nn.Module):
 
             # weights
             weights = nn.Parameter(
-                init_weight * torch.rand(num_hidden, num_visible, **self.factory_kwargs) - 0.5
+                init_weight * (torch.rand(num_hidden, num_visible, **self.factory_kwargs) - 0.5)
             )
             self.params_weights = weights
             self.weights = weights.view(num_hidden, num_visible)

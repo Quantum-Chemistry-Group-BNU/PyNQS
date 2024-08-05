@@ -189,7 +189,7 @@ def _ad_grad(
     placeholders = torch.zeros(1, device=device, dtype=dtype)
     return placeholders
 
-def new_grad(
+def multi_grad(
     nqs: DDP,
     states: Tensor,
     state_prob: Tensor,
@@ -201,6 +201,9 @@ def new_grad(
 ):
     """
     loss = 2 Re<[(ln psi_n* + ln f_n*)(eloc_new - E * extra_phi_pow)]>
+    f_n` = f_n / \sqrt(<fn^2>)
+    extra_phi_pow = f_n^2 / <fn^2>
+    eloc_new = f_n`* \sum_m <n|H|m> f_m` psi_n /psi_n
     """
     device = states.device
     dim = states.size(0)
