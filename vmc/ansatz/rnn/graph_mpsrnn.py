@@ -491,7 +491,16 @@ class Graph_MPS_RNN(nn.Module):
             # 'params_w' + 'all_sites' -> 'params_w.all_sites'
             key1 = ".".join(key.split(".")[-2:])
             if key1 in KEYS:
-                params_dict[key1] = param.to(device=self.device)
+                if key1 == "params_M.all_sites":
+                    # Focus-params is list[Tensor]:
+                    if isinstance(param, list) and isinstance(param[0], Tensor):
+                        for i, p in enumerate(param):
+                            param[i] = param[i].to(device=self.device)
+                        params_dict[key1] = param
+                    else:
+                        params_dict[key1] = param.to(device=self.device)
+                else:
+                    params_dict[key1] = param.to(device=self.device)
 
         return params_dict
 
