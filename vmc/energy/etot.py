@@ -9,8 +9,16 @@ from torch import Tensor
 from loguru import logger
 
 from .eloc import local_energy
-from utils.distributed import gather_tensor, get_world_size, synchronize, get_rank, scatter_tensor
-from utils.public_function import WavefunctionLUT, MemoryTrack, split_batch_idx
+from utils.distributed import (
+    gather_tensor,
+    get_world_size,
+    synchronize,
+    get_rank,
+    scatter_tensor,
+    all_reduce_tensor,
+)
+from utils.public_function import WavefunctionLUT, MemoryTrack, split_batch_idx, ansatz_batch
+from libs.C_extension import onv_to_tensor
 
 
 def total_energy(
@@ -37,6 +45,8 @@ def total_energy(
     eps_sample: int = 0,
     use_sample_space: bool = False,
     alpha: float = 2.0,
+    use_multi_psi: bool = False,
+    extra_norm: Tensor = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     r"""
 
@@ -53,6 +63,7 @@ def total_energy(
     dim: int = x.shape[0]
     device = x.device
     rank = get_rank()
+    world_size = get_world_size()
     eloc = torch.zeros(dim, device=device).to(dtype)
     psi = torch.zeros_like(eloc)
     sloc = torch.zeros_like(eloc)
@@ -65,18 +76,8 @@ def total_energy(
 
     idx_lst = split_batch_idx(dim, min_batch=nbatch)
 
-    # closure
-    def ansatz_batch(x: Tensor) -> Tensor:
-        if fp_batch == -1 or x.size(0) == 0:
-            return ansatz(x)
-        else:
-            _idx_lst = [0] + split_batch_idx(x.size(0), fp_batch)
-            result = torch.empty(x.size(0), device=device, dtype=dtype)
-            for i in range(len(_idx_lst) - 1):
-                _start = _idx_lst[i]
-                _end = _idx_lst[i + 1]
-                result[_start:_end] = ansatz(x[_start:_end])
-            return result
+    def _ansatz_batch(x: Tensor, func: Callable[[Tensor], Tensor]) -> Tensor:
+        return ansatz_batch(func, x, fp_batch, sorb, device, dtype)
 
     if rank == 0:
         s = f"eloc: nbatch: {nbatch}, dim: {dim}, split: {len(idx_lst)}"
@@ -94,7 +95,8 @@ def total_energy(
                 ons,
                 h1e,
                 h2e,
-                ansatz_batch,
+                ansatz,
+                _ansatz_batch,
                 sorb,
                 nele,
                 noa,
@@ -111,6 +113,8 @@ def total_energy(
                 use_sample_space=use_sample_space,
                 index=(begin, end),
                 alpha=alpha,
+                use_multi_psi=use_multi_psi,
+                extra_norm=extra_norm,
             )
             if reduce_psi and use_spin_raising:
                 # recalculate S-S+ in Sample-space
@@ -118,6 +122,7 @@ def total_energy(
                     ons,
                     h1e_spin,
                     h2e_spin,
+                    ansatz,
                     ansatz_batch,
                     sorb,
                     nele,
@@ -145,41 +150,6 @@ def total_energy(
     if torch.any(torch.isnan(eloc)):
         raise ValueError(f"The Local energy exists nan")
 
-    if exact:
-        t_exact0 = time.time_ns()
-        world_size = get_world_size()
-        # gather psi_lst from all rank
-        psi_all = gather_tensor(psi, device, world_size, master_rank=0)
-        # eloc_all = gather_tensor(eloc, device, world_size, master_rank=0)
-        synchronize()
-        t_exact1 = time.time_ns()
-        if rank == 0:
-            psi_all = torch.cat(psi_all)
-            # eloc_all = torch.cat(eloc_all)
-            state_prob_all = (psi_all * psi_all.conj()).real / psi_all.norm() ** 2
-            state_prob_all = state_prob_all.to(dtype)
-        else:
-            state_prob_all = None
-        # Scatter state_prob to very rank
-        t_exact2 = time.time_ns()
-        state_prob = scatter_tensor(state_prob_all, device, dtype, world_size, master_rank=0)
-        state_prob *= world_size
-        synchronize()
-        t_exact3 = time.time_ns()
-
-        # logger
-        if rank == 0:
-            delta_all = (t_exact3 - t_exact0) / 1.0e09
-            delta_gather = (t_exact1 - t_exact0) / 1.0e09
-            delta_scatter = (t_exact3 - t_exact2) / 1.0e09
-            delta_cal = (t_exact2 - t_exact1) / 1.0e09
-            s = f"Exact-prob: {delta_all:.3E} s, Calculate: {delta_cal:.3E} s, "
-            s += f"Gather: {delta_gather:.3E} s, Scatter: {delta_scatter:.3E} s"
-            logger.info(s, master=True)
-
-        # assure length is true.
-        assert state_prob.shape[0] == dim
-        del psi_all, state_prob_all
 
     t1 = time.time_ns()
     time_lst = np.stack(time_lst, axis=0)
@@ -195,8 +165,5 @@ def total_energy(
     if x.is_cuda:
         torch.cuda.empty_cache()
 
-    if exact:
-        return eloc, sloc, state_prob.real
-    else:
-        placeholders = torch.zeros(1, device=device, dtype=dtype)
-        return eloc, sloc, placeholders
+    placeholders = torch.zeros(1, device=device, dtype=dtype)
+    return eloc, sloc, placeholders

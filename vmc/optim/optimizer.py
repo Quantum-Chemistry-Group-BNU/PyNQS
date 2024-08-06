@@ -18,7 +18,7 @@ from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
 
-from vmc.grad import energy_grad, sr_grad
+from vmc.grad import energy_grad, sr_grad, multi_grad
 from vmc.optim._base import BaseVMCOptimizer
 from ci import CITrain, CIWavefunction
 from utils.distributed import (
@@ -183,16 +183,30 @@ class VMCOptimizer(BaseVMCOptimizer):
                 if self.only_output_spin_raising:
                     sloc = torch.zeros_like(eloc)
                     sloc_mean = torch.zeros_like(eloc_mean)
-                psi = energy_grad(
-                    self.model,
-                    sample_state,
-                    state_prob,
-                    eloc + sloc,
-                    eloc_mean + sloc_mean,
-                    self.MAX_AD_DIM,
-                    self.dtype,
-                    self.method_grad,
-                )
+
+                if self.sampler.use_multi_psi:
+                    extra_psi_pow = self.sampler.extra_psi_pow
+                    psi = multi_grad(
+                        self.model,
+                        sample_state,
+                        state_prob,
+                        eloc + sloc,
+                        eloc_mean + sloc_mean,
+                        extra_psi_pow,
+                        self.dtype,
+                        self.MAX_AD_DIM,
+                    )
+                else:
+                    psi = energy_grad(
+                        self.model,
+                        sample_state,
+                        state_prob,
+                        eloc + sloc,
+                        eloc_mean + sloc_mean,
+                        self.MAX_AD_DIM,
+                        self.dtype,
+                        self.method_grad,
+                    )
             delta_grad = (time.time_ns() - t1) / 1.00e09
 
             # save the energy grad and clip-grad
@@ -200,6 +214,11 @@ class VMCOptimizer(BaseVMCOptimizer):
             e_total = (eloc_mean + sloc_mean).real.item() + self.ecore
             self.save_grad_energy(e_total)
 
+            # Testing
+            if self.sampler.use_multi_psi and self.rank == 0:
+                for param, key in zip(self.model.parameters(), self.model.state_dict().keys()):
+                    if param.grad is not None:
+                        logger.info(f"key: {key}, norm: {param.grad.norm()}")
             t2 = time.time_ns()
             self.update_param(epoch=epoch)
             delta_update = (time.time_ns() - t2) / 1.00e09

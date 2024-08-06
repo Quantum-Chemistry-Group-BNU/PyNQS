@@ -15,11 +15,13 @@ print = partial(print, flush=True)
 
 # from torch.profiler import profile, record_function, ProfilerActivity
 
+
 def local_energy(
     x: Tensor,
     h1e: Tensor,
     h2e: Tensor,
     ansatz: nn.Module | Callable[[Tensor], Tensor],
+    ansatz_batch: Callable[..., Tensor],
     sorb: int,
     nele: int,
     noa: int,
@@ -36,6 +38,8 @@ def local_energy(
     use_sample_space: bool = False,
     index: Tuple[int, int] = None,
     alpha: float = 2,
+    use_multi_psi: bool = False,
+    extra_norm: Tensor = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
@@ -71,9 +75,18 @@ def local_energy(
         else:
             if reduce_psi:
                 assert eps >= 0.0 and eps_sample >= 0
-                func = partial(_reduce_psi, n_sample=eps_sample)
+                func = partial(
+                    _reduce_psi,
+                    n_sample=eps_sample,
+                    use_multi_psi=use_multi_psi,
+                    extra_norm=extra_norm,
+                )
             else:
-                func = _simple
+                func = partial(
+                    _simple,
+                    use_multi_psi=use_multi_psi,
+                    extra_norm=extra_norm,
+                )
         # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         #              record_shapes=True, profile_memory=True) as prof:
         #     value = func(x, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype, WF_LUT, use_unique, eps)
@@ -86,6 +99,7 @@ def local_energy(
             h1e,
             h2e,
             ansatz,
+            ansatz_batch,
             sorb,
             nele,
             noa,
@@ -105,7 +119,8 @@ def _simple(
     x: Tensor,
     h1e: Tensor,
     h2e: Tensor,
-    ansatz: nn.Module | Callable[[Tensor], Tensor],
+    ansatz: Callable[..., Tensor],
+    ansatz_batch: Callable[[Callable], Tensor],
     sorb: int,
     nele: int,
     noa: int,
@@ -117,6 +132,8 @@ def _simple(
     WF_LUT: WavefunctionLUT = None,
     use_unique: bool = True,
     eps: float = 1.0e-12,
+    use_multi_psi: bool = False,
+    extra_norm: Tensor = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
 
@@ -126,6 +143,12 @@ def _simple(
     batch: int = x.shape[0]
     t0 = time.time_ns()
     device = h1e.device
+    if use_multi_psi:
+        # breakpoint()
+        ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
+        ansatz = partial(ansatz_batch, func=ansatz.module.sample)
+    else:
+        ansatz = partial(ansatz_batch, func=ansatz)
 
     if use_unique:
         # x1: [n_unique, sorb], comb_x: [batch, comb, bra_len]
@@ -145,22 +168,16 @@ def _simple(
     comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)  # shape (1, comb)/(batch, comb)
 
     t2 = time.time_ns()
-    # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=True, profile_memory=True) as prof:
-    # TODO: torch.unique comb_x is faster, but convert -> -1/1 or 0/1 maybe is not order
-    # so, fully testing.
-    # FIXME: What time remove duplicate onstate, memory consuming,
-    # and has been implemented in wavefunction ansatz,
-    # if testing, use keyword: 'use_unique = False/True'.
     if comb_x.numel() != 0:
         if use_LUT:
             batch_before_lut = batch * comb_x.size(1)  # batch * comb
             lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(comb_x.reshape(-1, bra_len))
         if use_unique:
             if use_LUT:
-                comb_x = comb_x.reshape(-1, bra_len)[lut_not_idx]
+                _comb_x = comb_x.reshape(-1, bra_len)[lut_not_idx]
             else:
-                comb_x = comb_x.reshape(-1, bra_len)
-            unique_comb, inverse = torch.unique(comb_x, dim=0, return_inverse=True)
+                _comb_x = comb_x.reshape(-1, bra_len)
+            unique_comb, inverse = torch.unique(_comb_x, dim=0, return_inverse=True)
             x1 = onv_to_tensor(unique_comb, sorb)  # x1: [n_unique, sorb]
             psi0 = torch.index_select(ansatz(x1), 0, inverse)  # [n_unique]
         else:
@@ -179,8 +196,25 @@ def _simple(
         comb = comb_hij.size(1)
         psi_x1 = torch.zeros(batch, comb, device=device, dtype=dtype)
 
-    if x.is_cuda:
-        torch.cuda.synchronize(device)
+    if use_multi_psi:
+        if use_unique:
+            unique_comb, inverse = torch.unique(
+                comb_x.reshape(-1, bra_len), dim=0, return_inverse=True
+            )
+            x1 = onv_to_tensor(unique_comb, sorb)
+            _psi = torch.index_select(ansatz_extra(x1), 0, inverse)
+        else:
+            x1 = onv_to_tensor(comb_x.reshape(-1, bra_len), sorb)
+            _psi = ansatz_extra(x1)
+
+        # f(n).conj() Hnm * f(m) / extra_norm**2
+        _psi = _psi.reshape(batch, -1)
+        # TODO: in-place, if value is real, and save memory
+        value = _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
+        comb_hij = comb_hij * value
+        if use_spin_raising:
+            hij_spin = hij_spin * value
+
     t3 = time.time_ns()
 
     if batch == 1:
@@ -201,8 +235,6 @@ def _simple(
     )
     del comb_hij, comb_x  # index, unique_x1, unique
 
-    # if x.is_cuda:
-    #     torch.cuda.empty_cache()
 
     if not use_spin_raising:
         sloc = torch.zeros_like(eloc)
@@ -214,7 +246,8 @@ def _reduce_psi(
     x: Tensor,
     h1e: Tensor,
     h2e: Tensor,
-    ansatz: nn.Module | Callable[[Tensor], Tensor],
+    ansatz: Callable[..., Tensor],
+    ansatz_batch: Callable[[Callable], Tensor],
     sorb: int,
     nele: int,
     noa: int,
@@ -227,6 +260,8 @@ def _reduce_psi(
     use_unique: bool = True,
     eps: float = 1.0e-12,
     n_sample: int = 0,
+    use_multi_psi: bool = False,
+    extra_norm: Tensor = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
@@ -241,13 +276,13 @@ def _reduce_psi(
     t0 = time.time_ns()
     device = h1e.device
 
-    # comb_x: (batch, comb, bra_len), x1: (batch, comb, sorb)
-    # if use_unique:
-    #     comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
-    #     x0 = onv_to_tensor(x, sorb).reshape(1, -1)
-    # else:
-    #     comb_x, x1 = get_comb_tensor(x, sorb, nele, noa, nob, True)
-    #     x0 = x1[:, 0, :].reshape(1, -1)
+    if use_multi_psi:
+        ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
+        ansatz = partial(ansatz_batch, func=ansatz.module.sample)
+    else:
+        ansatz = partial(ansatz_batch, func=ansatz)
+
+    # comb_x: (batch, comb, bra_len)
     comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
     # x0 = onv_to_tensor(x, sorb).reshape(1, -1)
     batch, n_comb, bra_len = tuple(comb_x.size())
@@ -260,13 +295,6 @@ def _reduce_psi(
     comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
 
     t2 = time.time_ns()
-    # if use_LUT:
-    #     not_idx, psi_x = WF_LUT.lookup(x)[1:]
-    #     # WF_LUT coming from sampling x must been found in WF_LUT.
-    #     assert not_idx.size(0) == 0
-    #     psi_x = psi_x.unsqueeze(1)  # (batch, 1)
-    # else:
-    #     psi_x = ansatz(x0).unsqueeze(1)  # (batch, 1)
 
     # n_sample = 1000
     stochastic = True if n_sample > 0 else False
@@ -305,13 +333,13 @@ def _reduce_psi(
         gt_eps_idx = torch.where(comb_hij.reshape(-1).abs() >= eps)[0]
 
     rate = gt_eps_idx.size(0) / comb_hij.reshape(-1).size(0) * 100
-    logger.debug(
-        f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}"
-    )
-    logger.debug(
-        f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %"
-    )
+    s =  f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}"
+    s += f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %"
+    logger.debug(s)
     psi_x1 = torch.zeros(batch * n_comb, dtype=dtype, device=device)
+
+    if use_multi_psi:
+        psi_extra = torch.zeros(batch * n_comb, dtype=dtype, device=device)
 
     if comb_x.numel() != 0:
         if use_LUT:
@@ -323,10 +351,10 @@ def _reduce_psi(
             gt_in_lut_idx = raw_idx[gt_eps_idx][lut_idx]
         if use_unique:
             if use_LUT:
-                comb_x = comb_x.reshape(-1, bra_len)[gt_not_lut_idx]
+                _comb_x = comb_x.reshape(-1, bra_len)[gt_not_lut_idx]
             else:
-                comb_x = comb_x.reshape(-1, bra_len)[gt_eps_idx]
-            unique_comb, inverse = torch.unique(comb_x, dim=0, return_inverse=True)
+                _comb_x = comb_x.reshape(-1, bra_len)[gt_eps_idx]
+            unique_comb, inverse = torch.unique(_comb_x, dim=0, return_inverse=True)
             x1 = onv_to_tensor(unique_comb, sorb)
             psi_gt_eps = torch.index_select(ansatz(x1), 0, inverse)
         else:
@@ -338,7 +366,6 @@ def _reduce_psi(
                 _comb = comb_x.reshape(-1, bra_len)[gt_eps_idx]
             x1 = onv_to_tensor(_comb, sorb)
             psi_gt_eps = ansatz(x1)
-
         if use_LUT:
             psi_x1[gt_not_lut_idx] = psi_gt_eps.to(dtype)
             psi_x1[gt_in_lut_idx] = lut_value.to(dtype)
@@ -347,6 +374,19 @@ def _reduce_psi(
         psi_x1 = psi_x1.reshape(batch, -1)
     else:
         psi_x1 = torch.zeros(batch, n_comb, device=device, dtype=dtype)
+
+    if use_multi_psi:
+        _comb = comb_x.reshape(-1, bra_len)[gt_eps_idx]
+        _psi = ansatz_extra(onv_to_tensor(_comb, sorb))
+        # f*(n) Hnm f(m) / extra_norm**2
+        psi_extra[gt_eps_idx] = _psi.to(dtype)
+        psi_extra = psi_extra.reshape(batch, -1)
+        # (batch, n_SD)
+        value = psi_extra * (psi_extra[:, 0].reshape(-1, 1).conj() / extra_norm**2)
+        comb_hij = comb_hij * value
+        # comb_hij *= psi_extra.real
+        if use_spin_raising:
+            hij_spin = hij_spin * value
 
     if batch == 1:
         if use_spin_raising:
@@ -389,6 +429,7 @@ def _only_sample_space(
     h1e: Tensor,
     h2e: Tensor,
     ansatz: nn.Module | Callable[[Tensor], Tensor],
+    ansatz_batch: Callable[[Callable], Tensor],
     sorb: int,
     nele: int,
     noa: int,
@@ -402,6 +443,8 @@ def _only_sample_space(
     eps: float = 1.0e-12,
     index: tuple[int, int] = None,
     alpha: float = 2,
+    use_multi_psi: bool = False,
+    extra_norm: Tensor = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
 
@@ -422,6 +465,10 @@ def _only_sample_space(
     alpha = max(alpha, 1)
     sd_le_sample = n_comb_sd * (2 + is_complex + _len) * alpha <= n_sample
     # sd_le_sample = False
+
+    if use_multi_psi:
+        raise NotImplementedError(f"Not implement in multi-psi")
+        ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
 
     if sd_le_sample:
         # (batch, n_comb_sd, bra_len)
@@ -453,6 +500,16 @@ def _only_sample_space(
         # T2 = time.time_ns()
 
         psi_x = psi_x1[..., 0].view(-1).clone()
+
+        if use_multi_psi:
+            x1 = onv_to_tensor(comb_x.reshape(-1, bra_len), sorb)
+            _psi = ansatz_extra(x1)
+            # f(n).conj() Hnm * f(m) / extra_norm**2
+            _psi = _psi.reshape(batch, -1)
+            value = _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
+            comb_hij = comb_hij * value
+            if use_spin_raising:
+                hij_spin = hij_spin * value
 
         if use_spin_raising:
             sloc = psi_x1.mul(hij_spin).sum(-1).divide(psi_x)

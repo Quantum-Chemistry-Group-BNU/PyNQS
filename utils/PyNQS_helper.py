@@ -23,6 +23,8 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
     eloc_var = []
     spin_mean = []
     spin_var = []
+    fn_mean = []
+    fn_var = []
 
     n_iter = 0
     re_total_time = re.compile(r"^Total energy")
@@ -57,14 +59,19 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
                 line = line.split()
                 n_iter +=1
                 eloc_mean.append(float(line[2]))
-                eloc_var.append(float(line[-1].replace("]", "")))
+                eloc_var.append(float(line[-2]))  # ± std
             elif line.startswith("<S-S+>"):
                 # <eloc-mean> <NQS|H|NQS>
                 # E_total = -97.9124353057 ± 9.438E-06 [σ² = 8.908E+01]
-                # eloc_mean.append(float(line.split()[2]))
                 line = line.split()
                 spin_mean.append(float(line[2]))
-                spin_var.append(float(line[-1].replace("]", "")))
+                spin_var.append(float(line[-2]))
+            elif line.startswith("<f(n)²>"):
+                # <f(n)²> = 0.000030373 ± 1.496E-07 [σ² = 2.239E-08]
+                # MPS-RNN + RBM, f(n) is RBM
+                line = line.split()
+                fn_mean.append(float(line[2]))
+                fn_var.append(float(line[-2]))  # ± std
             elif re_grad.search(line):
                 # auto-grad, update param
                 # Calculating grad: 2.221E-02 s, update param: 4.656E-04 s
@@ -173,14 +180,23 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
     else:
         spin_mean = np.asarray(spin_mean)[:n_iter]
 
+
+    if len(fn_var) == 0 or len(fn_mean) == 0:
+        fn_var = fn_mean = np.zeros(n_iter, dtype=np.double)
+    else:
+        fn_var = np.asarray(fn_var)[:n_iter]
+        fn_mean = np.asarray(fn_mean)[:n_iter]
+
+    fn_var = np.power(fn_var, 2)
+    spin_var = np.power(spin_var, 2)
+    eloc_var = np.power(eloc_var, 2)
+
     # only-sampling
     if only_sampling:
        grad_time = np.zeros((n_iter, 2), dtype=np.double)
        total_time = np.zeros(n_iter, dtype=np.double)
        energy = np.zeros(n_iter, dtype=np.double)
        l2_grad = np.zeros((n_iter, 2), dtype=np.double)
-       
-
 
     print(f"file: {filename}, iteration: {n_iter}, world-size: {world_size}")
     if verbose:
@@ -191,13 +207,16 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
 
     t = [sample_time, sample_comm_time, LUT_broadcast, eloc_time,
         grad_time, total_time, unique_sample, energy, eloc_mean, eloc_var,
+        fn_mean, fn_var,
         spin_mean, spin_var, ci_nqs_coeff, memory, l2_grad]
     x = np.column_stack(t)
 
     names = ["sample", "Gather", "Scatter", "Merge", "Broad",
             "eloc-total", "comb-x", "hij", "psi(x)",
             "auto-grad", "update-param", "total", "n-sample", "energy",
-            "eloc-mean", "eloc-var", "spin-mean", "spin-var",
+            "eloc-mean", "eloc-var", 
+            "fn-mean", "fn-var",
+            "spin-mean", "spin-var",
             "CI", "CNqs", "memory", "l2-grad",
             "max-grad"]
 
@@ -207,7 +226,7 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
 
     if save_file:
         csv_file = os.path.splitext(filename)[0] +".csv"
-        df_time.to_csv(csv_file, encoding="utf-8", float_format="%.10f", index=False)
+        df_time.to_csv(csv_file, encoding="utf-8", float_format="%.8e", index=False)
         print(f"Save {csv_file}")
 
     return df_time

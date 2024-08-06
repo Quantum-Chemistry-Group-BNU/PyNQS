@@ -189,6 +189,76 @@ def _ad_grad(
     placeholders = torch.zeros(1, device=device, dtype=dtype)
     return placeholders
 
+def multi_grad(
+    nqs: DDP,
+    states: Tensor,
+    state_prob: Tensor,
+    eloc: Tensor,
+    e_total: Union[complex, float],
+    extra_psi_pow: Tensor, 
+    dtype=torch.double,
+    AD_MAX_DIM: int = -1,
+):
+    """
+    loss = 2 Re<[(ln psi_n* + ln f_n*)(eloc_new - E * extra_phi_pow)]>
+    f_n` = f_n / \sqrt(<fn^2>)
+    extra_phi_pow = f_n^2 / <fn^2>
+    eloc_new = f_n`* \sum_m <n|H|m> f_m` psi_n /psi_n
+    """
+    device = states.device
+    dim = states.size(0)
+    loss_sum = torch.zeros(1, device=device, dtype=torch.double)
+
+    # split dim batch
+    if AD_MAX_DIM == -1 or AD_MAX_DIM > dim:
+        batch = states.size(0)
+    else:
+        batch = AD_MAX_DIM
+
+    from utils.public_function import split_batch_idx
+    idx_lst = split_batch_idx(dim, batch)
+
+    def batch_loss_backward(begin: int, end: int) -> None:
+        nonlocal loss_sum
+        state = states[begin: end].requires_grad_()
+        log_psi_f = nqs(state).to(dtype).log()
+
+        state_prob_batch = state_prob[begin:end].real.to(dtype)
+        eloc_batch = eloc[begin:end].to(dtype)
+        extra_psi_pow_batch = extra_psi_pow[begin: end].to(dtype)
+
+        if torch.any(torch.isnan(log_psi_f)):
+            raise ValueError(f"There are negative numbers in the log-psi, please use complex128")
+
+        loss1 = log_psi_f.conj()
+        loss2 = eloc_batch - e_total * extra_psi_pow_batch
+        loss = 2 * (loss1 * loss2 * state_prob_batch).sum().real
+        loss.backward()
+        loss_sum += loss.detach()
+
+        del state_prob_batch, log_psi_f, loss
+
+    with MemoryTrack(device) as track:
+        begin = 0
+        # disable gradient synchronizations in the rank
+        with nqs.no_sync():
+            for i in range(len(idx_lst) - 1):
+                end = idx_lst[i]
+                batch_loss_backward(begin, end)
+                begin = end
+                track.manually_clean_cache()
+
+        end = idx_lst[-1]
+        # synchronization gradient in the rank
+        batch_loss_backward(begin, end)
+
+    reduce_loss = all_reduce_tensor(loss_sum, world_size=get_world_size(), in_place=False)
+    synchronize()
+    if get_rank() == 0:
+        logger.info(f"Reduce-loss: {reduce_loss[0].item():.4E}", master=True)
+
+    placeholders = torch.zeros(1, device=device, dtype=dtype)
+    return placeholders
 
 def _numerical_differentiation(
     nqs: nn.Module, states: Tensor, dtype=torch.double, eps: float = 1.0e-07
