@@ -460,10 +460,44 @@ class Graph_MPS_RNN(nn.Module):
             assert T_r is not None
             self.params_T = FrozeSites(T_r, self.froze_sites, self.opt_sites_pos, use_complex)
 
+    def convert_params_file(self, params_file: str) -> dict[str, Tensor]:
+        """
+        convert checkpoint file to dict
+          KEYS = (
+            "params_w.all_sites",
+            "params_M.all_sites",
+            "params_v.all_sites",
+            "params_eta.all_site",
+            "params_c.all_sites",
+            "params_T.all_sites",
+            "params_K.all_sites",
+            "params_U.all_sites",
+             )
+        """
+        params: dict[str, Tensor] = torch.load(params_file, map_location="cpu", weights_only=False)["model"]
+        KEYS = (
+            "params_w.all_sites",
+            "params_M.all_sites",
+            "params_v.all_sites",
+            "params_eta.all_site",
+            "params_c.all_sites",
+            "params_T.all_sites",
+            "params_K.all_sites",
+            "params_U.all_sites",
+        )
+        params_dict: dict[str, Tensor] = {}
+        # key: 'module.sample.params_w.all_sites' or 'module.params_w.all_sites'
+        for key, param in params.items():
+            # 'params_w' + 'all_sites' -> 'params_w.all_sites'
+            key1 = ".".join(key.split(".")[-2:])
+            if key1 in KEYS:
+                params_dict[key1] = param.to(device=self.device)
+
+        return params_dict
 
     def fill_data(self, params, use_complex, data_r, fill_params):
         # fill the parmas in key 'module.params_M.all_sites' of parameters "params"
-        data_name = "module.params_"+fill_params+".all_sites"
+        data_name = "params_"+fill_params+".all_sites"
         if use_complex:
             data = torch.view_as_complex(data_r)
         else:
@@ -551,13 +585,13 @@ class Graph_MPS_RNN(nn.Module):
             if use_complex:
                 K = torch.view_as_complex(K_r)
                 U = torch.view_as_complex(U_r)
-                _K_r = torch.view_as_complex(params["module.params_K.all_sites"])
-                _U_r = torch.view_as_complex(params["module.params_U.all_sites"])
+                _K_r = torch.view_as_complex(params["params_K.all_sites"])
+                _U_r = torch.view_as_complex(params["params_U.all_sites"])
             else:
                 K = K_r
                 U = U_r
-                _K_r = params["module.params_K.all_sites"]
-                _U_r = params["module.params_U.all_sites"]
+                _K_r = params["params_K.all_sites"]
+                _U_r = params["params_U.all_sites"]
             _shape4_dict, _, _shape5_dict, _ = self.cmpr_Tensor_shape(
                 graph=self.graph_before, dcut=self.dcut_before, use_complex=use_complex
             )
@@ -598,23 +632,23 @@ class Graph_MPS_RNN(nn.Module):
                         NotImplementedError(
                             f"can not use Tensor-mode if the graph have node which have pred_drgree more than 2!"
                         )
-                if "module.params_K.all_sites" in params:
+                if "params_K.all_sites" in params:
                     if use_complex:
                         T = torch.view_as_complex(T_r)
-                        _K = torch.view_as_complex(params["module.params_K.all_sites"][i_pre])
-                        _U = torch.view_as_complex(params["module.params_U.all_sites"][i_pre])
+                        _K = torch.view_as_complex(params["params_K.all_sites"][i_pre])
+                        _U = torch.view_as_complex(params["params_U.all_sites"][i_pre])
                     else:
                         T = T_r
-                        _K = params["module.params_K.all_sites"][i_pre]
-                        _U = params["module.params_U.all_sites"][i_pre]
+                        _K = params["params_K.all_sites"][i_pre]
+                        _U = params["params_U.all_sites"][i_pre]
                     _T = torch.einsum("aijk,axi,ayj,azk->axyz", _K, _U[..., 0], _U[..., 1], _U[..., 2])
                 else:
                     if use_complex:
                         T = torch.view_as_complex(T_r)
-                        _T = torch.view_as_complex(params["module.params_T.all_sites"][i_pre])
+                        _T = torch.view_as_complex(params["params_T.all_sites"][i_pre])
                     else:
                         T = T_r
-                        _T = params["module.params_T.all_sites"][i_pre]
+                        _T = params["params_T.all_sites"][i_pre]
                 T[idx, ..., : _T.shape[-3], : _T.shape[-2], : _T.shape[-1]] = _T
 
     def cmpr_Tensor_shape(self, graph: DiGraph, dcut: int, use_complex: bool):
@@ -690,25 +724,25 @@ class Graph_MPS_RNN(nn.Module):
                 T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
         # fill the params. input
         if self.params_file is not None:
-            params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device, weights_only=False)["model"]
+            params = self.convert_params_file(self.params_file)
             self.use_different_h_before = True
-            if params["module.params_w.all_sites"].shape[0] == self.nqubits // 2:
+            if params["params_w.all_sites"].shape[0] == self.nqubits // 2:
                 self.use_different_h_before = False
-            if "module.params_M.all_sites" in params:
+            if "params_M.all_sites" in params:
                 self.fill_data(params, use_complex=True, data_r=M_r, fill_params="M")
-            if "module.params_v.all_sites" in params:
+            if "params_v.all_sites" in params:
                 self.fill_data(params, use_complex=True, data_r=v_r, fill_params="v")
-            if "module.params_eta.all_sites" in params:
+            if "params_eta.all_sites" in params:
                 self.fill_data(params, use_complex=True, data_r=eta_r, fill_params="eta")
             # Phase part
-            if "module.params_w.all_sites" in params:
+            if "params_w.all_sites" in params:
                 self.fill_data(params, use_complex=True, data_r=w_r, fill_params="w")
-                self.dcut_before = params["module.params_w.all_sites"].shape[-2]
-            if "module.params_c.all_sites" in params:
+                self.dcut_before = params["params_w.all_sites"].shape[-2]
+            if "params_c.all_sites" in params:
                 self.fill_data(params, use_complex=True, data_r=c_r, fill_params="c")
             if self.use_tensor:
                 self.all_in_tensor = len(self.tensor_index)
-                if "module.params_T.all_sites" in params or "module.params_K.all_sites" in params:
+                if "params_T.all_sites" in params or "params_K.all_sites" in params:
                     if self.tensor_cmpr:
                         self.fill_T(params, use_complex=True, K_r=K_r, U_r=U_r)
                     else:
@@ -767,28 +801,28 @@ class Graph_MPS_RNN(nn.Module):
                 T_r = torch.rand(shape3, **self.factory_kwargs_real) * self.iscale
         # fill the params. input
         if self.params_file is not None:
-            params: dict[str, Tensor] = torch.load(self.params_file, map_location=self.device, weights_only=False)["model"]
+            params = self.convert_params_file(self.params_file)
             self.use_different_h_before = True
-            if params["module.params_w.all_sites"].shape[0] == self.nqubits // 2:
+            if params["params_w.all_sites"].shape[0] == self.nqubits // 2:
                 self.use_different_h_before = False
-            if "module.params_v.all_sites" in params:
+            if "params_v.all_sites" in params:
                 self.fill_data(params, use_complex=False, data_r=v_r, fill_params="v")
-            if "module.params_eta.all_sites" in params:
+            if "params_eta.all_sites" in params:
                 self.fill_data(params, use_complex=False, data_r=eta_r, fill_params="eta")
             # Phase part
-            if "module.params_w.all_sites" in params:
+            if "params_w.all_sites" in params:
                 self.fill_data(params, use_complex=False, data_r=w_r, fill_params="w")
-                self.dcut_before = params["module.params_w.all_sites"].shape[-2]
-            if "module.params_c.all_sites" in params:
+                self.dcut_before = params["params_w.all_sites"].shape[-2]
+            if "params_c.all_sites" in params:
                 self.fill_data(params, use_complex=False, data_r=c_r, fill_params="c")
             if self.use_tensor:
-                if "module.params_T.all_sites" in params or "module.params_K.all_sites" in params:
+                if "params_T.all_sites" in params or "params_K.all_sites" in params:
                     self.all_in_tensor = len(self.tensor_index)
                     if self.tensor_cmpr:
                         self.fill_T(params, use_complex=False, K_r=K_r, U_r=U_r)
                     else:
                         self.fill_T(params, use_complex=False, T_r=T_r)
-            if "module.params_M.all_sites" in params:
+            if "params_M.all_sites" in params:
                 self.fill_data(params, use_complex=False, data_r=M_r, fill_params="M")
         self.init_params(M_r, v_r, eta_r, w_r, c_r, use_complex=False)
         if self.use_tensor:
