@@ -57,7 +57,7 @@
 
 ![process](./docs/flowchart.png)
 
-#### Eloc Distributed process
+<!-- #### Eloc Distributed process -->
 
-![process](./docs/eloc-dist.png)
+<!-- ![process](./docs/eloc-dist.png) -->
 

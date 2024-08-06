@@ -452,6 +452,7 @@ class BaseVMCOptimizer(ABC):
             max_grad = self.grad_e_lst[1][-1]
             s = f"Calculating grad: {cost[0].item():.3E} s, update param: {cost[1].item():.3E} s\n"
             s += f"Total energy {e_total:.9f} a.u., cost time {cost[2].item():.3E} s\n"
+            s += f"Learning Rate: {self.lr_scheduler.get_last_lr()[0]:.3E}.\n"
             s += f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
             s += f"{epoch} iteration end {time.ctime()}\n"
             s += "=" * 100

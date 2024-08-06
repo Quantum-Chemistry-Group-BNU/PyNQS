@@ -186,6 +186,61 @@ def checkgraph(graph1: DiGraph, graph2: DiGraph) -> List[List[int]]:
     return add_edge
 
 
+def scan_matrix(graph: DiGraph, different_h = False):
+    """
+    return (list[predecessors, successors], dict{dict}) of one given site
+    """
+    graph_node = list(graph.nodes)
+    martix_index = {}
+    if different_h:
+        start = len(list(graph.successors(graph_node[0])))
+    else:
+        start = 1
+    num_site = -1 * start
+    for site in graph_node:
+        index:dict = {}
+        if different_h:
+            for o in list(graph.successors(site)):
+                index_in = {}
+                for i in list(graph.predecessors(site)):
+                    index_in[i] = num_site
+                    num_site += 1
+                index[o] = index_in
+        else:
+            index_in = {}
+            for i in list(graph.predecessors(site)):
+                index_in[i] = num_site
+                num_site += 1
+            for o in list(graph.successors(site)):
+                index[o] = index_in
+        martix_index[site] = ([list(graph.predecessors(site)), list(graph.successors(site))], index)
+    return (martix_index, num_site+start)
+
+
+def scan_eta(graph: DiGraph, different_h = False):
+    '''
+    return (eta_index[site][out], end)
+    '''
+    graph_node = list(graph.nodes)
+    eta_index = {}
+    num_site= len(graph_node)
+    for index_site, site in enumerate(graph_node):
+        index = {}
+        if site == graph_node[-1]:
+            index[graph_node[0]] = int(graph_node[-1])
+        else:
+            for o in list(graph.successors(site)):
+                if o == graph_node[index_site+1]:
+                    index[o] = int(site)
+                else:
+                    index[o] = num_site
+                    if different_h:
+                        num_site += 1
+                    else:
+                        index[o] = index[graph_node[index_site+1]]
+        eta_index[site] = ([list(graph.predecessors(site)), list(graph.successors(site))], index)
+    return (eta_index, num_site)
+
 def scan_tensor(graph: DiGraph, max_degree: int = 2):
     """
     return the the node of graph which can have tensor term
