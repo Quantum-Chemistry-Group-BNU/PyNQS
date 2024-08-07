@@ -59,19 +59,19 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
                 line = line.split()
                 n_iter +=1
                 eloc_mean.append(float(line[2]))
-                eloc_var.append(float(line[-2]))  # ± std
+                eloc_var.append(float(line[4]))  # ± std
             elif line.startswith("<S-S+>"):
                 # <eloc-mean> <NQS|H|NQS>
                 # E_total = -97.9124353057 ± 9.438E-06 [σ² = 8.908E+01]
                 line = line.split()
                 spin_mean.append(float(line[2]))
-                spin_var.append(float(line[-2]))
+                spin_var.append(float(line[4]))
             elif line.startswith("<f(n)²>"):
                 # <f(n)²> = 0.000030373 ± 1.496E-07 [σ² = 2.239E-08]
                 # MPS-RNN + RBM, f(n) is RBM
                 line = line.split()
                 fn_mean.append(float(line[2]))
-                fn_var.append(float(line[-2]))  # ± std
+                fn_var.append(float(line[4]))  # ± std
             elif re_grad.search(line):
                 # auto-grad, update param
                 # Calculating grad: 2.221E-02 s, update param: 4.656E-04 s

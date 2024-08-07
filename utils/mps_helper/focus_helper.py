@@ -25,7 +25,6 @@ def Fmps2mpsrnn(
     index = torch.tensor([0, 2, 3, 1])
 
     dtype = dtype.lower()
-    assert abs(padding_scale) <= 1e-10
     assert dtype in ("complex", "real")
     print(f"padding-scale: {padding_scale}")
     print(f"param dtype: {dtype}")
@@ -37,7 +36,6 @@ def Fmps2mpsrnn(
         _M_real = param[:, index, :]
         # transpose the martix order
         _M_real = torch.permute_copy(_M_real, (1, 2, 0))
-        breakpoint()
         if dtype == "complex":
             # split real-part & imag-part
             _M_real = _M_real.unsqueeze(-1)
