@@ -1037,7 +1037,7 @@ __host__ void merge_idx_cuda(int64_t *merge_counts, const int64_t *idx,
   merge_idx_kernel<<<gridDim, blockDim>>>(merge_counts, idx, counts, batch);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
-  cudaDeviceSynchronize();
+  // cudaDeviceSynchronize();
 }
 
 __device__ void constrain_charts(const int64_t key, double *result) {
@@ -1107,7 +1107,7 @@ __host__ void constrain_lookup_table(const int64_t *sym_index, double *result,
                                                        nbatch);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
-  cudaDeviceSynchronize();
+  // cudaDeviceSynchronize();
 }
 
 template <typename IntType, int _len>

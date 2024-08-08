@@ -104,7 +104,8 @@ EOF
 while getopts :s:h opt
 do
     case "$opt" in 
-    s) device=${OPTARG^^}
+    # s) device=${OPTARG^^}
+    s) device=$(echo "$OPTARG" | tr '[:lower:]' '[:upper:]')
         case "${device}" in 
             CPU) 
                 echo -e "\033[36mComplie CPU code\033[0m"
