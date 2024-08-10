@@ -333,7 +333,7 @@ def _reduce_psi(
         gt_eps_idx = torch.where(comb_hij.reshape(-1).abs() >= eps)[0]
 
     rate = gt_eps_idx.size(0) / comb_hij.reshape(-1).size(0) * 100
-    s =  f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}"
+    s =  f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}, "
     s += f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %"
     logger.debug(s)
     psi_x1 = torch.zeros(batch * n_comb, dtype=dtype, device=device)
