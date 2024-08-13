@@ -107,8 +107,10 @@ class RBMWavefunction(nn.Module):
         )
         params_dict: dict[str, Tensor] = {}
         for key, param in x.items():
-            # 'module.extra.params_hidden_bias' or 'module.params_hidden_bias'
+            # 'module.extra.params_hidden_bias', 'module.params_hidden_bias' or 'module.hidden_bias'
             key1 = key.split(".")[-1]
+            if not key1.startswith("params_"):
+                key1 = "params_" + key1
             if key1 in KEYS:
                 params_dict[key1] = param
 

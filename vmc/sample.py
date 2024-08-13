@@ -174,10 +174,6 @@ class Sampler:
         self.start_n_sample = start_n_sample
         self.n_sample = start_n_sample
 
-        # Use WaveFunction LooKup-Table to speed up local-energy calculations
-        self.use_LUT = use_LUT
-        self.WF_LUT: WavefunctionLUT = None
-
         # control eloc
         self.eloc_param = eloc_param
         # memory control and nbatch
@@ -229,6 +225,10 @@ class Sampler:
 
         # only sampling not calculations local-energy, applies to test AD memory
         self.only_AD = only_AD
+
+        # Use WaveFunction LooKup-Table to speed up local-energy calculations
+        self.use_LUT: bool = eloc_param.get("use_LUT", True)
+        self.WF_LUT: WavefunctionLUT = None
 
         # only sampling not backward
         self.only_sample = only_sample

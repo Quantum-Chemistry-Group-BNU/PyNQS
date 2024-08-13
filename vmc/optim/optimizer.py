@@ -51,8 +51,7 @@ class VMCOptimizer(BaseVMCOptimizer):
         nqs: DDP,
         sampler_param: dict,
         electron_info: ElectronInfo,
-        opt_type: Optimizer = torch.optim.Adam,
-        opt_params: dict = {"lr": 0.005, "weight_decay": 0.001},
+        opt: Optimizer,
         lr_scheduler: LRScheduler = None,
         lr_sch_params: dict = None,
         max_iter: int = 2000,
@@ -90,8 +89,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             nqs=nqs,
             sampler_param=sampler_param,
             electron_info=electron_info,
-            opt_type=opt_type,
-            opt_params=opt_params,
+            opt = opt,
             lr_scheduler=lr_scheduler,
             lr_sch_params=lr_sch_params,
             max_iter=max_iter,
@@ -214,11 +212,6 @@ class VMCOptimizer(BaseVMCOptimizer):
             e_total = (eloc_mean + sloc_mean).real.item() + self.ecore
             self.save_grad_energy(e_total)
 
-            # Testing
-            if self.sampler.use_multi_psi and self.rank == 0:
-                for param, key in zip(self.model.parameters(), self.model.state_dict().keys()):
-                    if param.grad is not None:
-                        logger.info(f"key: {key}, norm: {param.grad.norm()}")
             t2 = time.time_ns()
             self.update_param(epoch=epoch)
             delta_update = (time.time_ns() - t2) / 1.00e09
