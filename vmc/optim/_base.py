@@ -472,10 +472,10 @@ class BaseVMCOptimizer(ABC):
             s = f"Calculating grad: {cost[0].item():.3E} s, update param: {cost[1].item():.3E} s\n"
             s += f"Total energy {e_total:.9f} a.u., cost time {cost[2].item():.3E} s\n"
             if self.lr_scheduler is not None:
-                lr = self.lr_scheduler.get_last_lr()[0]
+                lrs = self.lr_scheduler.get_last_lr()
             else:
-                lr = self.opt.param_groups[0]['lr']
-            s += f"Learning Rate: {lr:.3E}.\n"
+                lrs = [p['lr'] for p in self.opt.param_groups]
+            s += f"Learning Rate: {' '.join(['{:.5E}'.format(lr) for lr in lrs])}\n"
             s += f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
             s += f"{epoch} iteration end {time.ctime()}\n"
             s += "=" * 100

@@ -117,7 +117,7 @@ class Sampler:
         # use_same_tree = True
         self.use_same_tree = use_same_tree
         if not debug_exact and not use_same_tree:
-            # if sampling, very rank have the different random seed
+            # if sampling, every rank have the different random seed
             self.seed = diff_rank_seed(seed, rank=self.rank)
         else:
             # exact optimization does not require sampling
@@ -622,9 +622,9 @@ class Sampler:
         wf_value: Tensor,
     ) -> Tuple[Tensor, Tensor, Tensor, WavefunctionLUT]:
         """
-        1. Gather sample-unique/counts from very rank, compress uint64 to uint8
+        1. Gather sample-unique/counts from every rank, compress uint64 to uint8
         2. Merge all unique/counts in master-rank(rank0)
-        3. Scatter unique/counts/prob to very rank
+        3. Scatter unique/counts/prob to every rank
 
         Meanwhile, All-Gather sample-unique and wf-value in order to make wf-lookup-table
 

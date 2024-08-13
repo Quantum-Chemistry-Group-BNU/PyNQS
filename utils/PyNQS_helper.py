@@ -26,6 +26,7 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
     spin_var = []
     fn_mean = []
     fn_var = []
+    lr = []
 
     # multi-psi
     l2_grad_multi = []
@@ -110,6 +111,9 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
                 # Sample/Extra ansatz Max-grad: 4.402429E-03 1.380152E-05
             elif line.startswith("Sample/Extra ansatz Max-grad:"):
                 max_grad_multi.append(list(map(float, line.split()[-2:])))
+            elif line.startswith("Learning Rate:"):
+                # Learning Rate: 1.00000E-07 1.00000E-08
+                lr.append(list(map(float, line.split()[2:])))
 
     if len(grad_time) == 0:
         only_sampling = True
@@ -207,6 +211,12 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         l2_grad_multi = np.asarray(l2_grad_multi)[:n_iter]
         max_grad_multi = np.asarray(max_grad_multi)[:n_iter]
 
+    if len(lr) == 0:
+        lr = np.zeros((n_iter, 1))
+    else:
+        # multi lr in Multi-Psi
+        lr = np.asarray(lr)[:n_iter].reshape(n_iter, -1)
+
     fn_var = np.power(fn_var, 2)
     spin_var = np.power(spin_var, 2)
     eloc_var = np.power(eloc_var, 2)
@@ -245,6 +255,7 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         l2_grad,
         l2_grad_multi,
         max_grad_multi,
+        lr,
     ]
     x = np.column_stack(t)
 
@@ -279,6 +290,9 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         "max-grad-sample",
         "max-grad-extra",
     ]
+
+    # lr-1 or lr-1 lr-2
+    names += [f'lr-{i}' for i in range(len(lr[0]))]
 
     df_time = pd.DataFrame(x, columns=names)
     df_time["n-sample"] = np.int64(df_time["n-sample"])
