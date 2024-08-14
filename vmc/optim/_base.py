@@ -86,8 +86,7 @@ class BaseVMCOptimizer(ABC):
         nqs: DDP,
         sampler_param: dict,
         electron_info: ElectronInfo,
-        opt_type: Optimizer = torch.optim.Adam,
-        opt_params: dict = {"lr": 0.005, "weight_decay": 0.001},
+        opt: Optimizer,
         lr_scheduler: LRScheduler = None,
         lr_sch_params: dict = None,
         max_iter: int = 2000,
@@ -135,7 +134,7 @@ class BaseVMCOptimizer(ABC):
             self.model_raw = nqs
 
         # Read parameters from an external model or model
-        self.opt: Optimizer = opt_type(self.model_raw.parameters(), **opt_params)
+        self.opt = opt
         if lr_sch_params is not None and lr_scheduler is not None:
             self.lr_scheduler: LRScheduler = lr_scheduler(self.opt, **lr_sch_params)
         else:
@@ -331,14 +330,34 @@ class BaseVMCOptimizer(ABC):
         r"""
         Save L2-grad, max-grad and energy to list in each iteration, for plotting.
         """
-        x1: List[Tensor] = []
-        x2: List[Tensor] = []
+        x1 = []
+        x2 = []
         for param in self.model.parameters():
             if param.grad is not None:
                 x1.append(param.grad.detach().norm().reshape(-1))
                 x2.append(param.grad.detach().abs().max().reshape(-1))
-        l2_grad = torch.cat(x1).norm().item()
-        max_grad = torch.cat(x2).max().item()
+
+        x1 = torch.cat(x1)
+        x2 = torch.cat(x2)
+        l2_grad = x1.norm().item()
+        max_grad = x2.max().item()
+        if self.sampler.use_multi_psi and self.rank == 0:
+            idx = 0
+            for param, key in zip(self.model.parameters(), self.model.state_dict().keys()):
+                if param.grad is not None and "sample" in key:
+                    # module.sample.params_M.all_sites and module.extra.params_weights
+                    idx += 1
+            l2_grad1 = x1[:idx].norm().item()
+            l2_grad2 = x1[idx:].norm().item()
+            max_grad1 = x2[:idx].max().item()
+            if idx == len(x1):
+                max_grad2 = 0
+            else:
+                max_grad2 = x2[idx:].max().item()
+            s = f"Sample/Extra ansatz L2-grad: {l2_grad1:.5E} {l2_grad2:.5E}\n"
+            s += f"Sample/Extra ansatz Max-grad: {max_grad1:.5E} {max_grad2:.5E}"
+            logger.info(s, master=True)
+
         self.e_lst.append(e_total)
         self.grad_e_lst[0].append(l2_grad)
         self.grad_e_lst[1].append(max_grad)
@@ -453,10 +472,10 @@ class BaseVMCOptimizer(ABC):
             s = f"Calculating grad: {cost[0].item():.3E} s, update param: {cost[1].item():.3E} s\n"
             s += f"Total energy {e_total:.9f} a.u., cost time {cost[2].item():.3E} s\n"
             if self.lr_scheduler is not None:
-                lr = self.lr_scheduler.get_last_lr()[0]
+                lrs = self.lr_scheduler.get_last_lr()
             else:
-                lr = self.opt.param_groups[0]['lr']
-            s += f"Learning Rate: {lr:.3E}.\n"
+                lrs = [p['lr'] for p in self.opt.param_groups]
+            s += f"Learning Rate: {' '.join(['{:.5E}'.format(lr) for lr in lrs])}\n"
             s += f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
             s += f"{epoch} iteration end {time.ctime()}\n"
             s += "=" * 100
@@ -589,8 +608,8 @@ class BaseVMCOptimizer(ABC):
         plt.savefig(prefix + ".png", format="png", dpi=1000)
         plt.close()
 
-        # save energy, ||g||, max_|g|
-        np.savez(prefix, energy=e, grad_L2=param_L2, grad_max=param_max)
+        # save energy, ||g||, max_|g|, remove see checkpoint
+        # np.savez(prefix, energy=e, grad_L2=param_L2, grad_max=param_max)
         logger.info(f"Save figure -> {prefix}.png", master=True)
 
 

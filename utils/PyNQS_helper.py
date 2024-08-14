@@ -6,14 +6,15 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
-def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =False) -> DataFrame:
+
+def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = False) -> DataFrame:
 
     exact_opt: bool = False
-    sample_time = [] # s
-    eloc_time = [] # ms
-    grad_time = [] # s
-    total_time = [] # s
-    sample_comm_time = [] # s
+    sample_time = []  # s
+    eloc_time = []  # ms
+    grad_time = []  # s
+    total_time = []  # s
+    sample_comm_time = []  # s
     LUT_broadcast = []
     unique_sample = []
     energy = []
@@ -25,14 +26,19 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
     spin_var = []
     fn_mean = []
     fn_var = []
+    lr = []
+
+    # multi-psi
+    l2_grad_multi = []
+    max_grad_multi = []
 
     n_iter = 0
     re_total_time = re.compile(r"^Total energy")
-    re_grad=re.compile(r"^Calculating grad")
-    re_eloc_detail=re.compile(r"Total energy cost time")
+    re_grad = re.compile(r"^Calculating grad")
+    re_eloc_detail = re.compile(r"Total energy cost time")
     re_sample = re.compile(r"Completed (AR|MCMC) Sampling")
     re_comm = re.compile(r"Sample-Comm")
-    re_num = re.compile(r'\d+\.\d+[Ee][+-]?\d+')
+    re_num = re.compile(r"\d+\.\d+[Ee][+-]?\d+")
     re_unique_sample = re.compile(r"^All-Rank unique sample:")
     re_memory = re.compile(r"memory allocated:.*using memory")
     re_L2_grad = re.compile(r"^L2-Gradient")
@@ -40,7 +46,7 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
     find_num = lambda line: list(map(float, re_num.findall(line)))
 
     memory = []
-    with open(filename, encoding='utf-8') as f:
+    with open(filename, encoding="utf-8") as f:
         for line in f:
             if re_comm.search(line):
                 # Sample-Comm, Gather: 1.284E-02 s, Scatter: 1.934E-02 s, merge: 4.328E-04 s
@@ -57,7 +63,7 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
                 # E_total = -97.9124353057 ± 9.438E-06 [σ² = 8.908E+01]
                 # eloc_mean.append(float(line.split()[2]))
                 line = line.split()
-                n_iter +=1
+                n_iter += 1
                 eloc_mean.append(float(line[2]))
                 eloc_var.append(float(line[4]))  # ± std
             elif line.startswith("<S-S+>"):
@@ -99,38 +105,51 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
                 line = line.split()
                 ci_nqs_coeff.append(list(map(float, line[-2:])))
                 # line = line.split()
+            elif line.startswith("Sample/Extra ansatz L2-grad:"):
+                # Sample/Extra ansatz L2-grad: 7.757944E-03 1.045884E-04
+                l2_grad_multi.append(list(map(float, line.split()[-2:])))
+                # Sample/Extra ansatz Max-grad: 4.402429E-03 1.380152E-05
+            elif line.startswith("Sample/Extra ansatz Max-grad:"):
+                max_grad_multi.append(list(map(float, line.split()[-2:])))
+            elif line.startswith("Learning Rate:"):
+                # Learning Rate: 1.00000E-07 1.00000E-08
+                lr.append(list(map(float, line.split()[2:])))
 
     if len(grad_time) == 0:
-       only_sampling = True
-       n_iter = n_iter - 1
+        only_sampling = True
+        n_iter = n_iter - 1
     else:
-       n_iter = len(energy)
-       only_sampling = False
+        n_iter = len(energy)
+        only_sampling = False
+    if len(eloc_time) == 0:
+        return
 
     eloc_time = np.asarray(eloc_time)
-    total_time = np.asarray(total_time)[: n_iter]
+    total_time = np.asarray(total_time)[:n_iter]
     sample_time = np.asarray(sample_time)
     sample_comm_time = np.asarray(sample_comm_time)[:n_iter]
     grad_time = np.asarray(grad_time)[:n_iter]
     unique_sample = np.asarray(unique_sample)[:n_iter]
     energy = np.asarray(energy)
-    memory = np.asarray(memory)[: 2 * n_iter] # (n_iter * 2)
+    memory = np.asarray(memory)[: 2 * n_iter]  # (n_iter * 2)
     LUT_broadcast = np.asarray(LUT_broadcast)[:n_iter]
     l2_grad = np.asarray(l2_grad)[:n_iter]
     ci_nqs_coeff = np.asarray(ci_nqs_coeff)[:n_iter]
 
     # world_size = int(eloc_time.shape[0]/grad_time.shape[0])
-    world_size = int(eloc_time.shape[0]/unique_sample.shape[0])
+    try:
+        world_size = int(eloc_time.shape[0] / unique_sample.shape[0])
+    except ZeroDivisionError:
+        world_size = 1
     # print(eloc_time.shape)
-    
-    # different rank
-    eloc_time = eloc_time[:n_iter * world_size]
-    eloc_time = np.average(eloc_time.reshape(n_iter, world_size, -1), axis=1) /1.0E03
 
+    # different rank
+    eloc_time = eloc_time[: n_iter * world_size]
+    eloc_time = np.average(eloc_time.reshape(n_iter, world_size, -1), axis=1) / 1.0e03
 
     if len(sample_time) != 0:
-        if len(sample_time) < (n_iter-1) * world_size:
-            sample_time = sample_time[: n_iter]
+        if len(sample_time) < (n_iter - 1) * world_size:
+            sample_time = sample_time[:n_iter]
             sample_time = np.average(sample_time.reshape(n_iter, 1), axis=1)
         else:
             sample_time = sample_time[: n_iter * world_size]
@@ -149,17 +168,17 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
         memory = np.zeros(n_iter, dtype=np.double)
     else:
         # (2 * iter)
-        if only_sampling: # only-sampling
-           memory = memory[:n_iter].reshape(-1, 1).mean(-1)
+        if only_sampling:  # only-sampling
+            memory = memory[:n_iter].reshape(-1, 1).mean(-1)
         else:
-           memory = memory.reshape(-1, 2).mean(-1)
+            memory = memory.reshape(-1, 2).mean(-1)
 
     if len(ci_nqs_coeff) == 0:
         ci_nqs_coeff = np.zeros((n_iter, 2), dtype=np.double)
 
     if len(LUT_broadcast) == 0:
         LUT_broadcast = np.zeros(n_iter, dtype=np.double)
-    
+
     if len(eloc_mean) == 0:
         eloc_mean = np.zeros(n_iter, dtype=np.double)
     else:
@@ -169,17 +188,16 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
         eloc_var = np.zeros(n_iter, dtype=np.double)
     else:
         eloc_var = np.asarray(eloc_var)[:n_iter]
-     
+
     if len(spin_var) == 0:
         spin_var = np.zeros(n_iter, dtype=np.double)
     else:
         spin_var = np.asarray(spin_var)[:n_iter]
-    
+
     if len(spin_mean) == 0:
         spin_mean = np.zeros(n_iter, dtype=np.double)
     else:
         spin_mean = np.asarray(spin_mean)[:n_iter]
-
 
     if len(fn_var) == 0 or len(fn_mean) == 0:
         fn_var = fn_mean = np.zeros(n_iter, dtype=np.double)
@@ -187,16 +205,28 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
         fn_var = np.asarray(fn_var)[:n_iter]
         fn_mean = np.asarray(fn_mean)[:n_iter]
 
+    if len(l2_grad_multi) == 0 or len(max_grad_multi) == 0:
+        l2_grad_multi = max_grad_multi = np.zeros((n_iter, 2))
+    else:
+        l2_grad_multi = np.asarray(l2_grad_multi)[:n_iter]
+        max_grad_multi = np.asarray(max_grad_multi)[:n_iter]
+
+    if len(lr) == 0:
+        lr = np.zeros((n_iter, 1))
+    else:
+        # multi lr in Multi-Psi
+        lr = np.asarray(lr)[:n_iter].reshape(n_iter, -1)
+
     fn_var = np.power(fn_var, 2)
     spin_var = np.power(spin_var, 2)
     eloc_var = np.power(eloc_var, 2)
 
     # only-sampling
     if only_sampling:
-       grad_time = np.zeros((n_iter, 2), dtype=np.double)
-       total_time = np.zeros(n_iter, dtype=np.double)
-       energy = np.zeros(n_iter, dtype=np.double)
-       l2_grad = np.zeros((n_iter, 2), dtype=np.double)
+        grad_time = np.zeros((n_iter, 2), dtype=np.double)
+        total_time = np.zeros(n_iter, dtype=np.double)
+        energy = np.zeros(n_iter, dtype=np.double)
+        l2_grad = np.zeros((n_iter, 2), dtype=np.double)
 
     print(f"file: {filename}, iteration: {n_iter}, world-size: {world_size}")
     if verbose:
@@ -205,27 +235,71 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
         print(f"update-param: {float(grad_time.mean(axis=0)[1]):.3E} s")
         print(f"Sample: {float(sample_time.mean(axis=0)):.3E} s")
 
-    t = [sample_time, sample_comm_time, LUT_broadcast, eloc_time,
-        grad_time, total_time, unique_sample, energy, eloc_mean, eloc_var,
-        fn_mean, fn_var,
-        spin_mean, spin_var, ci_nqs_coeff, memory, l2_grad]
+    t = [
+        sample_time,
+        sample_comm_time,
+        LUT_broadcast,
+        eloc_time,
+        grad_time,
+        total_time,
+        unique_sample,
+        energy,
+        eloc_mean,
+        eloc_var,
+        fn_mean,
+        fn_var,
+        spin_mean,
+        spin_var,
+        ci_nqs_coeff,
+        memory,
+        l2_grad,
+        l2_grad_multi,
+        max_grad_multi,
+        lr,
+    ]
     x = np.column_stack(t)
 
-    names = ["sample", "Gather", "Scatter", "Merge", "Broad",
-            "eloc-total", "comb-x", "hij", "psi(x)",
-            "auto-grad", "update-param", "total", "n-sample", "energy",
-            "eloc-mean", "eloc-var", 
-            "fn-mean", "fn-var",
-            "spin-mean", "spin-var",
-            "CI", "CNqs", "memory", "l2-grad",
-            "max-grad"]
+    names = [
+        "sample",
+        "Gather",
+        "Scatter",
+        "Merge",
+        "Broad",
+        "eloc-total",
+        "comb-x",
+        "hij",
+        "psi(x)",
+        "auto-grad",
+        "update-param",
+        "total",
+        "n-sample",
+        "energy",
+        "eloc-mean",
+        "eloc-var",
+        "fn-mean",
+        "fn-var",
+        "spin-mean",
+        "spin-var",
+        "CI",
+        "CNqs",
+        "memory",
+        "l2-grad",
+        "max-grad",
+        "l2-grad-sample",
+        "l2-grad-extra",
+        "max-grad-sample",
+        "max-grad-extra",
+    ]
+
+    # lr-1 or lr-1 lr-2
+    names += [f'lr-{i}' for i in range(len(lr[0]))]
 
     df_time = pd.DataFrame(x, columns=names)
     df_time["n-sample"] = np.int64(df_time["n-sample"])
     # df_time["n-sample"].dtype = np.int64
 
     if save_file:
-        csv_file = os.path.splitext(filename)[0] +".csv"
+        csv_file = os.path.splitext(filename)[0] + ".csv"
         df_time.to_csv(csv_file, encoding="utf-8", float_format="%.8e", index=False)
         print(f"Save {csv_file}")
 
@@ -234,6 +308,7 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool =Fa
 
 if __name__ == "__main__":
     import glob
+
     script_name = sys.argv[0]
     arguments = sys.argv[1:]
     filenames = []
