@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 import numpy as np
 
-from typing import Callable
+from typing import Callable, Union, List
 from dataclasses import dataclass
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
@@ -52,8 +52,7 @@ class VMCOptimizer(BaseVMCOptimizer):
         sampler_param: dict,
         electron_info: ElectronInfo,
         opt: Optimizer,
-        lr_scheduler: LRScheduler = None,
-        lr_sch_params: dict = None,
+        lr_scheduler: Union[List[LRScheduler], LRScheduler] = None,
         max_iter: int = 2000,
         dtype: Dtype = None,
         HF_init: int = 0,
@@ -91,7 +90,6 @@ class VMCOptimizer(BaseVMCOptimizer):
             electron_info=electron_info,
             opt = opt,
             lr_scheduler=lr_scheduler,
-            lr_sch_params=lr_sch_params,
             max_iter=max_iter,
             dtype=dtype,
             HF_init=HF_init,
@@ -322,6 +320,12 @@ class VMCOptimizer(BaseVMCOptimizer):
     def pre_train(self, prefix: str = None) -> None:
         if prefix is None:
             prefix = self.prefix
+        if self.lr_scheduler is not None:
+            if len(self.lr_scheduler) > 1:
+                raise NotImplementedError
+            lr_scheduler = self.lr_scheduler[0]
+        else:
+            lr_scheduler = None
         t = CITrain(
             self.model,
             self.opt,
@@ -329,7 +333,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             self.pre_train_info,
             self.sorb,
             self.dtype,
-            self.lr_scheduler,
+            lr_scheduler,
             self.exact,
         )
 

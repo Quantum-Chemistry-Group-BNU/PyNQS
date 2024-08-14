@@ -12,7 +12,7 @@ import numpy as np
 
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from typing import List, Callable, Tuple
+from typing import List, Callable, Tuple, Union
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -87,8 +87,7 @@ class BaseVMCOptimizer(ABC):
         sampler_param: dict,
         electron_info: ElectronInfo,
         opt: Optimizer,
-        lr_scheduler: LRScheduler = None,
-        lr_sch_params: dict = None,
+        lr_scheduler: Union[List[LRScheduler], LRScheduler],
         max_iter: int = 2000,
         dtype: Dtype = None,
         HF_init: int = 0,
@@ -135,10 +134,16 @@ class BaseVMCOptimizer(ABC):
 
         # Read parameters from an external model or model
         self.opt = opt
-        if lr_sch_params is not None and lr_scheduler is not None:
-            self.lr_scheduler: LRScheduler = lr_scheduler(self.opt, **lr_sch_params)
+        self.lr_scheduler: List[LRScheduler] = []
+        if lr_scheduler is not None:
+            if not isinstance(lr_scheduler, list):
+                lr_scheduler = [lr_scheduler]
+            for p in lr_scheduler:
+                if not isinstance(p, LRScheduler):
+                    raise TypeError(f"{type(p).__name__ } is not a LRScheduler")
+                self.lr_scheduler.append(p)
         else:
-            self.lr_scheduler: LRScheduler = None
+            self.lr_scheduler = None
 
         # record optim, grad_L2, grad_max
         self.grad_e_lst: Tuple[List[float], List[float]] = ([], [])
@@ -283,7 +288,8 @@ class BaseVMCOptimizer(ABC):
         if not read_model_only:
             self.opt.load_state_dict(x["optimizer"])
             if self.lr_scheduler is not None:
-                self.lr_scheduler.load_state_dict(x["scheduler"])
+                for i, p in enumerate(self.lr_scheduler):
+                   self.lr_scheduler[i].load_state_dict(x["scheduler"])
         if "l2_grad" in x.keys():
             self.grad_e_lst[0].extend(x["l2_grad"])
         if "max_grad" in x.keys():
@@ -377,7 +383,7 @@ class BaseVMCOptimizer(ABC):
         """
         epoch0 = epoch
         if self.lr_scheduler is not None:
-            epoch = self.lr_scheduler.last_epoch
+            epoch = self.lr_scheduler[0].last_epoch
         # read checkpoint
         if len(self.grad_e_lst[0]) > epoch:
             epoch0 = epoch
@@ -409,7 +415,7 @@ class BaseVMCOptimizer(ABC):
         clip model grad use max
         """
         if self.lr_scheduler is not None:
-            epoch = self.lr_scheduler.last_epoch
+            epoch = self.lr_scheduler[0].last_epoch
         # change max clip-grad
         if self.clip_grad_scheduler is not None:
             g0 = self.clip_grad_scheduler(epoch) * self.initial_g0
@@ -433,7 +439,8 @@ class BaseVMCOptimizer(ABC):
             # logger.info(f"diff: {(x - x1).norm()}")
             self.opt.zero_grad()
             if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
+                for i, p in enumerate(self.lr_scheduler):
+                    self.lr_scheduler[i].step()
 
     def save_checkpoint(self, epoch: int) -> None:
         """
@@ -443,13 +450,16 @@ class BaseVMCOptimizer(ABC):
             if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
                 checkpoint_file = f"{self.prefix}-checkpoint.pth"
                 logger.info(f"Save model/opt state: -> {checkpoint_file}", master=True)
-                lr = self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
+                if self.lr_scheduler is None:
+                    lr_scheduler = None
+                else:
+                    lr_scheduler = [p.state_dict() for p in self.lr_scheduler]
                 torch.save(
                     {
                         "epoch": epoch,
                         "model": self.model_raw.state_dict(),
                         "optimizer": self.opt.state_dict(),
-                        "scheduler": lr,
+                        "scheduler": lr_scheduler,
                         "l2_grad": self.grad_e_lst[0],
                         "max_grad": self.grad_e_lst[1],
                         "energy": self.e_lst,
@@ -471,10 +481,7 @@ class BaseVMCOptimizer(ABC):
             max_grad = self.grad_e_lst[1][-1]
             s = f"Calculating grad: {cost[0].item():.3E} s, update param: {cost[1].item():.3E} s\n"
             s += f"Total energy {e_total:.9f} a.u., cost time {cost[2].item():.3E} s\n"
-            if self.lr_scheduler is not None:
-                lrs = self.lr_scheduler.get_last_lr()
-            else:
-                lrs = [p['lr'] for p in self.opt.param_groups]
+            lrs = [p['lr'] for p in self.opt.param_groups]
             s += f"Learning Rate: {' '.join(['{:.5E}'.format(lr) for lr in lrs])}\n"
             s += f"L2-Gradient: {l2_grad:.5E}, Max-Gradient: {max_grad:.5E} \n"
             s += f"{epoch} iteration end {time.ctime()}\n"
