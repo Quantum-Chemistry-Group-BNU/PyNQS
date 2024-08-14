@@ -71,7 +71,12 @@ def local_energy(
     with torch.no_grad():
         if use_sample_space:
             assert WF_LUT is not None, "WF_ULT must be used if use_sample"
-            func = partial(_only_sample_space, index=index, alpha=alpha)
+            func = partial(
+                _only_sample_space,
+                index=index,
+                alpha=alpha,
+                use_multi_psi=use_multi_psi,
+            )
         else:
             if reduce_psi:
                 assert eps >= 0.0 and eps_sample >= 0
@@ -198,9 +203,7 @@ def _simple(
 
     if use_multi_psi:
         if use_unique:
-            unique_comb, inverse = torch.unique(
-                comb_x.reshape(-1, bra_len), dim=0, return_inverse=True
-            )
+            unique_comb, inverse = torch.unique(comb_x.reshape(-1, bra_len), dim=0, return_inverse=True)
             x1 = onv_to_tensor(unique_comb, sorb)
             _psi = torch.index_select(ansatz_extra(x1), 0, inverse)
         else:
@@ -230,11 +233,9 @@ def _simple(
     delta1 = (t2 - t1) / 1.0e06
     delta2 = (t3 - t2) / 1.0e06
     logger.debug(
-        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, "
-        + f"nqs time: {delta2:.3E} ms"
+        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " + f"nqs time: {delta2:.3E} ms"
     )
     del comb_hij, comb_x  # index, unique_x1, unique
-
 
     if not use_spin_raising:
         sloc = torch.zeros_like(eloc)
@@ -319,9 +320,7 @@ def _reduce_psi(
         _index1, _count = _counts.unique(sorted=True, return_counts=True)
         # H[n, m]/p[m'] N_m/N_sample
         _prob = _prob.flatten()
-        comb_hij.view(-1)[_index1] = (
-            (_count / n_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
-        )
+        comb_hij.view(-1)[_index1] = (_count / n_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
         # if use_spin_raising:
         #     hij_spin.view(-1)[_index1] = (_count / N_SAMPLE) * hij_spin.flatten()[_index1] / _prob[_index1]
         gt_eps_idx = _index1
@@ -333,7 +332,7 @@ def _reduce_psi(
         gt_eps_idx = torch.where(comb_hij.reshape(-1).abs() >= eps)[0]
 
     rate = gt_eps_idx.size(0) / comb_hij.reshape(-1).size(0) * 100
-    s =  f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}, "
+    s = f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}, "
     s += f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %"
     logger.debug(s)
     psi_x1 = torch.zeros(batch * n_comb, dtype=dtype, device=device)
@@ -402,8 +401,7 @@ def _reduce_psi(
     delta1 = (t2 - t1) / 1.0e06
     delta2 = (t3 - t2) / 1.0e06
     logger.debug(
-        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, "
-        + f"nqs time: {delta2:.3E} ms"
+        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " + f"nqs time: {delta2:.3E} ms"
     )
     del comb_hij, comb_x, psi_gt_eps, gt_eps_idx  # index, unique_x1, unique
 
@@ -555,8 +553,7 @@ def _only_sample_space(
     delta1 = (t2 - t1) / 1.0e06
     delta2 = (t3 - t2) / 1.0e06
     logger.debug(
-        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, "
-        + f"nqs time: {delta2:.3E} ms"
+        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " + f"nqs time: {delta2:.3E} ms"
     )
 
     del comb_hij
