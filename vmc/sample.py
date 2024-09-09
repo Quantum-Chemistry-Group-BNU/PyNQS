@@ -12,7 +12,7 @@ import numpy as np
 # import pandas as pd
 
 from functools import partial
-from typing import Callable, Tuple, List, Union
+from typing import Callable, Tuple, List, Union, Optional
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
@@ -76,10 +76,10 @@ class Sampler:
         self,
         nqs: DDP,
         ele_info: ElectronInfo,
-        eloc_param: dict = None,
+        eloc_param: Optional[dict] = None,
         n_sample: int = 100,
         start_iter: int = 100,
-        start_n_sample: int = None,
+        start_n_sample: Optional[int] = None,
         therm_step: int = 2000,
         debug_exact: bool = False,
         seed: int = 100,
@@ -89,8 +89,8 @@ class Sampler:
         dtype=torch.double,
         method_sample="AR",
         use_same_tree: bool = False,
-        max_n_sample: int = None,
-        max_unique_sample: int = None,
+        max_n_sample: Optional[int] = None,
+        max_unique_sample: Optional[int] = None,
         use_LUT: bool = False,
         use_unique: bool = True,
         reduce_psi: bool = False,
@@ -99,12 +99,12 @@ class Sampler:
         only_sample: bool = False,
         use_sample_space: bool = False,
         min_batch: int = 10000,
-        min_tree_height: int = None,
-        det_lut: DetLUT = None,
+        min_tree_height: Optional[int] = None,
+        det_lut: Optional[DetLUT] = None,
         use_dfs_sample: bool = False,
         use_spin_raising: bool = False,
         spin_raising_coeff: float = 1.0,
-        given_state: Tensor = None,
+        given_state: Optional[Tensor] = None,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -228,7 +228,7 @@ class Sampler:
 
         # Use WaveFunction LooKup-Table to speed up local-energy calculations
         self.use_LUT: bool = eloc_param.get("use_LUT", True)
-        self.WF_LUT: WavefunctionLUT = None
+        self.WF_LUT: Optional[WavefunctionLUT] = None
 
         # only sampling not backward
         self.only_sample = only_sample
@@ -254,7 +254,7 @@ class Sampler:
 
         # Det-LUT, remove part det in CI-NQS
         self.remove_det = False
-        self.det_lut: DetLUT = None
+        self.det_lut: Optional[DetLUT] = None
         if det_lut is not None:
             self.remove_det = True
             self.det_lut = det_lut

@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 import numpy as np
 
-from typing import Callable, Union, List
+from typing import Callable, Union, List, Optional
 from dataclasses import dataclass
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
@@ -76,13 +76,13 @@ class VMCOptimizer(BaseVMCOptimizer):
         max_grad_value: float = 1.0,
         start_clip_grad: int = None,
         clip_grad_method: str = "l2",
-        clip_grad_scheduler: Callable[[int], float] = None,
+        clip_grad_scheduler: Optional[Callable[[int], float]] = None,
         use_3sigma: bool = False,
         k_step_clip: int = 100,
         use_spin_raising: bool = False,
         spin_raising_coeff: float = 1.0,
         only_output_spin_raising: bool = False,
-        spin_raising_scheduler: Callable[[int], float] = None,
+        spin_raising_scheduler: Optional[Callable[[int], float]] = None,
     ) -> None:
         super().__init__(
             nqs=nqs,
