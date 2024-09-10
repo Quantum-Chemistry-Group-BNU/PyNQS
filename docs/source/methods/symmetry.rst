@@ -20,7 +20,7 @@ the configuration :math:`x \in \{0, 1\}^{N}`, (1: occupied, 0: unoccupied, N: sp
 
 k-th spin-orbitals satisfy:
 
-.. math:: 
+.. math::
     \begin{equation}
         \begin{split}
             n_{\alpha} - \left(\frac{N}{2} - k//2\right) &
@@ -49,9 +49,11 @@ see:
     ``vmc/ansatz/utils/symmetry_mask``
 
 
----------------------------
+.. _remove_dets:
+
+--------------------
 Exclude partial dets
----------------------------
+--------------------
 
 Using Binary Search to exclude partial dets
 

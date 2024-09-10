@@ -45,7 +45,7 @@ Mix-Ansatz
 
 Define: :math:`\psi_{(n)} = \phi_{(n)}f_{(n)}, n ~\sim |\phi_{(n)}|^2`.
 :math:`\phi_{(n)}` is **MPS-RNN**,
-:math:`f_{(n)}` is **RBM**, **Transformer** and **MLP**
+:math:`f_{(n)}` is **RBM**, **Transformer**.
 
 see: ``vmc/ansatz/multi/MultiPsi``
 

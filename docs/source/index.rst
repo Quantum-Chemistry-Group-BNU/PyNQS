@@ -1,6 +1,6 @@
 PyNQS
 #####
-**PyNQS** (Neural-Network Quantum States for Quantum Chemistry)
+**PyNQS**: Neural-Network Quantum States for Quantum Chemistry based on PyTorch
 
 .. toctree::
    :maxdepth: 2
