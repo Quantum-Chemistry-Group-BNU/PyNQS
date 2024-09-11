@@ -5,6 +5,8 @@ VMC
 Variational Monte Carlo(VMC) algorithm
 
 
+.. _eloc:
+
 ------------
 Local energy
 ------------
@@ -42,10 +44,11 @@ see: ``vmc/energy/eloc/_reduce_psi``
 
 **Method 2**:
 
-Use LookUp-table(LUT) coming from sampling to reduce :math:`\psi(n^{\prime})`, :math:`n^{\prime}` is the **key** of LUT.
+Use LookUp-table(LUT) coming from sampling to reduce :math:`\psi(n^{\prime})`,
+:math:`\psi(n^{\prime})` is **non-zero** if :math:`n^{\prime}` is the **key** of the LUT.
 
 **Note**: This methods could be is **ineffective** when When :math:`p(n)` presents basically the same
-(H\ :sub:`50`\, STO-6G, aoa-bias).
+(H\ :sub:`50`\, STO-6G, aoa-basis).
 
 see:  ``vmc/energy/eloc/_only_sample_space``
 

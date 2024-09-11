@@ -47,3 +47,33 @@ Optim
             only_output_spin_raising: bool = False,
             spin_raising_scheduler: Optional[Callable[[int], float]] = None,
         )
+
+----------
+opt-params
+----------
+
+.. code-block:: python
+    :linenos:
+
+    vmc_opt_params = {
+        "nqs": model, 
+        "opt": opt,
+        # "lr_scheduler": lr_scheduler,
+        # "read_model_only": True,
+        "dtype": dtype,
+        "sampler_param": sampler_param,
+        # "only_sample": True,
+        "electron_info": electron_info,
+        # "use_spin_raising": True,
+        # "spin_raising_coeff": 1.0,
+        # "only_output_spin_raising": True,
+        "max_iter": 5000,
+        "interval": 100,
+        "MAX_AD_DIM": 80000,
+        # "check_point": f"./h50/focus-init/checkpoint/H50-2.00-oao-mps-rnn-dcut-30-222-focus-20w-checkpoint.pth",
+        "prefix": prefix,
+        "use_clip_grad": True,
+        "max_grad_norm": 1,
+        "start_clip_grad": -1,
+        "clip_grad_scheduler": clip_grad_scheduler,
+    }

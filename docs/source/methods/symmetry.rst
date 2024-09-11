@@ -2,6 +2,11 @@
 Symmetry
 ########
 
+.. contents:: Table of contents
+   :local:
+   :backlinks: entry
+   :depth: 2
+
 ----------------------------------
 Constraints Fock space → FCI space
 ----------------------------------
