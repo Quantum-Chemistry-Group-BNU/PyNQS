@@ -48,12 +48,31 @@ Optim
             spin_raising_scheduler: Optional[Callable[[int], float]] = None,
         )
 
+.. _opt-params:
+
 ----------
 opt-params
 ----------
 
 .. code-block:: python
     :linenos:
+
+
+    from utils import ElectronInfo, Dtype
+
+    opt_type = optim.AdamW
+    opt_params = {"lr": 0.001, "betas": (0.9, 0.999)}
+    opt = opt_type(model.parameters(), **opt_params)
+
+    prefix = "vmc"
+    def clip_grad_scheduler(step):
+       if step <= 4000:
+          max_grad = 1.0
+       elif step <= 8000:
+          max_grad = 0.1 
+       else:
+          max_grad = 0.01
+       return max_grad
 
     vmc_opt_params = {
         "nqs": model, 
@@ -77,3 +96,35 @@ opt-params
         "start_clip_grad": -1,
         "clip_grad_scheduler": clip_grad_scheduler,
     }
+
+* ``nqs``: Ansatz(e.g. **Transformer**, **MPS-RNN**, **Graph-MPS-RNN**).
+
+* ``opt``: Optimizer(e.g., **Adam**, **Adamw**, **SGD**).
+
+* ``lr_scheduler``: LRScheduler, Default: ``None``.
+
+* ``read_model_only``: Read model from the checkpoint file.
+
+* ``dtype``: data-dtype: (e.g., ``Dtype(dtype=torch.complex128, device="cuda")``)
+
+* ``sampler_param``: see :ref:`sample-params`
+
+* ``only_sample``: No calculating gradient. This is used to calculate energy.
+
+* ``max_iter``: the number of the iteration.
+
+* ``interval``: the time of the saving the checkpoint file.
+
+* ``MAX_AD_DIM``: the nbatch of the **backward**.
+
+* ``check_point``: Read model/optimizer/lr_scheduler from the checkpoint file, Default: ``None``.
+
+* ``prefix``: the prefix of the checkpoint file, e.g., ``vmc-checkpoint.pth``.
+
+* ``use_clip_grad``: clip gradient, Default: ``False``.
+
+* ``max_grad_norm``: the max of the l2-norm when clipping gradient.
+
+* ``start_clip_grad``: clip gradient from the k-th iteration.
+
+* ``clip_grad_scheduler``: the scheduler of clipping gradient, this is ``Callable[[int], float]``.

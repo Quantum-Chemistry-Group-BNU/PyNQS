@@ -57,6 +57,7 @@ eloc-param
 .. code-block:: python
     :linenos:
 
+    from utils.enums import ElocMethod
     eloc_param = {
         "method": ElocMethod.REDUCE,
         "use_unique": False,
@@ -129,8 +130,14 @@ sample-param
 
 * ``only_AD``: No sampling, random samples are selected to check the backward memory usage ratio.
 
+* ``min_batch``: the batch of the sampling.
+
 * ``use_same_tree, min_tree_height``: different rank-sample. There must are selected carefully if the word-size great 1.
 
 * ``use_dfs_sample``: the **DFS** (Depth first search) or **BFS** (Breadth first search) sampling.
 
 * ``eloc_param``: see :ref:`eloc-params`
+
+**Notes**:
+
+* ``min_batch, use_same_tree, min_tree_height, use_dfs_sample``: These are implemented in the Ansatz(e.g. **MPS-RNN**, **Transformer**)
