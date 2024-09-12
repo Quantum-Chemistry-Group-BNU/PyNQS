@@ -130,11 +130,11 @@ class OrbitalBlock(nn.Module):
         for i, (n_in, n_out) in enumerate(zip(layer_dims, layer_dims[1:])):
             if batch_norm:
                 l = [
-                    nn.Linear(n_in, n_out, bias=False),
+                    nn.Linear(n_in, n_out, bias=False,device=self.device),
                     nn.BatchNorm1d(n_out, momentum=batch_norm_momentum),
                 ]
             else:
-                l = [nn.Linear(n_in, n_out, bias=bias)]
+                l = [nn.Linear(n_in, n_out, bias=bias,device=self.device)]
             if (hidden_activation is not None) and i < len(layer_dims) - 2:
                 l.append(hidden_activation())
             elif (out_activation is not None) and i == len(layer_dims) - 2:
@@ -247,9 +247,27 @@ class GlobalPhase(nn.Module):
         # init phi [0, 2pi]
         self.phi = nn.Parameter(torch.rand(1, device=device) * 2 * torch.pi)
 
+
     def __repr__(self) -> str:
         return "GlobalPhase exp(i * phi)"
+
 
     def forward(self, use: bool = True) -> Tensor:
         # * bool, avoid use find_unused_parameters=True
         return torch.exp(1j * self.phi[0] * use)
+
+class ComplexLinear(nn.Module):
+    def __init__(self, input_dim: int, device, iscale: float = 0.001,):
+        super(ComplexLinear, self).__init__()
+        self.input_dim = input_dim
+        self.device = device
+        
+        self.iscale = iscale
+        self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
+        M_r = nn.Parameter(torch.rand((self.input_dim, 1, 2), **self.factory_kwargs_real) * self.iscale)
+        b_r = nn.Parameter(torch.rand((1, 2), **self.factory_kwargs_real) * self.iscale)
+        self.M = torch.view_as_complex(M_r)
+        self.b = torch.view_as_complex(b_r)
+
+    def forward(self, x):
+        return x.to(torch.complex128) @ self.M + self.b

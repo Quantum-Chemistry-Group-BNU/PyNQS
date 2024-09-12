@@ -26,14 +26,15 @@ class RBMWavefunction(nn.Module):
         if rbm_type in self.RBM_MODEL:
             self.rbm_type = rbm_type
         else:
-            raise ValueError(f"rbm type {rbm_type} must be in {self.rmb_model}")
+            raise ValueError(f" must be in {self.rmb_model}")
 
         if not (isinstance(alpha, int) and alpha > 0):
-            raise ValueError(f"alpha: {alpha} must be positive-int")
+            import warnings
+            warnings.warn("alpha is not intger, Ensure that num_hidden is intger!")
         self.alpha = alpha
         self.num_visible = num_visible
         self.sorb = num_visible
-        self.num_hidden = self.alpha * self.num_visible
+        self.num_hidden = int(self.alpha * self.num_visible)
 
         self.device = device
         self.dtype = torch.double
@@ -146,7 +147,7 @@ class RBMWavefunction(nn.Module):
             self.visible_bias = None
         else:
             visible_bias = nn.Parameter(visible_bias)
-            if self.dtype == "complex":
+            if self.rbm_type == "complex":
                 self.params_visible_bias = visible_bias
                 self.visible_bias = torch.view_as_complex(visible_bias).view(self.num_visible)
             else:
@@ -155,7 +156,7 @@ class RBMWavefunction(nn.Module):
 
         hidden_bias = nn.Parameter(hidden_bias)
         weights = nn.Parameter(weights)
-        if self.dtype == "complex":
+        if self.rbm_type == "complex":
             # complex RBM
             self.params_hidden_bias = hidden_bias
             self.hidden_bias = torch.view_as_complex(hidden_bias).view(self.num_hidden)

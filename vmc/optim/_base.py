@@ -289,7 +289,7 @@ class BaseVMCOptimizer(ABC):
             self.opt.load_state_dict(x["optimizer"])
             if self.lr_scheduler is not None:
                 for i, p in enumerate(self.lr_scheduler):
-                   self.lr_scheduler[i].load_state_dict(x["scheduler"])
+                    self.lr_scheduler[i].load_state_dict(x["scheduler"][i])
         if "l2_grad" in x.keys():
             self.grad_e_lst[0].extend(x["l2_grad"])
         if "max_grad" in x.keys():
