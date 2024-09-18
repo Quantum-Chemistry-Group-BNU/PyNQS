@@ -13,9 +13,9 @@ class RBMWavefunction(nn.Module):
 
     def __init__(
         self,
-        num_visible: int,
+        nqubits: int,
         alpha: int = 1,
-        init_weight: float = 0.001,
+        iscale: float = 0.001,
         device: str = "cpu",
         rbm_type: str = "real",
         params_file: str = None,
@@ -32,9 +32,8 @@ class RBMWavefunction(nn.Module):
             import warnings
             warnings.warn("alpha is not intger, Ensure that num_hidden is intger!")
         self.alpha = alpha
-        self.num_visible = num_visible
-        self.sorb = num_visible
-        self.num_hidden = int(self.alpha * self.num_visible)
+        self.nqubits = nqubits
+        self.num_hidden = int(self.alpha * self.nqubits)
 
         self.device = device
         self.dtype = torch.double
@@ -43,7 +42,7 @@ class RBMWavefunction(nn.Module):
         factory_kwargs = {"device": self.device, "dtype": self.dtype}
         self.factory_kwargs = factory_kwargs
 
-        self.init_weight = init_weight
+        self.iscale = iscale
 
         # TODO: add alpha 2 -> 4
         # init RBM parameter
@@ -51,7 +50,7 @@ class RBMWavefunction(nn.Module):
         if self.params_file is not None:
             self.read_param_file(params_file)
         else:
-            self._init__params(init_weight, self.num_hidden, self.num_visible)
+            self._init__params(iscale, self.num_hidden, self.nqubits)
 
     def params_complex(self, init_weight: float, num_hidden: int, num_visible: int):
         if self.rbm_type == "cos":
@@ -121,9 +120,9 @@ class RBMWavefunction(nn.Module):
         else:
             _num_hidden = _weights.shape[0]
             if self.dtype == torch.double:
-                hidden_bias_r, weights_r, _ = self.params_real(self.init_weight, self.num_hidden, self.num_visible)
+                hidden_bias_r, weights_r, _ = self.params_real(self.iscale, self.num_hidden, self.nqubits)
             elif self.dtype == torch.complex128:
-                hidden_bias_r, weights_r, _ = self.params_complex(self.init_weight, self.num_hidden, self.num_visible)
+                hidden_bias_r, weights_r, _ = self.params_complex(self.iscale, self.num_hidden, self.nqubits)
                 hidden_bias = torch.view_as_complex(hidden_bias_r)
                 weights = torch.view_as_complex(weights_r)
             else:
@@ -149,10 +148,10 @@ class RBMWavefunction(nn.Module):
             visible_bias = nn.Parameter(visible_bias)
             if self.rbm_type == "complex":
                 self.params_visible_bias = visible_bias
-                self.visible_bias = torch.view_as_complex(visible_bias).view(self.num_visible)
+                self.visible_bias = torch.view_as_complex(visible_bias).view(self.nqubits)
             else:
                 self.params_visible_bias = nn.Parameter(visible_bias)
-                self.visible_bias = visible_bias.view(self.num_visible)
+                self.visible_bias = visible_bias.view(self.nqubits)
 
         hidden_bias = nn.Parameter(hidden_bias)
         weights = nn.Parameter(weights)
@@ -161,22 +160,22 @@ class RBMWavefunction(nn.Module):
             self.params_hidden_bias = hidden_bias
             self.hidden_bias = torch.view_as_complex(hidden_bias).view(self.num_hidden)
             self.params_weights = weights
-            self.weights = torch.view_as_complex(weights).view(self.num_hidden, self.num_visible)
+            self.weights = torch.view_as_complex(weights).view(self.num_hidden, self.nqubits)
         else:
             self.params_hidden_bias = hidden_bias
             self.hidden_bias = hidden_bias.view(self.num_hidden)
             self.params_weights = weights
-            self.weights = weights.view(self.num_hidden, self.num_visible)
+            self.weights = weights.view(self.num_hidden, self.nqubits)
 
     def extra_repr(self) -> str:
-        s = f"{self.rbm_type}: num_visible={self.num_visible}, num_hidden={self.num_hidden}, "
-        s += f"init-weight: {self.init_weight}, "
+        s = f"{self.rbm_type}: num_visible={self.nqubits}, num_hidden={self.num_hidden}, "
+        s += f"init-weight: {self.iscale}, "
         if self.params_file is None:
             s += f"params-file: {self.params_file}"
         return s
 
     def effective_theta(self, x: Tensor) -> Tensor:
-        return torch.mm(x, self.weights.T) + self.hidden_bias  # (n-sample, n-hidden)
+        return torch.mm(x, self.weights.T) + self.hidden_bias  # (nbatch, num_hidden)
         # empty tensor is error
         # return torch.einsum("ij, ...j -> ...i", self.weights, x) + self.hidden_bias
 
@@ -193,7 +192,7 @@ class RBMWavefunction(nn.Module):
         assert x.dim() in (1, 2)
         if x.dim() == 1:
             x = x.reshape(1, -1)  # 1D -> 2D
-        assert x.shape[1] == self.num_visible
+        assert x.shape[1] == self.nqubits
 
         if self.rbm_type == "cos":
             ax = 1.00
@@ -207,7 +206,7 @@ class RBMWavefunction(nn.Module):
             amp = (2 * self.effective_theta(x).cosh()).prod(-1)
         elif self.rbm_type in ("pRBM"):
             # see: SciPost Physics 12, 166 (2022).
-            ax = (1j * torch.mv(x, self.visible_bias)).exp()  # (n-sample)
+            ax = (1j * torch.mv(x, self.visible_bias)).exp()  # (nbatch)
             amp = torch.exp(1j * (torch.log(2.0 * self.effective_theta(x).cosh())).sum(-1))
         return ax * amp
 

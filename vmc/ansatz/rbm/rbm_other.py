@@ -1,4 +1,4 @@
-import torch
+import torch, math
 from torch import nn, Tensor
 import torch.nn.functional as F
 
@@ -11,16 +11,21 @@ from vmc.ansatz.utils import OrbitalBlock
 
 
 class IsingRBM(nn.Module):
+    '''
+    alpha: #num_hidden/#num_visible
+    order: the index number-1 of W (consider n-body interaction)
+    activation: activation function
+    '''
     __constants__ = ["num_visible"]
 
     def __init__(
         self,
-        param_dtype: Any = torch.float64,  # 定义参数的数据类型
-        alpha: int = 2,  # 用于计算隐藏层神经元的个数
-        num_visible: int = None,
-        order: int = 2,  # 规定最高的小态求和到几阶
-        activation: Any = torch.cos,  # 定义激活函数
-        iscale: float = 1.0e-3,
+        param_dtype: Any = torch.float64,
+        alpha: int = 2,
+        nqubits: int = None,
+        order: int = 2,
+        activation: Any = torch.cos,
+        iscale: float = 1e-3,
         device="cpu",
     ) -> None:
         super(IsingRBM, self).__init__()
@@ -31,50 +36,41 @@ class IsingRBM(nn.Module):
         self.param_dtype = param_dtype
         self.alpha = alpha
 
-        self.num_visible = int(num_visible)
-        self.num_hidden = int(self.alpha * self.num_visible)
+        self.nqubits = int(nqubits)
+        self.num_hidden = int(self.alpha * self.nqubits)
 
-        self.hidden_bias = nn.Parameter(
+        self.params_hidden_bias = nn.Parameter(
             torch.randn(self.num_hidden, dtype=self.param_dtype, device=self.device) * self.iscale
         )
-        self.weight_1 = nn.Parameter(
+        self.params_weight_1 = nn.Parameter(
             torch.randn(
-                self.num_visible, self.num_hidden, dtype=self.param_dtype, device=self.device
+                self.nqubits, self.num_hidden, dtype=self.param_dtype, device=self.device
             )
             * self.iscale
         )
 
         if self.order >= 2:
-            self.weight_2 = nn.Parameter(
-                torch.randn(
-                    self.num_hidden,
-                    self.num_visible,
-                    self.num_visible,
-                    dtype=self.param_dtype,
-                    device=self.device,
-                )
-                * (self.iscale / 10)
+            shape = (self.num_hidden,)
+            shape = shape + (self.nqubits,)*self.order
+            self.params_weight_2 = nn.Parameter(
+                torch.randn(shape, dtype=self.param_dtype, device=self.device,)
+                * (self.iscale * (0.1**(self.order-1)))
             )
 
-    def forward(self, input: Tensor):
-        vis_input = torch.tensor(input, dtype=self.param_dtype, device=self.device)
-        # print(vis_input)
-        # print(vis_input.size())
-        # print(torch.sum(vis_input, dim=-1))
-        # vis_input = input.to(self.param_dtype)
-        # 计算一次项
-        W_1 = torch.einsum("im,mj->ij", vis_input, self.weight_1)  # (N,K) * (K,n_h) -> (N,n_h)
+    def forward(self, x: Tensor):
+        x = x.to(self.param_dtype)
+        # contract with W_1
+        W_1 = x @ self.params_weight_1  # (nbatch, nqubits), (nqubits, num_hidden) -> (nbatch, num_hidden)
         if self.order >= 2:
-            # 计算二次项
-            vis_ij = torch.einsum("mi,mj->mij", vis_input, vis_input)  # (N,K) (N,K) -> (N,K,K)
-            W_2 = (
-                torch.einsum("hij,mij->mh", self.weight_2, vis_ij) / 2
-            )  # (n_h,K,K) (N,K,K) -> (N,n_h)
-            # 两项加起来
-            W_1 = W_1 + W_2
-        # 激活函数作用，然后对隐藏层求积
-        activation = self.activation(self.hidden_bias + W_1)  # (N,n_h)
-        Psi = torch.prod(activation, dim=-1)  # prod along n_h direction -> (N,n_h) -> (N)
+            # (num_hidden, ..., nqubits), (nbatch, nqubits) -> (nbatch, num_hidden, ...)
+            W_2 = torch.einsum("...a,na->n...", self.params_weight_2, x)
+            for index in range(self.order-1):
+                # (nbatch, num_hidden, ..., nqubits), (nbatch, nqubits) -> (nbatch, num_hidden, ...)
+                W_2 = torch.einsum("n...a,na->n...", W_2, x)
+            W_1 = W_1 + W_2/(math.factorial(self.order)) + self.params_hidden_bias# (nbatch, num_hidden)
+        # activation and product
+        activation = self.activation(W_1)  # (nbatch, num_hidden)
+        Psi = torch.prod(activation, dim=-1)  # prod along hidden layer's cells-> (nbatch, num_hidden) -> (nbatch)
         return Psi
 
 
