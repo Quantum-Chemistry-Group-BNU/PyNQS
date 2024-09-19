@@ -942,7 +942,7 @@ def ansatz_batch(
         result = torch.empty(x.size(0), device=device, dtype=dtype)
         for i in range(len(idx_lst) - 1):
             start, end = idx_lst[i], idx_lst[i + 1]
-            result[start:end] = func(convert(x[start:end]))
+            result[start:end] = func(convert(x[start:end])).view(-1)
         return result
 
 

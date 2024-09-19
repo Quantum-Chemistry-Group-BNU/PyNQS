@@ -1,14 +1,16 @@
 from .rbm.rbm import RBMWavefunction
 from .rnn.rnn import RNNWavefunction
-from .rbm.rbm_other import ARRBM, IsingRBM
+from .rbm.rbm_other import IsingRBM
 from .rbm.ar_rbm import RBMSites
 from .transformer.decoder import DecoderWaveFunction
 from .hybrid.hybrid import HybridWaveFunction
 from .hybrid.hqc import HybridQCWaveFunction
 from .hybrid.multi import MultiPsi
 from .transformer.mps_transformer import MPSdecoder
-from .rnn.mps_rnn import MPS_RNN_2D
 from .rnn.graph_mpsrnn import Graph_MPS_RNN
+from .rnn.mps_rnn import MPS_RNN_2D
+
+
 try:
     from .mps import MPSWavefunction
 except ImportError:
@@ -19,7 +21,6 @@ except ImportError:
 __all__ = [
     "RBMWavefunction",
     "RNNWavefunction",
-    "ARRBM",
     "IsingRBM",
     "RBMSites",
     "DecoderWaveFunction",

@@ -15,7 +15,7 @@ from vmc.ansatz.utils import OrbitalBlock
 class RNNWavefunction(nn.Module):
     def __init__(
         self,
-        sorb: int,
+        nqubits: int,
         nele: int,
         num_hiddens: int,
         num_layers: int,
@@ -39,7 +39,7 @@ class RNNWavefunction(nn.Module):
         super(RNNWavefunction, self).__init__()
         self.device = device
         self.factory_kwargs = {"device": self.device, "dtype": torch.double}
-        self.sorb = sorb
+        self.nqubits = nqubits
         self.nele = nele
         self.num_hiddens = num_hiddens
         self.num_layers = num_layers
@@ -92,13 +92,13 @@ class RNNWavefunction(nn.Module):
             raise TypeError(f"This ansatz is only attribute to RNN, GRU, LSTM")
 
         if self.sites_rnn:
-            self.RNNnn = nn.ModuleList([model() for _ in range(sorb)])
+            self.RNNnn = nn.ModuleList([model() for _ in range(nqubits)])
         else:
             self.RNNnn = nn.ModuleList([model()])
 
         linear = lambda: nn.Linear(num_hiddens, num_labels, **self.factory_kwargs)
         if self.sites_rnn:
-            self.linear_amp = nn.ModuleList([linear() for _ in range(sorb)])
+            self.linear_amp = nn.ModuleList([linear() for _ in range(nqubits)])
         else:
             self.linear_amp = nn.ModuleList([linear()])
 
@@ -107,13 +107,13 @@ class RNNWavefunction(nn.Module):
         if self.compute_phase and self.combine_amp_phase:
             if not self.common_linear:
                 if self.sites_rnn:
-                    self.linear_phase = nn.ModuleList([linear() for _ in range(sorb)])
+                    self.linear_phase = nn.ModuleList([linear() for _ in range(nqubits)])
                 else:
                     self.linear_phase = nn.ModuleList([linear()])
             else:
                 self.linear_phase = self.linear_amp
 
-        n_in = self.sorb
+        n_in = self.nqubits
         if phase_use_embedding:
             raise NotImplementedError(f"Phases layer embedding will be implemented in future")
         self.n_out_phase = n_out_phase
@@ -147,13 +147,12 @@ class RNNWavefunction(nn.Module):
         self.use_unique = use_unique
 
     def extra_repr(self) -> str:
-        s = f"RNN type: {self.rnn_type}, use unique: {self.use_unique}\n"
-        s += f"amplitude and phase common Linear: {self.common_linear}, "
-        s += f"combined amplitude and phase layers: {self.combine_amp_phase}\n"
         net_param_num = lambda net: sum(p.numel() for p in net.parameters())
+        s = f"The RNN is working on {self.device}.\n"
+        s += f"RNN type: {self.rnn_type}, use unique: {self.use_unique},\n"
+        s += f"amplitude and phase common Linear: {self.common_linear}, "
+        s += f"combined amplitude and phase layers: {self.combine_amp_phase},\n"
         rnn_num = sum([net_param_num(m) for m in self.RNNnn])
-        # gru_num = net_param_num(self.RNNnn)
-        # amp_num = net_param_num(self.linear_amp)
         amp_num = sum([net_param_num(m) for m in self.linear_amp])
         s += f"params: {self.nn_type}: {rnn_num}, amp: {amp_num}, "
         if self.compute_phase:
@@ -165,7 +164,7 @@ class RNNWavefunction(nn.Module):
                 impl = self.linear_phase
                 phase_num = sum([net_param_num(m) for m in impl])
                 # phase_num = net_param_num(impl)
-            s += f"phase: {phase_num}"
+            s += f"phase: {phase_num}."
         return s
 
     def rnn(self, x: Tensor, hidden_state: Tensor, i_th: int) -> Tuple[Tensor, Tensor]:
@@ -231,22 +230,22 @@ class RNNWavefunction(nn.Module):
         x = ((x + 1) / 2).to(torch.int64)  # 1/-1 -> 1/0
         # (nbatch, seq_len, sorb), seq_len = 1, 1: occupied, 0: unoccupied
         nbatch, _, dim = tuple(x.size())
-        unique_sorb: int = self.sorb // 2
+        unique_sorb: int = self.nqubits // 2
 
         alpha = self.nele // 2
         beta = self.nele // 2
-        baseline_up = alpha - self.sorb // 2
-        baseline_down = beta - self.sorb // 2
+        baseline_up = alpha - self.nqubits // 2
+        baseline_down = beta - self.nqubits // 2
         num_up = torch.zeros(nbatch, **self.factory_kwargs)
         num_down = torch.zeros(nbatch, **self.factory_kwargs)
         activations = torch.ones(nbatch, device=self.device).to(torch.bool)
-        min_i = min([self.sorb - 2 * alpha, self.sorb - 2 * beta, 2 * alpha, 2 * beta])
+        min_i = min([self.nqubits - 2 * alpha, self.nqubits - 2 * beta, 2 * alpha, 2 * beta])
 
         # Initialize the RNN hidden state
         if use_unique:
             hidden_state: Tensor = None
             # avoid sorted much orbital, unique_sorb >= 2
-            unique_sorb = min(int(torch.tensor(nbatch / 1024 + 1).log2().ceil()), self.sorb // 2)
+            unique_sorb = min(int(torch.tensor(nbatch / 1024 + 1).log2().ceil()), self.nqubits // 2)
             unique_sorb = max(2, unique_sorb)
             # sorted x, avoid repeated sorting using 'torch.unique'
             sorted_idx = torch_lexsort(
@@ -270,7 +269,7 @@ class RNNWavefunction(nn.Module):
             phase: Tensor = None
 
         inverse_before: Tensor = None
-        for i in range(self.sorb):
+        for i in range(self.nqubits):
             if use_unique:
                 # notice, the shape of hidden_state is different in i-th cycle,
                 # so, hidden_state must be indexed using inverse_before[index_i] or inverse_i
@@ -384,10 +383,10 @@ class RNNWavefunction(nn.Module):
         # ref: https://doi.org/10.48550/arXiv.2208.05637,
         alpha = self.nele // 2
         beta = self.nele // 2
-        baseline_up = alpha - self.sorb // 2
-        baseline_down = beta - self.sorb // 2
+        baseline_up = alpha - self.nqubits // 2
+        baseline_down = beta - self.nqubits // 2
 
-        for i in range(self.sorb):
+        for i in range(self.nqubits):
             # x0: (n_unique, 1, 2)
             # hidden_state: (num_layers, n_unique, num_hiddens)
             # y0: (n_unique, 2)
