@@ -6,7 +6,7 @@ from __future__ import annotations
 import torch
 
 from torch import Tensor
-from typing import Tuple
+from typing import Tuple, Optional
 
 from utils.distributed import (
     all_gather_tensor,
@@ -22,7 +22,7 @@ from utils.distributed import (
 
 def dist_mean(
     x: Tensor,
-    prob: Tensor = None,
+    prob: Optional[Tensor] = None,
     world_size: int = 1,
 ) -> Tensor:
     """
@@ -46,7 +46,7 @@ def dist_mean(
 
 def dist_var(
     x: Tensor,
-    prob: Tensor = None,
+    prob: Optional[Tensor] = None,
     world_size: int = 1,
 ) -> Tuple[Tensor, Tensor]:
     """
@@ -63,8 +63,8 @@ def dist_var(
 
 def dist_stats(
     x: Tensor,
-    prob: Tensor = None,
-    counts: int = None,
+    prob: Optional[Tensor] = None,
+    counts: Optional[int] = None,
     world_size: int = 1,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """

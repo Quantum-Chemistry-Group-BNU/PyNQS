@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+from typing import Optional
 from dataclasses import dataclass
 from collections import defaultdict
 from torch import Tensor
@@ -31,8 +32,8 @@ class operator_statistics:
         self,
         x: Tensor,
         prob: Tensor,
-        counts: int = None,
-        operator: str = None,
+        counts: Optional[int] = None,
+        operator: Optional[str] = None,
     ) -> None:
         self.world_size = get_world_size()
         mean, var, sd, se = dist_stats(x, prob, counts, self.world_size)

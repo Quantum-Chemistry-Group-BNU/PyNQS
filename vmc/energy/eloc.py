@@ -4,7 +4,7 @@ import time
 import torch
 
 from functools import partial
-from typing import Callable, Tuple, List, Union
+from typing import Callable, Tuple, List, Union, Optional
 from loguru import logger
 from torch import Tensor, nn
 
@@ -28,18 +28,18 @@ def local_energy(
     nob: int,
     dtype=torch.double,
     use_spin_raising: bool = False,
-    h1e_spin: Tensor = None,
-    h2e_spin: Tensor = None,
-    WF_LUT: WavefunctionLUT = None,
+    h1e_spin: Optional[Tensor] = None,
+    h2e_spin: Optional[Tensor] = None,
+    WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
     reduce_psi: bool = False,
     eps: float = 1e-12,
     eps_sample: int = 0,
     use_sample_space: bool = False,
-    index: Tuple[int, int] = None,
+    index: Optional[Tuple[int, int]] = None,
     alpha: float = 2,
     use_multi_psi: bool = False,
-    extra_norm: Tensor = None,
+    extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
     Calculate the local energy for given state.
@@ -132,13 +132,13 @@ def _simple(
     nob: int,
     dtype=torch.double,
     use_spin_raising: bool = False,
-    h1e_spin: Tensor = None,
-    h2e_spin: Tensor = None,
-    WF_LUT: WavefunctionLUT = None,
+    h1e_spin: Optional[Tensor] = None,
+    h2e_spin: Optional[Tensor] = None,
+    WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
     eps: float = 1.0e-12,
     use_multi_psi: bool = False,
-    extra_norm: Tensor = None,
+    extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
 
@@ -255,14 +255,14 @@ def _reduce_psi(
     nob: int,
     dtype=torch.double,
     use_spin_raising: bool = False,
-    h1e_spin: Tensor = None,
-    h2e_spin: Tensor = None,
-    WF_LUT: WavefunctionLUT = None,
+    h1e_spin: Optional[Tensor] = None,
+    h2e_spin: Optional[Tensor] = None,
+    WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
     eps: float = 1.0e-12,
     n_sample: int = 0,
     use_multi_psi: bool = False,
-    extra_norm: Tensor = None,
+    extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
@@ -434,15 +434,15 @@ def _only_sample_space(
     nob: int,
     dtype=torch.double,
     use_spin_raising: bool = False,
-    h1e_spin: Tensor = None,
-    h2e_spin: Tensor = None,
-    WF_LUT: WavefunctionLUT = None,
+    h1e_spin: Optional[Tensor] = None,
+    h2e_spin: Optional[Tensor] = None,
+    WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
     eps: float = 1.0e-12,
     index: tuple[int, int] = None,
     alpha: float = 2,
     use_multi_psi: bool = False,
-    extra_norm: Tensor = None,
+    extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
 

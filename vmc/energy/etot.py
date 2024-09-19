@@ -4,7 +4,7 @@ import time
 import torch
 import numpy as np
 
-from typing import Tuple, Callable, Union, List
+from typing import Tuple, Callable, Union, List, Optional
 from torch import Tensor
 from loguru import logger
 
@@ -32,21 +32,21 @@ def total_energy(
     nele: int,
     noa: int,
     nob: int,
-    state_prob: Tensor = None,
+    state_prob: Optional[Tensor] = None,
     exact: bool = False,
-    WF_LUT: WavefunctionLUT = None,
+    WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
     dtype=torch.double,
     use_spin_raising: bool = False,
-    h1e_spin: Tensor = None,
-    h2e_spin: Tensor = None,
+    h1e_spin: Optional[Tensor] = None,
+    h2e_spin: Optional[Tensor] = None,
     reduce_psi: bool = False,
     eps: float = 1.0e-12,
     eps_sample: int = 0,
     use_sample_space: bool = False,
     alpha: float = 2.0,
     use_multi_psi: bool = False,
-    extra_norm: Tensor = None,
+    extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     r"""
 
