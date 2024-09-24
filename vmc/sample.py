@@ -76,28 +76,20 @@ class Sampler:
         self,
         nqs: DDP,
         ele_info: ElectronInfo,
-        eloc_param: Optional[dict] = None,
+        eloc_param: dict,
         n_sample: int = 100,
         start_iter: int = 100,
         start_n_sample: Optional[int] = None,
         therm_step: int = 2000,
         debug_exact: bool = False,
         seed: int = 100,
-        record_sample: bool = False,
-        max_memory: float = 4,
-        alpha: float = 0.25,
         dtype=torch.double,
         method_sample="AR",
         use_same_tree: bool = False,
         max_n_sample: Optional[int] = None,
         max_unique_sample: Optional[int] = None,
-        use_LUT: bool = False,
-        use_unique: bool = True,
-        reduce_psi: bool = False,
-        eps: float = 1e-10,
         only_AD: bool = False,
         only_sample: bool = False,
-        use_sample_space: bool = False,
         min_batch: int = 10000,
         min_tree_height: Optional[int] = None,
         det_lut: Optional[DetLUT] = None,
@@ -177,51 +169,45 @@ class Sampler:
         # control eloc
         self.eloc_param = eloc_param
         # memory control and nbatch
-        if self.eloc_param is None:
-            self.max_memory = max_memory
-            self.alpha = alpha
+        # Use 'torch.unique' to speed up local-energy calculations
+        self.use_unique = eloc_param["use_unique"]
+        eloc_method = eloc_param["method"]
 
-            # Use 'torch.unique' to speed up local-energy calculations
-            self.use_unique = use_unique
+        # ignore x' when <x|H|x'>/psi(x) < eps
+        # only apply to when psi(x)^2 is normalization in FCI-space
+        self.reduce_psi = False
+        self.eps: float = 0.0
+        self.eps_sample: int = 0
 
-            # ignore x' when <x|H|x'>/psi(x) < eps
-            # only apply to when psi(x)^2 is normalization in FCI-space
-            self.reduce_psi = reduce_psi
-            self.eps = eps
+        # only use x' in n_unique sample not SD, dose not support exact-opt
+        # psi(x') can be looked from WaveFunction look-up table
+        self.use_sample_space = False
 
-            # only use x' in n_unique sample not SD, dose not support exact-opt
-            # psi(x') can be looked from WaveFunction look-up table
-            self.use_sample_space = use_sample_space if not debug_exact else False
-
-            warnings.warn(f"Using 'eloc_param'", stacklevel=2)
+        self.alpha = 0
+        self.max_memory = 0.0
+        if eloc_method == ElocMethod.SAMPLE_SPACE:
+            if self.debug_exact:
+                raise TypeError(f"Exact support in Sample-space")
+            self.use_sample_space = True
+        elif eloc_method == ElocMethod.REDUCE:
+            self.reduce_psi = True
+            self.eps = eloc_param["eps"]
+            self.eps_sample = eloc_param["eps-sample"]
+            assert self.eps >= 0 and self.eps_sample >= 0
+        elif eloc_method == ElocMethod.SIMPLE:
+            if self.rank == 0:
+                logger.info(f"Exact calculate local energy", master=True)
         else:
-            self.use_unique = eloc_param["use_unique"]
-            eloc_method = eloc_param["method"]
-            self.eps: float = 0.0
-            self.eps_sample: int = 0
-            self.reduce_psi = False
-            self.use_sample_space = False
-            self.alpha = 0
-            self.max_memory = 0
-            if eloc_method == ElocMethod.SAMPLE_SPACE:
-                if self.debug_exact:
-                    raise TypeError(f"Exact support in Sample-space")
-                self.use_sample_space = True
-            elif eloc_method == ElocMethod.REDUCE:
-                self.reduce_psi = True
-                self.eps = eloc_param["eps"]
-                self.eps_sample = eloc_param["eps-sample"]
-                assert self.eps >= 0 and self.eps_sample >= 0
-            elif eloc_method == ElocMethod.SIMPLE:
-                if self.rank == 0:
-                    logger.info(f"Exact calculate local energy", master=True)
-            else:
-                raise NotImplementedError
+            raise NotImplementedError
 
-            if "max_memory" in eloc_param.keys():
-                warnings.warn(f"Using batch/fd_batch control eloc/model batch", stacklevel=2)
-                self.max_memory = eloc_param["max_memory"]
-                self.alpha = eloc_param["alpha"]
+        if eloc_method == ElocMethod.SIMPLE or eloc_method == ElocMethod.REDUCE:
+            if self.rank == 0:
+                logger.info(f"Using batch/fd_batch control eloc/model batch", master=True)
+        elif eloc_method == ElocMethod.SAMPLE_SPACE:
+            if self.rank == 0:
+                logger.info(f"Use 'max_memory' and 'alpha' control eloc batch", master=True)
+            self.max_memory = eloc_param["max_memory"]
+            self.alpha = eloc_param["alpha"]
 
         # only sampling not calculations local-energy, applies to test AD memory
         self.only_AD = only_AD
