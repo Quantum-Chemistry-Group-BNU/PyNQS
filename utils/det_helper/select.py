@@ -1,14 +1,16 @@
 """
 select Determinant using index or threshold
 """
+
 from __future__ import annotations
 import torch
 
-from ci import CIWavefunction
+from utils.ci.wavefunction import CIWavefunction
 from libs.C_extension import onv_to_tensor
 from .determinant_lut import DetLUT
 
 __all__ = ["select_det", "sort_det"]
+
 
 def select_det(
     CI: CIWavefunction,

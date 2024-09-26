@@ -5,7 +5,7 @@ from torch import Tensor
 from typing import Tuple, List
 from numpy.typing import NDArray
 
-from ci.wavefunction import CIWavefunction
+from utils.ci.wavefunction import CIWavefunction
 from utils import ONV, convert_onv
 from libs.C_extension import onv_to_tensor
 
