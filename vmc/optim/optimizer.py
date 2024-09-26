@@ -20,7 +20,8 @@ from loguru import logger
 
 from vmc.grad import energy_grad, sr_grad, multi_grad
 from vmc.optim._base import BaseVMCOptimizer
-from ci import CITrain, CIWavefunction
+from ci import CITrain
+from utils.ci import CIWavefunction
 from utils.distributed import (
     all_reduce_tensor,
     get_rank,

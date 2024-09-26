@@ -14,7 +14,7 @@ from typing import List, Tuple
 from pyscf import scf, gto, lo
 
 from libs.C_extension import tensor_to_onv
-from ci import CIWavefunction
+from utils.ci import CIWavefunction
 from utils.onv import ONV
 
 

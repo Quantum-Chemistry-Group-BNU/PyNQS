@@ -20,8 +20,8 @@ from utils.public_function import (
 )
 from utils.det_helper import DetLUT
 from utils.distributed import all_reduce_tensor, synchronize, all_gather_tensor
+from utils.ci import CIWavefunction
 from libs.C_extension import get_hij_torch, onv_to_tensor, tensor_to_onv, get_comb_tensor
-from ci import CIWavefunction
 
 USE_SCIPY = False
 USE_CPU = False
