@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import torch
-import numpy as np
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 from typing import List, Tuple, Union

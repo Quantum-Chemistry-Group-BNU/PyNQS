@@ -83,7 +83,6 @@ def local_energy(
                 assert eps >= 0.0 and eps_sample >= 0
                 from .flip import _reduce_psi_flip
                 if use_spin_flip:
-                    raise NotImplementedError
                     func = _reduce_psi_flip
                 else:
                     func = _reduce_psi

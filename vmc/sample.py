@@ -33,7 +33,7 @@ from libs.C_extension import (
     tensor_to_onv,
     merge_rank_sample,
 )
-from utils import state_to_string, ElectronInfo, check_para, get_nbatch, diff_rank_seed
+from utils import ElectronInfo, check_para, get_nbatch, diff_rank_seed
 from utils.distributed import (
     all_gather_tensor,
     all_reduce_tensor,
@@ -51,11 +51,13 @@ from utils.public_function import (
     split_batch_idx,
     setup_seed,
     ansatz_batch,
+    spin_flip_onv,
+    spin_flip_sign,
 )
 from utils.det_helper import DetLUT
 from utils.pyscf_helper.operator import spin_raising
 from utils.enums import ElocMethod
-
+from utils.tensor_typing import Float, Int, UInt8
 from vmc.ansatz import MultiPsi
 
 print = partial(print, flush=True)
@@ -1034,13 +1036,12 @@ class Sampler:
     ) -> Tensor:
         return ansatz_batch(ansatz, x, fp_batch, self.sorb, self.device, self.dtype)
 
-    from utils.tensor_typing import Float, Int
 
     def gather_extra_psi(
         self,
-        x: Int[Tensor, "batch sorb"],
-        prob: Float[Tensor, "batch"],
-    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "batch"]]:
+        x: UInt8[Tensor, "Batch bra_len"],
+        prob: Float[Tensor, "Batch"],
+    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "Batch"]]:
         """
         return:
             ||f(n)|| / norm**2, norm()
@@ -1051,7 +1052,6 @@ class Sampler:
 
         # spin flip symmetry
         if self.use_spin_flip:
-            from utils.public_function import spin_flip_onv, spin_flip_sign
 
             x_flip = spin_flip_onv(x, self.sorb)
             extra_psi_flip = self.ansatz_batch(x_flip, self.nqs.module.extra, fp_batch)
@@ -1081,26 +1081,24 @@ class Sampler:
 
         return extra_norm, extra_psi_pow
 
-    def gather_flip(self, x: Int[Tensor, "batch sorb"], 
-                    prob: Float[Tensor, "batch"],
-                    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "batch"]]:
+    def gather_flip(self, x: UInt8[Tensor, "Batch bra_len"], 
+                    prob: Float[Tensor, "Batch"],
+                    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "Batch"]]:
         """
         return:
             || 1 + η * phi(n-flip)/phi(n)||
         """
-        from utils.public_function import spin_flip_onv, spin_flip_sign
 
         fp_batch: int = self.eloc_param["fp_batch"]
         phi = self.ansatz_batch(x, self.nqs.module, fp_batch)
 
         # flip-spin
-        # η_n = spin_flip_sign(x, self.sorb)
-        η_n = spin_flip_sign(onv_to_tensor(x, self.sorb).long(), self.sorb)
+        η_n = spin_flip_sign(x, self.sorb)
+        # η_n = spin_flip_sign(onv_to_tensor(x, self.sorb).long(), self.sorb)
         # assert torch.allclose(η_n, η_n_1)
-        # breakpoint()
         x_flip = spin_flip_onv(x, self.sorb)
-        phi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch) * η_n
-        _phi = 1 + self.η * phi_flip / phi
+        phi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch)
+        _phi = 1 + self.η * η_n * phi_flip / phi
         
         # stats
         if self.debug_exact:
