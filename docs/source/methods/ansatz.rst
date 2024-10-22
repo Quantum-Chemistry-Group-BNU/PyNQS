@@ -56,3 +56,19 @@ see: ``vmc/ansatz/multi/MultiPsi``
     eloc(n) &= \frac{\frac{\sum_m f_n^* H_{nm}f_m\phi_m}{\phi_n}}{\left< |f_n|^2\right>} = \frac{\sum_m \widetilde{f}_n^* H_{nm}\widetilde{f}_m\phi_m}{\phi_n} \\ 
     \partial_\theta E &= 2\mathbb{R}\left< (\partial_\theta (\ln(\phi_n f_n))^*)(eloc{(n)} - E|\widetilde{f}_n|^2) \right> \\
     \end{align}
+
+
+---------
+Spin-flip
+---------
+
+see: ``branch spin-flip``
+
+.. math:: 
+    \begin{align}
+    B & = \left\langle |f_n|^2 + \eta f^*_n f_{\bar n }\frac{\Phi(\bar n)}{\Phi(n)}\right\rangle_{n \sim{\phi_n^2} } \\
+    \widetilde{f}_n & = f_n /\sqrt{B} \\
+    E_{loc(n)} &= \frac{\sum_m \widetilde{f}_n^* H_{nm} (\widetilde{f}_m\phi_m + \eta\widetilde{f}_{\bar m}\phi_{\bar m})} {\phi_n} \\
+    C & =   \frac{|f_n|^2 + \eta f^*_n f_{\bar n }\frac{\Phi(\bar n)}{\Phi(n)}}{B} \\
+    \partial_\theta E &= 2\mathbb{R}\left< (\partial_\theta (\ln(\phi_n f_n))^*)(E_{loc(n)} - \left\langle E \right\rangle * C) \right> 
+    \end{align}

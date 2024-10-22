@@ -854,6 +854,7 @@ class WavefunctionLUT:
             + f"    Memory: {self.memory:.3f} MiB\n"
         )
 
+
 # XXX: how to implement the MemoryTrack?
 # ref: https://github.com/huangpan2507/Tools_Pytorch-Memory-Utils
 class MemoryTrack:
@@ -944,6 +945,60 @@ def ansatz_batch(
             start, end = idx_lst[i], idx_lst[i + 1]
             result[start:end] = func(convert(x[start:end])).view(-1)
         return result
+
+
+from utils.tensor_typing import Float, UInt8
+
+
+def spin_flip_sign(
+    x: Float[Tensor, "Batch sorb"] | UInt8[Tensor, "Batch bra_len"],
+    sorb: int,
+) -> Float[Tensor, "Batch"]:
+    if x.dtype == torch.uint8:
+        # XXX: this is lower???
+        x_swap = swap_odd_even_bits_8bit(x)
+        sign = (popcount_8bit(x & x_swap).sum(dim=-1) & 0b11) == 0
+        sign = 2 * sign - 1
+        return sign
+    else:
+        assert x.size(1) == sorb
+        # convert [00, 10, 01, 11] -> [0, 1, 2, 3]
+        idxs = x[:, ::2] + x[:, 1::2] * 2
+        counts = (idxs == 3).sum(dim=1)
+        sign = 1 - counts % 2 * 2
+        return sign
+
+
+def spin_flip_onv(
+    x: Float[Tensor, "Batch sorb"] | UInt8[Tensor, "Batch bra_len"],
+    sorb: int,
+) -> Float[Tensor, "Batch sorb"]:
+
+    if x.dtype == torch.uint8:
+        return swap_odd_even_bits_8bit(x)
+    else:
+        assert x.size(1) == sorb
+        x1 = torch.empty_like(x)
+        x1[:, ::2], x1[:, 1::2] = x[:, 1::2], x[:, ::2]
+
+        return x1
+
+
+def swap_odd_even_bits_8bit(n: Tensor) -> Tensor:
+    odd_mask = 0xAA  # 0b10101010
+    even_mask = 0x55  # 0b01010101
+
+    odd_shift = (n & odd_mask) >> 1
+    even_shift = (n & even_mask) << 1
+
+    return odd_shift | even_shift
+
+
+def popcount_8bit(x: torch.Tensor) -> torch.Tensor:
+    # https://github.com/llvm/llvm-project/issues/79823
+    tmp = x - ((x >> 1) & 0x55)
+    tmp = (tmp & 0x33) + ((tmp >> 2) & 0x33)
+    return tmp % 15
 
 
 if __name__ == "__main__":

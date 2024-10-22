@@ -39,6 +39,7 @@ def local_energy(
     index: Optional[Tuple[int, int]] = None,
     alpha: float = 2,
     use_multi_psi: bool = False,
+    use_spin_flip: bool = False,
     extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
@@ -80,15 +81,26 @@ def local_energy(
         else:
             if reduce_psi:
                 assert eps >= 0.0 and eps_sample >= 0
+                from .flip import _reduce_psi_flip
+                if use_spin_flip:
+                    raise NotImplementedError
+                    func = _reduce_psi_flip
+                else:
+                    func = _reduce_psi
                 func = partial(
-                    _reduce_psi,
+                    func,
                     n_sample=eps_sample,
                     use_multi_psi=use_multi_psi,
                     extra_norm=extra_norm,
                 )
             else:
+                from .flip import _simple_flip
+                if use_spin_flip:
+                    func = _simple_flip
+                else:
+                    func = _simple
                 func = partial(
-                    _simple,
+                    func,
                     use_multi_psi=use_multi_psi,
                     extra_norm=extra_norm,
                 )
