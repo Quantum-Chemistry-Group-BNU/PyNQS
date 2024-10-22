@@ -18,7 +18,6 @@ from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
 
-from vmc.grad import energy_grad, sr_grad, multi_grad
 from vmc.optim._base import BaseVMCOptimizer
 from ci import CITrain
 from utils.ci import CIWavefunction
@@ -164,6 +163,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             t1 = time.time_ns()
             if self.sr:
                 raise NotImplementedError(f"SR-distributed will be implement in future")
+                from vmc.grad import sr_grad
                 psi = sr_grad(
                     self.model,
                     sample_state,

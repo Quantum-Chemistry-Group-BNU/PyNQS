@@ -1,4 +1,4 @@
-from .energy_grad import energy_grad, multi_grad
+from .energy_grad import energy_grad
 
 try:
     from ._jacobian import jacobian
