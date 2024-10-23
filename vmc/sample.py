@@ -53,6 +53,7 @@ from utils.public_function import (
     ansatz_batch,
     spin_flip_onv,
     spin_flip_sign,
+    SpinProjection,
 )
 from utils.det_helper import DetLUT
 from utils.pyscf_helper.operator import spin_raising
@@ -61,7 +62,6 @@ from utils.tensor_typing import Float, Int, UInt8
 from vmc.ansatz import MultiPsi
 
 print = partial(print, flush=True)
-
 
 class Sampler:
     """
@@ -870,8 +870,7 @@ class Sampler:
                 use_spin_raising = False
 
             if self.use_spin_flip:
-                S = 0
-                self.η:int = (-1)**(self.nele//2 - S)
+                self.η = SpinProjection.eta
             
             if self.use_multi_psi or self.use_spin_flip:
                 if self.use_multi_psi:

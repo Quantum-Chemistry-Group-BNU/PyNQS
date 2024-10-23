@@ -8,15 +8,14 @@ from typing import Callable, Tuple, List, Union, Optional
 from loguru import logger
 from torch import Tensor, nn
 
-from libs.C_extension import get_hij_torch, get_comb_tensor, onv_to_tensor, tensor_to_onv
+from libs.C_extension import get_hij_torch, get_comb_tensor
 from utils.public_function import (
     WavefunctionLUT,
-    get_Num_SinglesDoubles,
     check_para,
     spin_flip_onv,
     spin_flip_sign,
+    SpinProjection,
 )
-
 
 def Func(
     func: Callable[..., Tensor],
@@ -76,8 +75,7 @@ def _simple_flip(
     check_para(x)
 
     batch = x.size(0)
-    S = 0
-    η: int = (-1) ** (nele // 2 - S)
+    η = SpinProjection.eta
 
     if use_multi_psi:
         ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
@@ -191,7 +189,6 @@ def _reduce_psi_flip(
     # n_sample = 1000
     stochastic = True if n_sample > 0 else False
     semi_stochastic = True if eps > 0.0 else False
-    # breakpoint()
     if stochastic:
         if semi_stochastic:
             hij_abs = comb_hij.abs()
@@ -229,10 +226,8 @@ def _reduce_psi_flip(
     
     psi_x1 = torch.zeros(batch * n_comb, dtype=dtype, device=device)
     psi_x1_flip = torch.zeros_like(psi_x1)
-    # gt_eps_idx = torch.arange(psi_x1.size(0), device=device)
-    
-    S = 0
-    η: int = (-1) ** (nele // 2 - S)
+
+    η = SpinProjection.eta
     x = comb_x.reshape(-1, bra_len)[gt_eps_idx]
     if use_multi_psi:
         _η_m = spin_flip_sign(x, sorb)
@@ -262,7 +257,6 @@ def _reduce_psi_flip(
     else:
         # [batch, comb]
         # spin-flip
-        # breakpoint()
         _η_m = spin_flip_sign(x, sorb)
         x1_flip = spin_flip_onv(x, sorb)
         

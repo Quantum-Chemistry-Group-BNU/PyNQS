@@ -1001,6 +1001,27 @@ def popcount_8bit(x: torch.Tensor) -> torch.Tensor:
     return tmp % 15
 
 
+class _SpinProjection:
+    """
+    spin projection,
+    η = (−1)^(N//2−S)
+    """
+    _η: int = None
+    def __init__(self) -> None:
+        return None
+
+    def init(self, N: int, S: int) -> None:
+        assert isinstance(N, int) and isinstance(S, int)
+        self._η = (-1)**(N//2 - S)
+
+    @property
+    def eta(self) -> int:
+        if self._η is None:
+            raise NotImplementedError
+        return self._η
+
+SpinProjection = _SpinProjection()
+
 if __name__ == "__main__":
     # print(given_onstate(12, 12, 3, 3)) # H20
     # print(state_to_string(torch.tensor([0b1111, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8), 8))
