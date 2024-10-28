@@ -11,8 +11,7 @@ from torch import Tensor, nn
 from libs.C_extension import get_hij_torch, get_comb_tensor, onv_to_tensor
 from utils.public_function import WavefunctionLUT, get_Num_SinglesDoubles, check_para
 
-print = partial(print, flush=True)
-
+from .flip import Func
 # from torch.profiler import profile, record_function, ProfilerActivity
 
 
@@ -129,8 +128,6 @@ def local_energy(
             eps,
         )
 
-
-# TODO: how to save unique x eloc energy
 def _simple(
     x: Tensor,
     h1e: Tensor,
@@ -155,101 +152,45 @@ def _simple(
 
     dim: int = x.dim()
     assert dim == 2
-    use_LUT: bool = True if WF_LUT is not None else False
     batch: int = x.shape[0]
     t0 = time.time_ns()
-    device = h1e.device
+
     if use_multi_psi:
-        # breakpoint()
         ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
         ansatz = partial(ansatz_batch, func=ansatz.module.sample)
     else:
         ansatz = partial(ansatz_batch, func=ansatz)
 
-    if use_unique:
-        # x1: [n_unique, sorb], comb_x: [batch, comb, bra_len]
-        comb_x, _ = get_comb_tensor(x, sorb, nele, noa, nob, False)
-        bra_len: int = comb_x.shape[2]
-    else:
-        # x1: [batch * comb, sorb], comb_x: [batch, comb, bra_len]
-        comb_x, x1 = get_comb_tensor(x, sorb, nele, noa, nob, True)
-        x1 = x1.reshape(-1, sorb)
-        bra_len = comb_x.shape[2]
+    # x1: [batch * comb, sorb], comb_x: [batch, comb, bra_len]
+    comb_x, _ = get_comb_tensor(x, sorb, nele, noa, nob, False)
+    bra_len = comb_x.shape[2]
 
-    # calculate matrix <x|H|x'>
     t1 = time.time_ns()
-
+    # calculate matrix <x|H|x'>, [batch, comb]
+    comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
     if use_spin_raising:
         hij_spin = get_hij_torch(x, comb_x, h1e_spin, h2e_spin, sorb, nele)
-    comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)  # shape (1, comb)/(batch, comb)
 
     t2 = time.time_ns()
-    if comb_x.numel() != 0:
-        if use_LUT:
-            batch_before_lut = batch * comb_x.size(1)  # batch * comb
-            lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(comb_x.reshape(-1, bra_len))
-        if use_unique:
-            if use_LUT:
-                _comb_x = comb_x.reshape(-1, bra_len)[lut_not_idx]
-            else:
-                _comb_x = comb_x.reshape(-1, bra_len)
-            unique_comb, inverse = torch.unique(_comb_x, dim=0, return_inverse=True)
-            x1 = onv_to_tensor(unique_comb, sorb)  # x1: [n_unique, sorb]
-            psi0 = torch.index_select(ansatz(x1), 0, inverse)  # [n_unique]
-        else:
-            if use_LUT:
-                x1 = x1[lut_not_idx]
-            psi0 = ansatz(x1)  # [batch * comb]
 
-        if use_LUT:
-            psi = torch.empty(batch_before_lut, device=device, dtype=psi0.dtype)
-            psi[lut_idx] = lut_value.to(psi0.dtype)
-            psi[lut_not_idx] = psi0
-            psi_x1 = psi.reshape(batch, -1)
-        else:
-            psi_x1 = psi0.reshape(batch, -1)
-    else:
-        comb = comb_hij.size(1)
-        psi_x1 = torch.zeros(batch, comb, device=device, dtype=dtype)
-
+    psi_x1 = Func(ansatz, comb_x.reshape(-1, bra_len), WF_LUT, use_unique).reshape(batch, -1)
     if use_multi_psi:
-        if use_unique:
-            unique_comb, inverse = torch.unique(comb_x.reshape(-1, bra_len), dim=0, return_inverse=True)
-            x1 = onv_to_tensor(unique_comb, sorb)
-            _psi = torch.index_select(ansatz_extra(x1), 0, inverse)
-        else:
-            x1 = onv_to_tensor(comb_x.reshape(-1, bra_len), sorb)
-            _psi = ansatz_extra(x1)
+        f = Func(ansatz_extra, comb_x.reshape(-1, bra_len), None, use_unique).reshape(batch, -1)
+        f_psi = psi_x1 * f * f[..., 0].reshape(-1, 1).conj() / extra_norm**2  # [nbatch, nSD]
+    else:
+        f_psi = psi_x1
 
-        # f(n).conj() Hnm * f(m) / extra_norm**2
-        _psi = _psi.reshape(batch, -1)
-        # TODO: in-place, if value is real, and save memory
-        value = _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
-        comb_hij = comb_hij * value
-        if use_spin_raising:
-            hij_spin = hij_spin * value
+    eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
+    if use_spin_raising:
+        sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
+    else:
+        sloc = torch.zeros_like(eloc)
 
     t3 = time.time_ns()
-
-    if batch == 1:
-        if use_spin_raising:
-            sloc = torch.sum(hij_spin * psi_x1 / psi_x1[..., 0])  # scalar
-        eloc = torch.sum(comb_hij * psi_x1 / psi_x1[..., 0])  # scalar
-    else:
-        if use_spin_raising:
-            sloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * hij_spin, -1)
-        eloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * comb_hij, -1)  # (batch)
 
     delta0 = (t1 - t0) / 1.0e06
     delta1 = (t2 - t1) / 1.0e06
     delta2 = (t3 - t2) / 1.0e06
-    logger.debug(
-        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " + f"nqs time: {delta2:.3E} ms"
-    )
-    del comb_hij, comb_x  # index, unique_x1, unique
-
-    if not use_spin_raising:
-        sloc = torch.zeros_like(eloc)
 
     return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
 
@@ -279,12 +220,9 @@ def _reduce_psi(
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
     ignore x' when <x|H|x'>/psi(x) < 1e-12
     """
-    hij_spin: Tensor = None
-
     check_para(x)
     dim: int = x.dim()
     assert dim == 2
-    use_LUT: bool = True if WF_LUT is not None else False
     t0 = time.time_ns()
     device = h1e.device
 
@@ -311,7 +249,6 @@ def _reduce_psi(
     # n_sample = 1000
     stochastic = True if n_sample > 0 else False
     semi_stochastic = True if eps > 0.0 else False
-    # breakpoint()
     if stochastic:
         if semi_stochastic:
             hij_abs = comb_hij.abs()
@@ -346,66 +283,25 @@ def _reduce_psi(
     s = f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}, "
     s += f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %"
     logger.debug(s)
+
+    x = comb_x.reshape(-1, bra_len)[gt_eps_idx]
     psi_x1 = torch.zeros(batch * n_comb, dtype=dtype, device=device)
-
+    psi_x1[gt_eps_idx] = Func(ansatz, x, WF_LUT, use_unique)
+    psi_x1 = psi_x1.reshape(batch, n_comb)
     if use_multi_psi:
-        psi_extra = torch.zeros(batch * n_comb, dtype=dtype, device=device)
-
-    if comb_x.numel() != 0:
-        if use_LUT:
-            lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(comb_x.reshape(-1, bra_len)[gt_eps_idx])
-            # the index of x1 great than eps and not in LUT
-            raw_idx = torch.arange(n_comb * batch, device=device)
-            gt_not_lut_idx = raw_idx[gt_eps_idx][lut_not_idx]
-            # the index of x1 great than eps and in LUT
-            gt_in_lut_idx = raw_idx[gt_eps_idx][lut_idx]
-        if use_unique:
-            if use_LUT:
-                _comb_x = comb_x.reshape(-1, bra_len)[gt_not_lut_idx]
-            else:
-                _comb_x = comb_x.reshape(-1, bra_len)[gt_eps_idx]
-            unique_comb, inverse = torch.unique(_comb_x, dim=0, return_inverse=True)
-            x1 = onv_to_tensor(unique_comb, sorb)
-            psi_gt_eps = torch.index_select(ansatz(x1), 0, inverse)
-        else:
-            if use_LUT:
-                # x1 great than eps and not in LUT
-                _comb = comb_x.reshape(-1, bra_len)[gt_not_lut_idx]
-            else:
-                # x1 great than eps
-                _comb = comb_x.reshape(-1, bra_len)[gt_eps_idx]
-            x1 = onv_to_tensor(_comb, sorb)
-            psi_gt_eps = ansatz(x1)
-        if use_LUT:
-            psi_x1[gt_not_lut_idx] = psi_gt_eps.to(dtype)
-            psi_x1[gt_in_lut_idx] = lut_value.to(dtype)
-        else:
-            psi_x1[gt_eps_idx] = psi_gt_eps.to(dtype)
-        psi_x1 = psi_x1.reshape(batch, -1)
+        f = torch.zeros(batch * n_comb, dtype=dtype, device=device)
+        _f = Func(ansatz_extra, x, None, use_unique)
+        f[gt_eps_idx] = _f.to(dtype)
+        f = f.reshape(batch, n_comb)
+        f_psi = psi_x1 * f * f[..., 0].reshape(-1, 1).conj() / extra_norm**2  # [nbatch, nSD]
     else:
-        psi_x1 = torch.zeros(batch, n_comb, device=device, dtype=dtype)
+        f_psi = psi_x1
 
-    if use_multi_psi:
-        _comb = comb_x.reshape(-1, bra_len)[gt_eps_idx]
-        _psi = ansatz_extra(onv_to_tensor(_comb, sorb))
-        # f*(n) Hnm f(m) / extra_norm**2
-        psi_extra[gt_eps_idx] = _psi.to(dtype)
-        psi_extra = psi_extra.reshape(batch, -1)
-        # (batch, n_SD)
-        value = psi_extra * (psi_extra[:, 0].reshape(-1, 1).conj() / extra_norm**2)
-        comb_hij = comb_hij * value
-        # comb_hij *= psi_extra.real
-        if use_spin_raising:
-            hij_spin = hij_spin * value
-
-    if batch == 1:
-        if use_spin_raising:
-            sloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * hij_spin, -1)
-        eloc = torch.sum(comb_hij * psi_x1 / psi_x1[..., 0])  # scalar
+    eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
+    if use_spin_raising:
+        sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
     else:
-        if use_spin_raising:
-            sloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * hij_spin, -1)  # (batch)
-        eloc = torch.sum(torch.div(psi_x1.T, psi_x1[..., 0]).T * comb_hij, -1)  # (batch)
+        sloc = torch.zeros_like(eloc)
 
     t3 = time.time_ns()
     delta0 = (t1 - t0) / 1.0e06
@@ -414,21 +310,7 @@ def _reduce_psi(
     logger.debug(
         f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " + f"nqs time: {delta2:.3E} ms"
     )
-    del comb_hij, comb_x, psi_gt_eps, gt_eps_idx  # index, unique_x1, unique
-
-    if use_LUT:
-        del raw_idx, gt_not_lut_idx, gt_in_lut_idx, lut_idx, lut_not_idx, lut_value
-
-    if use_unique:
-        del unique_comb, inverse
-
-    if use_spin_raising:
-        del hij_spin
-
-    # if x.is_cuda:
-    #     torch.cuda.empty_cache()
-    if not use_spin_raising:
-        sloc = torch.zeros_like(eloc)
+    del comb_hij, comb_x, gt_eps_idx
 
     return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
 
