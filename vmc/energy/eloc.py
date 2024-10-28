@@ -191,6 +191,9 @@ def _simple(
     delta0 = (t1 - t0) / 1.0e06
     delta1 = (t2 - t1) / 1.0e06
     delta2 = (t3 - t2) / 1.0e06
+    logger.debug(
+        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " + f"nqs time: {delta2:.3E} ms"
+    )
 
     return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
 
@@ -290,8 +293,7 @@ def _reduce_psi(
     psi_x1 = psi_x1.reshape(batch, n_comb)
     if use_multi_psi:
         f = torch.zeros(batch * n_comb, dtype=dtype, device=device)
-        _f = Func(ansatz_extra, x, None, use_unique)
-        f[gt_eps_idx] = _f.to(dtype)
+        f[gt_eps_idx] = Func(ansatz_extra, x, None, use_unique).to(dtype)
         f = f.reshape(batch, n_comb)
         f_psi = psi_x1 * f * f[..., 0].reshape(-1, 1).conj() / extra_norm**2  # [nbatch, nSD]
     else:
