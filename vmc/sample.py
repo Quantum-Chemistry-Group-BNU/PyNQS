@@ -61,7 +61,6 @@ from utils.enums import ElocMethod
 from utils.tensor_typing import Float, Int, UInt8
 from vmc.ansatz import MultiPsi
 
-print = partial(print, flush=True)
 
 class Sampler:
     """
@@ -99,7 +98,7 @@ class Sampler:
         use_spin_raising: bool = False,
         spin_raising_coeff: float = 1.0,
         given_state: Optional[Tensor] = None,
-        use_spin_flip = False,
+        use_spin_flip=False,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -871,7 +870,7 @@ class Sampler:
 
             if self.use_spin_flip:
                 self.η = SpinProjection.eta
-            
+
             if self.use_multi_psi or self.use_spin_flip:
                 if self.use_multi_psi:
                     func = self.gather_extra_psi
@@ -966,6 +965,7 @@ class Sampler:
         """
         change the number of sample in the beginning of iteration.
         """
+        self.epoch = epoch
         if epoch <= self.start_iter:
             self.n_sample = self.start_n_sample
             self.max_n_sample = self.n_sample
@@ -1035,7 +1035,6 @@ class Sampler:
     ) -> Tensor:
         return ansatz_batch(ansatz, x, fp_batch, self.sorb, self.device, self.dtype)
 
-
     def gather_extra_psi(
         self,
         x: UInt8[Tensor, "Batch bra_len"],
@@ -1046,71 +1045,72 @@ class Sampler:
             ||f(n)|| / norm**2, norm()
         """
         fp_batch: int = self.eloc_param["fp_batch"]
-        extra_psi = self.ansatz_batch(x, self.nqs.module.extra, fp_batch)
-        _psi = extra_psi.conj() * extra_psi
+        f = self.ansatz_batch(x, self.nqs.module.extra, fp_batch)
+        _f = f.conj() * f
 
         # spin flip symmetry
         if self.use_spin_flip:
-
             x_flip = spin_flip_onv(x, self.sorb)
-            extra_psi_flip = self.ansatz_batch(x_flip, self.nqs.module.extra, fp_batch)
+            f_flip = self.ansatz_batch(x_flip, self.nqs.module.extra, fp_batch)
             η_n = spin_flip_sign(x, self.sorb)
-            phi = self.ansatz_batch(x, self.nqs.module.sample, fp_batch)
-            phi_flip = self.ansatz_batch(x_flip, self.nqs.module.sample, fp_batch)
-            _psi_1 = _psi + self.η * η_n * extra_psi.conj() * extra_psi_flip * phi_flip / phi
+            psi = self.ansatz_batch(x, self.nqs.module.sample, fp_batch)
+            psi_flip = self.ansatz_batch(x_flip, self.nqs.module.sample, fp_batch)
+            f_psi = _f + self.η * η_n * f.conj() * f_flip * psi_flip / psi
 
         # stats
         if self.debug_exact:
             n_sample = float("inf")
         else:
             n_sample = self.n_sample
-        stats_norm = operator_statistics(_psi.real, prob, n_sample, "f(n)²")
+        f_stats = operator_statistics(_f, prob, n_sample, "f(n)²")
         if self.rank == 0:
-            logger.info(str(stats_norm), master=True)
+            logger.info(str(f_stats), master=True)
 
         if self.use_spin_flip:
-            stats1_norm = operator_statistics(_psi_1.real, prob, n_sample, "F(n)²")
-            extra_norm = stats1_norm["mean"].sqrt()
-            extra_psi_pow = _psi_1 / extra_norm**2
+            f_psi_stats = operator_statistics(f_psi, prob, n_sample, "F(n)²")
+            extra_norm = f_psi_stats["mean"].sqrt()
+            extra_psi_pow = f_psi / extra_norm**2
             if self.rank == 0:
-                logger.info(str(stats1_norm), master=True)
+                logger.info(str(f_psi_stats), master=True)
         else:
-            extra_norm = stats_norm["mean"].sqrt()
-            extra_psi_pow = _psi / extra_norm**2
+            extra_norm = f_stats["mean"].sqrt()
+            extra_psi_pow = _f / extra_norm**2
 
         return extra_norm, extra_psi_pow
 
-    def gather_flip(self, x: UInt8[Tensor, "Batch bra_len"], 
-                    prob: Float[Tensor, "Batch"],
-                    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "Batch"]]:
+    def gather_flip(
+        self,
+        x: UInt8[Tensor, "Batch bra_len"],
+        prob: Float[Tensor, "Batch"],
+    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "Batch"]]:
         """
         return:
-            || 1 + η * phi(n-flip)/phi(n)||
+            || 1 + η * psi(n-flip)/psi(n)||
         """
 
         fp_batch: int = self.eloc_param["fp_batch"]
-        phi = self.ansatz_batch(x, self.nqs.module, fp_batch)
+        psi = self.ansatz_batch(x, self.nqs.module, fp_batch)
 
         # flip-spin
         η_n = spin_flip_sign(x, self.sorb)
         # η_n = spin_flip_sign(onv_to_tensor(x, self.sorb).long(), self.sorb)
         # assert torch.allclose(η_n, η_n_1)
         x_flip = spin_flip_onv(x, self.sorb)
-        phi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch)
-        _phi = 1 + self.η * η_n * phi_flip / phi
-        
+        psi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch)
+        _psi = 1 + self.η * η_n * psi_flip / psi
+
         # stats
         if self.debug_exact:
             n_sample = float("inf")
         else:
             n_sample = self.n_sample
 
-        stats_norm = operator_statistics(_phi, prob, n_sample, "F(n)²")
+        stats_norm = operator_statistics(_psi, prob, n_sample, "F(n)²")
         extra_norm = stats_norm["mean"].sqrt()
-        extra_phi_pow = _phi / extra_norm**2
+        extra_psi_pow = _psi / extra_norm**2
 
         if self.rank == 0:
             logger.info(str(stats_norm), master=True)
 
         # \sqrt(B), C
-        return extra_norm, extra_phi_pow
+        return extra_norm, extra_psi_pow
