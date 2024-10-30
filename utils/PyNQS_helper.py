@@ -26,6 +26,8 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
     spin_var = []
     fn_mean = []
     fn_var = []
+    Fn_mean = []
+    Fn_var = []
     lr = []
 
     # multi-psi
@@ -78,6 +80,12 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
                 line = line.split()
                 fn_mean.append(float(line[2]))
                 fn_var.append(float(line[4]))  # ± std
+            elif line.startswith("<F(n)²>"):
+                # <F(n)²> = 0.000030373 ± 1.496E-07 [σ² = 2.239E-08]
+                # spin-projection
+                line = line.split()
+                Fn_mean.append(float(line[2]))
+                Fn_var.append(float(line[4]))  # ± std
             elif re_grad.search(line):
                 # auto-grad, update param
                 # Calculating grad: 2.221E-02 s, update param: 4.656E-04 s
@@ -205,6 +213,12 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         fn_var = np.asarray(fn_var)[:n_iter]
         fn_mean = np.asarray(fn_mean)[:n_iter]
 
+    if len(Fn_var) == 0 or len(Fn_mean) == 0:
+        Fn_var = Fn_mean = np.zeros(n_iter, dtype=np.double)
+    else:
+        Fn_var = np.asarray(Fn_var)[:n_iter]
+        Fn_mean = np.asarray(Fn_mean)[:n_iter]
+
     if len(l2_grad_multi) == 0 or len(max_grad_multi) == 0:
         l2_grad_multi = max_grad_multi = np.zeros((n_iter, 2))
     else:
@@ -218,6 +232,7 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         lr = np.asarray(lr)[:n_iter].reshape(n_iter, -1)
 
     fn_var = np.power(fn_var, 2)
+    Fn_var = np.power(Fn_var, 2)
     spin_var = np.power(spin_var, 2)
     eloc_var = np.power(eloc_var, 2)
 
@@ -248,6 +263,8 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         eloc_var,
         fn_mean,
         fn_var,
+        Fn_mean,
+        Fn_var,
         spin_mean,
         spin_var,
         ci_nqs_coeff,
@@ -278,6 +295,8 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         "eloc-var",
         "fn-mean",
         "fn-var",
+        "Fn-mean",
+        "Fn-var",
         "spin-mean",
         "spin-var",
         "CI",
@@ -293,8 +312,15 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
 
     # lr-1 or lr-1 lr-2
     names += [f'lr-{i}' for i in range(len(lr[0]))]
+    data = []
+    columns = []
+    for i in range(x.shape[1]):
+        if not np.allclose(x[..., i], np.zeros_like(x[..., i])):
+            columns.append(names[i])
+            data.append(x[..., i])
+    data = np.column_stack(data)
 
-    df_time = pd.DataFrame(x, columns=names)
+    df_time = pd.DataFrame(data, columns=columns)
     df_time["n-sample"] = np.int64(df_time["n-sample"])
     # df_time["n-sample"].dtype = np.int64
 

@@ -185,11 +185,11 @@ class Sampler:
         # psi(x') can be looked from WaveFunction look-up table
         self.use_sample_space = False
 
-        self.alpha = 0
-        self.max_memory = 0.0
+        self.alpha: float = 0.0
+        self.max_memory: float = 0.0
         if eloc_method == ElocMethod.SAMPLE_SPACE:
             if self.debug_exact:
-                raise TypeError(f"Exact support in Sample-space")
+                raise TypeError(f"Exact support in FCI-space")
             self.use_sample_space = True
         elif eloc_method == ElocMethod.REDUCE:
             self.reduce_psi = True
@@ -825,7 +825,6 @@ class Sampler:
         placeholders = torch.empty(0, device=self.device, dtype=self.dtype)
         return (unique_rank, placeholders, prob_rank * self.world_size, WF_LUT)
 
-    # TODO: how to calculate batch_size;
     # calculate the max nbatch for given Max Memory
     def calculate_energy(
         self,
@@ -909,8 +908,6 @@ class Sampler:
                 extra_norm=self.extra_norm,
             )
         else:
-            # e_total = -2.33233
-            # spin_mean = 0.000
             eloc = torch.zeros(sample.size(0), device=self.device, dtype=self.dtype)
             sloc = torch.zeros_like(eloc)
             placeholders = torch.ones(
@@ -1093,8 +1090,6 @@ class Sampler:
 
         # flip-spin
         η_n = spin_flip_sign(x, self.sorb)
-        # η_n = spin_flip_sign(onv_to_tensor(x, self.sorb).long(), self.sorb)
-        # assert torch.allclose(η_n, η_n_1)
         x_flip = spin_flip_onv(x, self.sorb)
         psi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch)
         _psi = 1 + self.η * η_n * psi_flip / psi

@@ -123,11 +123,18 @@ def cpu_info():
 
 
 def sys_info() -> str:
-    cpu = f"CPU: {get_proc_cpuinfo()['brand']}, "
+    index: str
+    if PLATFORM.startswith("darwin"):
+        index = index = "brand_string"
+    elif PLATFORM.startswith("linux"):
+        index = "brand"
+    else:
+        raise ValueError(f"Unsupported platform {PLATFORM}")
+    cpu = f"CPU: {get_proc_cpuinfo()[index]}, "
     cuda = ""
     if torch.cuda.is_available():
         cuda = f"GPU: {torch.cuda.get_device_name()} "
-        cuda += f"mem: {torch.cuda.mem_get_info()[1]/2**20:.3f} MiB, "
+        cuda += f"Mem: {torch.cuda.mem_get_info()[1]/2**20:.3f} MiB, "
     backend = ""
     if torch.distributed.is_initialized():
         backend += f"Distributed: {torch.distributed.get_backend_config()}"
