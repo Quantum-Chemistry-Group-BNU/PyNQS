@@ -125,12 +125,12 @@ def cpu_info():
 def sys_info() -> str:
     index: str
     if PLATFORM.startswith("darwin"):
-        index = index = "brand_string"
+        index = "brand_string"
     elif PLATFORM.startswith("linux"):
         index = "brand"
     else:
         raise ValueError(f"Unsupported platform {PLATFORM}")
-    cpu = f"CPU: {get_proc_cpuinfo()[index]}, "
+    cpu = f"CPU: {cpu_info()[index]}, "
     cuda = ""
     if torch.cuda.is_available():
         cuda = f"GPU: {torch.cuda.get_device_name()} "
