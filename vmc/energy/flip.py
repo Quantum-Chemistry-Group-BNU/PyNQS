@@ -6,7 +6,7 @@ import torch
 from functools import partial
 from typing import Callable, Tuple, List, Union, Optional
 from loguru import logger
-from torch import Tensor, nn
+from torch import Tensor
 
 from libs.C_extension import get_hij_torch, get_comb_tensor
 from utils.public_function import (
@@ -17,12 +17,16 @@ from utils.public_function import (
     SpinProjection,
 )
 
+
 def Func(
     func: Callable[..., Tensor],
     x: Tensor,
     WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = False,
 ) -> Tensor:
+    """
+    using WaveFunction LUT and unique
+    """
     use_LUT = True if WF_LUT is not None else False
     batch = x.size(0)
 
@@ -69,7 +73,6 @@ def _simple_flip(
     use_unique: bool = True,
     eps: float = 1.0e-12,
     use_multi_psi: bool = False,
-    # use_spin_flip: bool = False,
     extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
@@ -98,24 +101,29 @@ def _simple_flip(
     t2 = time.time_ns()
 
     if use_multi_psi:
-        η_m = spin_flip_sign(comb_x.reshape(-1, bra_len), sorb).reshape(batch, -1)
+        eta_m = spin_flip_sign(comb_x.reshape(-1, bra_len), sorb).reshape(batch, -1)
         x1_flip = spin_flip_onv(comb_x.reshape(-1, bra_len), sorb)  # [comb * batch, bra_len]
         f_flip = Func(ansatz_extra, x1_flip, None, use_unique).reshape(batch, -1)
         f = Func(ansatz_extra, comb_x.reshape(-1, bra_len), None, use_unique).reshape(batch, -1)
         psi_x1 = Func(ansatz, comb_x.reshape(-1, bra_len), WF_LUT, use_unique).reshape(batch, -1)
         psi_x1_flip = Func(ansatz, x1_flip, WF_LUT, use_unique).reshape(batch, -1)
 
-        f_psi = (f * psi_x1 + η * η_m * f_flip * psi_x1_flip) * f[..., 0].reshape(-1, 1).conj() / extra_norm**2  # [batch, nSD]
+        # [batch, nSD]
+        f_psi = (
+            (f * psi_x1 + η * eta_m * f_flip * psi_x1_flip)
+            * f[..., 0].reshape(-1, 1).conj()
+            / extra_norm**2
+        )
     else:
         # [batch, comb]
         psi_x1 = Func(ansatz, comb_x.reshape(-1, bra_len), WF_LUT, use_unique).reshape(batch, -1)
         # spin-flip
-        η_m = spin_flip_sign(comb_x.reshape(-1, bra_len), sorb).reshape(batch, -1)
+        eta_m = spin_flip_sign(comb_x.reshape(-1, bra_len), sorb).reshape(batch, -1)
         x1_flip = spin_flip_onv(comb_x.reshape(-1, bra_len), sorb)
-        
+
         psi_x1_flip = Func(ansatz, x1_flip, WF_LUT, use_unique).reshape(batch, -1)
 
-        f_psi = (psi_x1 + η * η_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
+        f_psi = (psi_x1 + η * eta_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
 
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
     if use_spin_raising:
@@ -208,9 +216,9 @@ def _reduce_psi_flip(
         _index1, _count = _counts.unique(sorted=True, return_counts=True)
         # H[n, m]/p[m'] N_m/N_sample
         _prob = _prob.flatten()
-        comb_hij.view(-1)[_index1] = (_count / n_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
-        # if use_spin_raising:
-        #     hij_spin.view(-1)[_index1] = (_count / N_SAMPLE) * hij_spin.flatten()[_index1] / _prob[_index1]
+        comb_hij.view(-1)[_index1] = (
+            (_count / n_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
+        )
         gt_eps_idx = _index1
         if semi_stochastic:
             gt_eps_idx = torch.cat([_index, _index1])
@@ -223,14 +231,15 @@ def _reduce_psi_flip(
     s = f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}, "
     s += f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %"
     logger.debug(s)
-    
+
     psi_x1 = torch.zeros(batch * n_comb, dtype=dtype, device=device)
     psi_x1_flip = torch.zeros_like(psi_x1)
 
-    η = SpinProjection.eta
+    eat = SpinProjection.eta
     x = comb_x.reshape(-1, bra_len)[gt_eps_idx]
     if use_multi_psi:
-        _η_m = spin_flip_sign(x, sorb)
+        # spin-flip
+        _eta_m = spin_flip_sign(x, sorb)
         x1_flip = spin_flip_onv(x, sorb)
         _f = Func(ansatz_extra, x, None, use_unique)
         _f_flip = Func(ansatz_extra, x1_flip, None, use_unique)
@@ -248,31 +257,37 @@ def _reduce_psi_flip(
         psi_x1[gt_eps_idx] = _psi_x1
         psi_x1_flip[gt_eps_idx] = _psi_x1_flip
         psi_x1 = psi_x1.reshape(batch, n_comb)
-        psi_x1_flip =psi_x1_flip.reshape(batch, n_comb)
-        η_m = torch.zeros(batch * n_comb, dtype=_η_m.dtype, device=device)
-        η_m[gt_eps_idx] = _η_m
-        η_m = η_m.reshape(batch, n_comb)
+        psi_x1_flip = psi_x1_flip.reshape(batch, n_comb)
+        eta_m = torch.zeros(batch * n_comb, dtype=_eta_m.dtype, device=device)
+        eta_m[gt_eps_idx] = _eta_m
+        eta_m = eta_m.reshape(batch, n_comb)
 
-        f_psi = (f * psi_x1 + η * η_m * f_flip * psi_x1_flip) * f[..., 0].reshape(-1, 1).conj() / extra_norm**2  # [batch, nSD]
+        # [batch, nSD]
+        f_psi = (
+            (f * psi_x1 + eat * eta_m * f_flip * psi_x1_flip)
+            * f[..., 0].reshape(-1, 1).conj()
+            / extra_norm**2
+        )
     else:
         # [batch, comb]
         # spin-flip
-        _η_m = spin_flip_sign(x, sorb)
+        _eta_m = spin_flip_sign(x, sorb)
         x1_flip = spin_flip_onv(x, sorb)
-        
         _psi_x1 = Func(ansatz, x, WF_LUT, use_unique)
         _psi_x1_flip = Func(ansatz, x1_flip, WF_LUT, use_unique)
+
+        # index
         psi_x1[gt_eps_idx] = _psi_x1
         psi_x1_flip[gt_eps_idx] = _psi_x1_flip
         psi_x1 = psi_x1.reshape(batch, n_comb)
-        psi_x1_flip =psi_x1_flip.reshape(batch, n_comb)
+        psi_x1_flip = psi_x1_flip.reshape(batch, n_comb)
 
-        η_m = torch.zeros(batch * n_comb, dtype=_η_m.dtype, device=device)
-        η_m[gt_eps_idx] = _η_m
-        η_m = η_m.reshape(batch, n_comb)
+        eta_m = torch.zeros(batch * n_comb, dtype=_eta_m.dtype, device=device)
+        eta_m[gt_eps_idx] = _eta_m
+        eta_m = eta_m.reshape(batch, n_comb)
 
-        f_psi = (psi_x1 + η * η_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
-
+        # [batch, nSD]
+        f_psi = (psi_x1 + eat * eta_m * psi_x1_flip) / extra_norm**2
 
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
     if use_spin_raising:
@@ -285,7 +300,8 @@ def _reduce_psi_flip(
     delta1 = (t2 - t1) / 1.0e06
     delta2 = (t3 - t2) / 1.0e06
     logger.debug(
-        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " + f"nqs time: {delta2:.3E} ms"
+        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, "
+        + f"nqs time: {delta2:.3E} ms"
     )
     del comb_hij, comb_x, gt_eps_idx
 

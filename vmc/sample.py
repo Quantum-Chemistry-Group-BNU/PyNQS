@@ -868,7 +868,7 @@ class Sampler:
                 use_spin_raising = False
 
             if self.use_spin_flip:
-                self.η = SpinProjection.eta
+                self.eta = SpinProjection.eta
 
             if self.use_multi_psi or self.use_spin_flip:
                 if self.use_multi_psi:
@@ -890,11 +890,9 @@ class Sampler:
                 nele=self.nele,
                 noa=self.noa,
                 nob=self.nob,
-                state_prob=state_prob,
                 use_spin_raising=use_spin_raising,
                 h1e_spin=self.h1e_spin,
                 h2e_spin=self.h2e_spin,
-                exact=self.debug_exact,
                 WF_LUT=WF_LUT,
                 use_unique=self.use_unique,
                 dtype=self.dtype,
@@ -1034,9 +1032,9 @@ class Sampler:
 
     def gather_extra_psi(
         self,
-        x: UInt8[Tensor, "Batch bra_len"],
-        prob: Float[Tensor, "Batch"],
-    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "Batch"]]:
+        x: UInt8[Tensor, "batch bra_len"],
+        prob: Float[Tensor, "batch"],
+    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "batch"]]:
         """
         return:
             ||f(n)|| / norm**2, norm()
@@ -1049,10 +1047,10 @@ class Sampler:
         if self.use_spin_flip:
             x_flip = spin_flip_onv(x, self.sorb)
             f_flip = self.ansatz_batch(x_flip, self.nqs.module.extra, fp_batch)
-            η_n = spin_flip_sign(x, self.sorb)
+            eta_n = spin_flip_sign(x, self.sorb)
             psi = self.ansatz_batch(x, self.nqs.module.sample, fp_batch)
             psi_flip = self.ansatz_batch(x_flip, self.nqs.module.sample, fp_batch)
-            f_psi = _f + self.η * η_n * f.conj() * f_flip * psi_flip / psi
+            f_psi = _f + self.eta * eta_n * f.conj() * f_flip * psi_flip / psi
 
         # stats
         if self.debug_exact:
@@ -1077,9 +1075,9 @@ class Sampler:
 
     def gather_flip(
         self,
-        x: UInt8[Tensor, "Batch bra_len"],
-        prob: Float[Tensor, "Batch"],
-    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "Batch"]]:
+        x: UInt8[Tensor, "batch bra_len"],
+        prob: Float[Tensor, "batch"],
+    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "batch"]]:
         """
         return:
             || 1 + η * psi(n-flip)/psi(n)||
@@ -1089,10 +1087,10 @@ class Sampler:
         psi = self.ansatz_batch(x, self.nqs.module, fp_batch)
 
         # flip-spin
-        η_n = spin_flip_sign(x, self.sorb)
+        eta_n = spin_flip_sign(x, self.sorb)
         x_flip = spin_flip_onv(x, self.sorb)
         psi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch)
-        _psi = 1 + self.η * η_n * psi_flip / psi
+        _psi = 1 + self.eta * eta_n * psi_flip / psi
 
         # stats
         if self.debug_exact:

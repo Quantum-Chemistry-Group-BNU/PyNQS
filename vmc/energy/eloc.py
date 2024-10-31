@@ -11,7 +11,7 @@ from torch import Tensor, nn
 from libs.C_extension import get_hij_torch, get_comb_tensor, onv_to_tensor
 from utils.public_function import WavefunctionLUT, get_Num_SinglesDoubles, check_para
 
-from .flip import Func
+from .flip import Func, _reduce_psi_flip, _simple_flip
 # from torch.profiler import profile, record_function, ProfilerActivity
 
 
@@ -80,7 +80,6 @@ def local_energy(
         else:
             if reduce_psi:
                 assert eps >= 0.0 and eps_sample >= 0
-                from .flip import _reduce_psi_flip
                 if use_spin_flip:
                     func = _reduce_psi_flip
                 else:
@@ -92,7 +91,6 @@ def local_energy(
                     extra_norm=extra_norm,
                 )
             else:
-                from .flip import _simple_flip
                 if use_spin_flip:
                     func = _simple_flip
                 else:

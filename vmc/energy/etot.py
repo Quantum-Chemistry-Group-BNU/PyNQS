@@ -32,8 +32,6 @@ def total_energy(
     nele: int,
     noa: int,
     nob: int,
-    state_prob: Optional[Tensor] = None,
-    exact: bool = False,
     WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
     dtype=torch.double,

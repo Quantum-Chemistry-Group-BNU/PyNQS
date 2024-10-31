@@ -951,9 +951,9 @@ from utils.tensor_typing import Float, UInt8
 
 
 def spin_flip_sign(
-    x: Float[Tensor, "Batch sorb"] | UInt8[Tensor, "Batch bra_len"],
+    x: Float[Tensor, "batch sorb"] | UInt8[Tensor, "batch bra_len"],
     sorb: int,
-) -> Float[Tensor, "Batch"]:
+) -> Float[Tensor, "batch"]:
     if x.dtype == torch.uint8:
         # XXX: this is lower???
         x_swap = swap_odd_even_bits_8bit(x)
@@ -970,9 +970,9 @@ def spin_flip_sign(
 
 
 def spin_flip_onv(
-    x: Float[Tensor, "Batch sorb"] | UInt8[Tensor, "Batch bra_len"],
+    x: Float[Tensor, "batch sorb"] | UInt8[Tensor, "batch bra_len"],
     sorb: int,
-) -> Float[Tensor, "Batch sorb"]:
+) -> Float[Tensor, "batch sorb"]:
 
     if x.dtype == torch.uint8:
         return swap_odd_even_bits_8bit(x)
