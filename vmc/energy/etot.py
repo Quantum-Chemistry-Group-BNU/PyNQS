@@ -32,8 +32,6 @@ def total_energy(
     nele: int,
     noa: int,
     nob: int,
-    state_prob: Optional[Tensor] = None,
-    exact: bool = False,
     WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
     dtype=torch.double,
@@ -46,6 +44,7 @@ def total_energy(
     use_sample_space: bool = False,
     alpha: float = 2.0,
     use_multi_psi: bool = False,
+    use_spin_flip: bool = False,
     extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     r"""
@@ -115,6 +114,7 @@ def total_energy(
                 alpha=alpha,
                 use_multi_psi=use_multi_psi,
                 extra_norm=extra_norm,
+                use_spin_flip=use_spin_flip,
             )
             if reduce_psi and use_spin_raising:
                 # recalculate S-S+ in Sample-space

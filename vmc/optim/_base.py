@@ -24,6 +24,7 @@ from utils.distributed import (
     get_world_size,
 )
 from utils import ElectronInfo, Dtype
+from utils.tools import sys_info
 
 TORCH_VERSION: str = torch.__version__
 if TORCH_VERSION >= "2.0.0":
@@ -305,6 +306,7 @@ class BaseVMCOptimizer(ABC):
             s = f"{'=' * 50} Begin PyNQS {'=' * 50}\n"
             s += "System:\n"
             s += f"System {str(platform.uname())}\n"
+            s += f"{sys_info()}\n"
             s += f"Python {sys.version}\n"
             s += f"numpy {np.__version__} torch {torch.__version__}\n"
             s += f"Date: {time.ctime()}\n"

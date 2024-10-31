@@ -33,7 +33,7 @@ from libs.C_extension import (
     tensor_to_onv,
     merge_rank_sample,
 )
-from utils import state_to_string, ElectronInfo, check_para, get_nbatch, diff_rank_seed
+from utils import ElectronInfo, check_para, get_nbatch, diff_rank_seed
 from utils.distributed import (
     all_gather_tensor,
     all_reduce_tensor,
@@ -51,14 +51,15 @@ from utils.public_function import (
     split_batch_idx,
     setup_seed,
     ansatz_batch,
+    spin_flip_onv,
+    spin_flip_sign,
+    SpinProjection,
 )
 from utils.det_helper import DetLUT
 from utils.pyscf_helper.operator import spin_raising
 from utils.enums import ElocMethod
-
+from utils.tensor_typing import Float, Int, UInt8
 from vmc.ansatz import MultiPsi
-
-print = partial(print, flush=True)
 
 
 class Sampler:
@@ -97,6 +98,7 @@ class Sampler:
         use_spin_raising: bool = False,
         spin_raising_coeff: float = 1.0,
         given_state: Optional[Tensor] = None,
+        use_spin_flip=False,
     ) -> None:
         if n_sample < 50:
             raise ValueError(f"The number of sample{n_sample} should great 50")
@@ -183,11 +185,11 @@ class Sampler:
         # psi(x') can be looked from WaveFunction look-up table
         self.use_sample_space = False
 
-        self.alpha = 0
-        self.max_memory = 0.0
+        self.alpha: float = 0.0
+        self.max_memory: float = 0.0
         if eloc_method == ElocMethod.SAMPLE_SPACE:
             if self.debug_exact:
-                raise TypeError(f"Exact support in Sample-space")
+                raise TypeError(f"Exact support in FCI-space")
             self.use_sample_space = True
         elif eloc_method == ElocMethod.REDUCE:
             self.reduce_psi = True
@@ -272,6 +274,8 @@ class Sampler:
         self.extra_psi_pow: Tensor = None
         if isinstance(self.nqs.module, MultiPsi):
             self.use_multi_psi = True
+
+        self.use_spin_flip = use_spin_flip
 
     def read_electron_info(self, ele_info: ElectronInfo):
         if self.rank == 0:
@@ -821,7 +825,6 @@ class Sampler:
         placeholders = torch.empty(0, device=self.device, dtype=self.dtype)
         return (unique_rank, placeholders, prob_rank * self.world_size, WF_LUT)
 
-    # TODO: how to calculate batch_size;
     # calculate the max nbatch for given Max Memory
     def calculate_energy(
         self,
@@ -864,8 +867,15 @@ class Sampler:
             if self.h1e_spin is None and self.h2e_spin is None:
                 use_spin_raising = False
 
-            if self.use_multi_psi:
-                extra_norm, extra_psi_pow = self.gather_extra_psi(sample, state_prob)
+            if self.use_spin_flip:
+                self.eta = SpinProjection.eta
+
+            if self.use_multi_psi or self.use_spin_flip:
+                if self.use_multi_psi:
+                    func = self.gather_extra_psi
+                else:
+                    func = self.gather_flip
+                extra_norm, extra_psi_pow = func(sample, state_prob)
                 self.extra_norm = extra_norm
                 self.extra_psi_pow = extra_psi_pow
 
@@ -880,11 +890,9 @@ class Sampler:
                 nele=self.nele,
                 noa=self.noa,
                 nob=self.nob,
-                state_prob=state_prob,
                 use_spin_raising=use_spin_raising,
                 h1e_spin=self.h1e_spin,
                 h2e_spin=self.h2e_spin,
-                exact=self.debug_exact,
                 WF_LUT=WF_LUT,
                 use_unique=self.use_unique,
                 dtype=self.dtype,
@@ -894,11 +902,10 @@ class Sampler:
                 use_sample_space=self.use_sample_space,
                 alpha=self.alpha,
                 use_multi_psi=self.use_multi_psi,
+                use_spin_flip=self.use_spin_flip,
                 extra_norm=self.extra_norm,
             )
         else:
-            # e_total = -2.33233
-            # spin_mean = 0.000
             eloc = torch.zeros(sample.size(0), device=self.device, dtype=self.dtype)
             sloc = torch.zeros_like(eloc)
             placeholders = torch.ones(
@@ -953,6 +960,7 @@ class Sampler:
         """
         change the number of sample in the beginning of iteration.
         """
+        self.epoch = epoch
         if epoch <= self.start_iter:
             self.n_sample = self.start_n_sample
             self.max_n_sample = self.n_sample
@@ -1022,25 +1030,80 @@ class Sampler:
     ) -> Tensor:
         return ansatz_batch(ansatz, x, fp_batch, self.sorb, self.device, self.dtype)
 
-    def gather_extra_psi(self, x: Tensor, prob: Tensor) -> Tuple[Tensor, Tensor]:
+    def gather_extra_psi(
+        self,
+        x: UInt8[Tensor, "batch bra_len"],
+        prob: Float[Tensor, "batch"],
+    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "batch"]]:
         """
         return:
             ||f(n)|| / norm**2, norm()
         """
         fp_batch: int = self.eloc_param["fp_batch"]
-        extra_psi = self.ansatz_batch(x, self.nqs.module.extra, fp_batch)
-        _psi = extra_psi.conj() * extra_psi
+        f = self.ansatz_batch(x, self.nqs.module.extra, fp_batch)
+        _f = f.conj() * f
+
+        # spin flip symmetry
+        if self.use_spin_flip:
+            x_flip = spin_flip_onv(x, self.sorb)
+            f_flip = self.ansatz_batch(x_flip, self.nqs.module.extra, fp_batch)
+            eta_n = spin_flip_sign(x, self.sorb)
+            psi = self.ansatz_batch(x, self.nqs.module.sample, fp_batch)
+            psi_flip = self.ansatz_batch(x_flip, self.nqs.module.sample, fp_batch)
+            f_psi = _f + self.eta * eta_n * f.conj() * f_flip * psi_flip / psi
 
         # stats
         if self.debug_exact:
             n_sample = float("inf")
         else:
             n_sample = self.n_sample
-        stats_norm = operator_statistics(_psi.real, prob, n_sample, "f(n)²")
+        f_stats = operator_statistics(_f, prob, n_sample, "f(n)²")
+        if self.rank == 0:
+            logger.info(str(f_stats), master=True)
+
+        if self.use_spin_flip:
+            f_psi_stats = operator_statistics(f_psi, prob, n_sample, "F(n)²")
+            extra_norm = f_psi_stats["mean"].sqrt()
+            extra_psi_pow = f_psi / extra_norm**2
+            if self.rank == 0:
+                logger.info(str(f_psi_stats), master=True)
+        else:
+            extra_norm = f_stats["mean"].sqrt()
+            extra_psi_pow = _f / extra_norm**2
+
+        return extra_norm, extra_psi_pow
+
+    def gather_flip(
+        self,
+        x: UInt8[Tensor, "batch bra_len"],
+        prob: Float[Tensor, "batch"],
+    ) -> tuple[Float[Tensor, "1"], Float[Tensor, "batch"]]:
+        """
+        return:
+            || 1 + η * psi(n-flip)/psi(n)||
+        """
+
+        fp_batch: int = self.eloc_param["fp_batch"]
+        psi = self.ansatz_batch(x, self.nqs.module, fp_batch)
+
+        # flip-spin
+        eta_n = spin_flip_sign(x, self.sorb)
+        x_flip = spin_flip_onv(x, self.sorb)
+        psi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch)
+        _psi = 1 + self.eta * eta_n * psi_flip / psi
+
+        # stats
+        if self.debug_exact:
+            n_sample = float("inf")
+        else:
+            n_sample = self.n_sample
+
+        stats_norm = operator_statistics(_psi, prob, n_sample, "F(n)²")
         extra_norm = stats_norm["mean"].sqrt()
         extra_psi_pow = _psi / extra_norm**2
 
         if self.rank == 0:
             logger.info(str(stats_norm), master=True)
 
+        # \sqrt(B), C
         return extra_norm, extra_psi_pow

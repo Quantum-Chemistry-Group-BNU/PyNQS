@@ -18,7 +18,6 @@ from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
 
-from vmc.grad import energy_grad, sr_grad, multi_grad
 from vmc.optim._base import BaseVMCOptimizer
 from ci import CITrain
 from utils.ci import CIWavefunction
@@ -89,7 +88,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             nqs=nqs,
             sampler_param=sampler_param,
             electron_info=electron_info,
-            opt = opt,
+            opt=opt,
             lr_scheduler=lr_scheduler,
             max_iter=max_iter,
             dtype=dtype,
@@ -107,8 +106,8 @@ class VMCOptimizer(BaseVMCOptimizer):
             kfac=kfac,
             use_clip_grad=use_clip_grad,
             clip_grad_method=clip_grad_method,
-            use_3sigma = use_3sigma,
-            k_step_clip = k_step_clip,
+            use_3sigma=use_3sigma,
+            k_step_clip=k_step_clip,
             max_grad_norm=max_grad_norm,
             max_grad_value=max_grad_value,
             clip_grad_scheduler=clip_grad_scheduler,
@@ -164,6 +163,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             t1 = time.time_ns()
             if self.sr:
                 raise NotImplementedError(f"SR-distributed will be implement in future")
+                from vmc.grad import sr_grad
                 psi = sr_grad(
                     self.model,
                     sample_state,
@@ -181,29 +181,22 @@ class VMCOptimizer(BaseVMCOptimizer):
                     sloc = torch.zeros_like(eloc)
                     sloc_mean = torch.zeros_like(eloc_mean)
 
-                if self.sampler.use_multi_psi:
-                    extra_psi_pow = self.sampler.extra_psi_pow
-                    psi = multi_grad(
-                        self.model,
-                        sample_state,
-                        state_prob,
-                        eloc + sloc,
-                        eloc_mean + sloc_mean,
-                        extra_psi_pow,
-                        self.dtype,
-                        self.MAX_AD_DIM,
-                    )
+                from vmc.grad.energy_grad import grad
+
+                if not self.sampler.use_multi_psi:
+                    extra_psi_pow = 1.0
                 else:
-                    psi = energy_grad(
-                        self.model,
-                        sample_state,
-                        state_prob,
-                        eloc + sloc,
-                        eloc_mean + sloc_mean,
-                        self.MAX_AD_DIM,
-                        self.dtype,
-                        self.method_grad,
-                    )
+                    extra_psi_pow = self.sampler.extra_psi_pow
+                grad(
+                    self.model,
+                    sample_state,
+                    state_prob,
+                    eloc + sloc,
+                    eloc_mean + sloc_mean,
+                    extra_psi_pow,
+                    self.dtype,
+                    self.MAX_AD_DIM,
+                )
             delta_grad = (time.time_ns() - t1) / 1.00e09
 
             # save the energy grad and clip-grad
@@ -229,7 +222,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             if self.sampler.use_LUT:
                 if self.sampler.WF_LUT is not None:
                     self.sampler.WF_LUT.clean_memory()
-            del sample_state, eloc, state, psi, cost
+            del sample_state, eloc, state, cost
 
         # end vmc iterations
         total_time = (time.time_ns() - begin_vmc) / 1.0e09
