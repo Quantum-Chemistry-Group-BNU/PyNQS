@@ -1022,6 +1022,16 @@ class _SpinProjection:
 
 SpinProjection = _SpinProjection()
 
+def random_str() -> str:
+    """
+    a string of random letters and numbers, e.g. '98fk3w0k', 'tq2724gq'
+    """
+    index = torch.randperm(8)
+    nums = torch.randint(48, 58, (4,))
+    strings = torch.randint(97, 123, (4,))
+    x = torch.cat([nums, strings])[index]
+    return "".join(list(map(chr, x.tolist())))
+
 if __name__ == "__main__":
     # print(given_onstate(12, 12, 3, 3)) # H20
     # print(state_to_string(torch.tensor([0b1111, 0, 0, 0, 0, 0, 0, 0], dtype=torch.uint8), 8))
