@@ -51,12 +51,13 @@ eloc-param
     :linenos:
 
     from utils.enums import ElocMethod
-    eloc_param = {
+    from vmc.sample import ElocParams
+    eloc_param: ElocParams = {
         "method": ElocMethod.REDUCE,
         "use_unique": False,
         "use_LUT": False,
         "eps": 1e-2,
-        "eps-sample": 100,
+        "eps_sample": 100,
         # "alpha": 1.5,
         # "max_memory": 5,
         "batch": 1024,
@@ -69,7 +70,7 @@ eloc-param
 
 * ``use_LUT``: Use LookUp-table to reduce :math:`\psi(n^{\prime})`. This must be ``True`` if ``method = ElocMethod.SAMPLE_SPACE``.
 
-* ``eps, eps-sample``: :math:`\epsilon, N` see: :ref:`eloc`. This is **necessary** if ``Method = ElocMethod.REDUCE``.
+* ``eps, eps_sample``: :math:`\epsilon, N` see: :ref:`eloc`. This is **necessary** if ``Method = ElocMethod.REDUCE``.
 
 * ``batch, fp_batch``: the nbatch of **eloc** and the nbatch of the **forward**, Default: `-1`. 
   This is **required** if ``Method = ElocMethod.REDUCE`` or ``ElocMethod.SIMPLE``.

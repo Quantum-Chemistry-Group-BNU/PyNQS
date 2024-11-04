@@ -12,7 +12,7 @@ import numpy as np
 # import pandas as pd
 
 from functools import partial
-from typing import Callable, Tuple, List, Union, Optional
+from typing import Callable, Tuple, List, Union, Optional, TypedDict, NotRequired
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
@@ -62,6 +62,22 @@ from utils.tensor_typing import Float, Int, UInt8
 from vmc.ansatz import MultiPsi
 
 
+class ElocParams(TypedDict):
+    """
+    Eloc-params, see: docs/tutorials/sample/eloc-param
+    """
+
+    method: ElocMethod
+    use_unique: bool
+    use_LUT: bool
+    eps: NotRequired[float]
+    eps_sample: NotRequired[int]
+    alpha: NotRequired[float]
+    max_memory: NotRequired[float]
+    batch: int
+    fp_batch: int
+
+
 class Sampler:
     """
     Generates samples of configurations from a neural quantum state(NQS)
@@ -77,7 +93,7 @@ class Sampler:
         self,
         nqs: DDP,
         ele_info: ElectronInfo,
-        eloc_param: dict,
+        eloc_param: ElocParams,
         n_sample: int = 100,
         start_iter: int = 100,
         start_n_sample: Optional[int] = None,
@@ -194,7 +210,11 @@ class Sampler:
         elif eloc_method == ElocMethod.REDUCE:
             self.reduce_psi = True
             self.eps = eloc_param["eps"]
-            self.eps_sample = eloc_param["eps-sample"]
+            if "eps-sample" in eloc_param:
+                warnings.warn("'eps-sample' is deprecated, use 'esp_sample'", UserWarning)
+                self.eps_sample = eloc_param["eps-sample"]
+            else:
+                self.eps_sample = eloc_method["eps_sample"]
             assert self.eps >= 0 and self.eps_sample >= 0
         elif eloc_method == ElocMethod.SIMPLE:
             if self.rank == 0:
