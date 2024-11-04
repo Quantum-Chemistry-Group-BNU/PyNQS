@@ -3,29 +3,19 @@ from __future__ import annotations
 import time
 import os
 import random
-import torch
-import torch.distributed as dist
 import tempfile
 import warnings
-import numpy as np
+import torch
 
-# import pandas as pd
-
-from functools import partial
-from typing import Callable, Tuple, List, Union, Optional, TypedDict, NotRequired
-from torch import Tensor, nn
+from typing import Callable, Tuple, List, Union, Optional
+from typing_extensions import TypedDict, NotRequired
+from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from loguru import logger
-
-# from pandas import DataFrame
 from scipy import special
-
-# from memory_profiler import profile
-# from line_profiler import LineProfiler
 
 from vmc.energy import total_energy
 from vmc.stats import operator_statistics
-
 from libs.C_extension import (
     onv_to_tensor,
     spin_flip_rand,
@@ -86,8 +76,6 @@ class Sampler:
 
     METHOD_SAMPLE = ("MCMC", "AR", "RESTRICTED")
     n_accept: int
-    str_full: List[str]
-    # frame_sample: DataFrame
 
     def __init__(
         self,
@@ -214,7 +202,7 @@ class Sampler:
                 warnings.warn("'eps-sample' is deprecated, use 'esp_sample'", UserWarning)
                 self.eps_sample = eloc_param["eps-sample"]
             else:
-                self.eps_sample = eloc_method["eps_sample"]
+                self.eps_sample = eloc_param["eps_sample"]
             assert self.eps >= 0 and self.eps_sample >= 0
         elif eloc_method == ElocMethod.SIMPLE:
             if self.rank == 0:
