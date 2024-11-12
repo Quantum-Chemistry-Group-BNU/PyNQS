@@ -183,7 +183,7 @@ class VMCOptimizer(BaseVMCOptimizer):
 
                 from vmc.grad.energy_grad import grad
 
-                if not self.sampler.use_multi_psi:
+                if not self.sampler.use_multi_psi and not self.sampler.use_spin_flip:
                     extra_psi_pow = 1.0
                 else:
                     extra_psi_pow = self.sampler.extra_psi_pow

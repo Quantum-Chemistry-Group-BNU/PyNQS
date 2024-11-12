@@ -75,10 +75,11 @@ def _simple_flip(
     use_multi_psi: bool = False,
     extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
+    hij_spin: Tensor
     check_para(x)
 
     batch = x.size(0)
-    η = SpinProjection.eta
+    eta = SpinProjection.eta
 
     if use_multi_psi:
         ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
@@ -110,7 +111,7 @@ def _simple_flip(
 
         # [batch, nSD]
         f_psi = (
-            (f * psi_x1 + η * eta_m * f_flip * psi_x1_flip)
+            (f * psi_x1 + eta * eta_m * f_flip * psi_x1_flip)
             * f[..., 0].reshape(-1, 1).conj()
             / extra_norm**2
         )
@@ -123,7 +124,7 @@ def _simple_flip(
 
         psi_x1_flip = Func(ansatz, x1_flip, WF_LUT, use_unique).reshape(batch, -1)
 
-        f_psi = (psi_x1 + η * eta_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
+        f_psi = (psi_x1 + eta * eta_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
 
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
     if use_spin_raising:
@@ -165,8 +166,7 @@ def _reduce_psi_flip(
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
     ignore x' when <x|H|x'>/psi(x) < 1e-12
     """
-    # XXX: This is error
-    hij_spin: Tensor = None
+    hij_spin: Tensor
 
     check_para(x)
     dim: int = x.dim()
