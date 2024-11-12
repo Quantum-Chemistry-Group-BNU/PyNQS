@@ -150,7 +150,7 @@ class RBMWavefunction(nn.Module):
                 self.params_visible_bias = visible_bias
                 self.visible_bias = torch.view_as_complex(visible_bias).view(self.nqubits)
             else:
-                self.params_visible_bias = nn.Parameter(visible_bias)
+                self.params_visible_bias = visible_bias
                 self.visible_bias = visible_bias.view(self.nqubits)
 
         hidden_bias = nn.Parameter(hidden_bias)

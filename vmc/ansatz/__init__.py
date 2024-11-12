@@ -1,6 +1,6 @@
 from .rbm.rbm import RBMWavefunction
 from .rnn.rnn import RNNWavefunction
-from .rbm.rbm_other import IsingRBM, RIsingRBM
+from .rbm.rbm_other import IsingRBM, RIsingRBM, DBM, Jastrow
 from .rbm.ar_rbm import RBMSites
 from .transformer.decoder import DecoderWaveFunction
 from .hybrid.hybrid import HybridWaveFunction
@@ -21,7 +21,7 @@ except ImportError:
 __all__ = [
     "RBMWavefunction",
     "RNNWavefunction",
-    "IsingRBM","RIsingRBM",
+    "IsingRBM","RIsingRBM","DBM","Jastrow"
     "RBMSites",
     "DecoderWaveFunction",
     "HybridWaveFunction",

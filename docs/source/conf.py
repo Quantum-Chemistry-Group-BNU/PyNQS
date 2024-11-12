@@ -37,7 +37,14 @@ extensions = [
 latex_elements = {
     'preamble': r'''
     \usepackage{tikz},
-    \usetikzlibrary{tikzmark}
+    \usepackage{physics},
     ''',
 }
 
+mathjax_config = {
+    'TeX': {
+        'Macros': {
+            'braket': [r'\langle #1 | #2 \rangle', 2],
+        }
+    }
+}

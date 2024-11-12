@@ -1,14 +1,10 @@
 import torch, math
 from torch import nn, Tensor
-import torch.nn.functional as F
 
 from typing import Union, Any, Tuple, Union, Callable, List
 
-from utils.public_function import multinomial_tensor
-from libs.C_extension import constrain_make_charts
-
-from vmc.ansatz.utils import OrbitalBlock
-
+from utils import get_fock_space
+from libs.C_extension  import onv_to_tensor
 
 class IsingRBM(nn.Module):
     """
@@ -295,3 +291,139 @@ class RIsingRBM(nn.Module):
             s += f"location of params_file is {self.params_file},\n"
         s += f"Alpha of RBM is {self.alpha}, with num_visible={self.nqubits}, num_hidden={self.num_hidden}."
         return s
+
+class DBM(nn.Module):
+    """
+    Deep Boltzmann machine
+    """
+
+    def __init__(
+        self,
+        nqubits: int, # K or nqubits or sorb
+        num_hidden: list = [1, 1],
+        iscale: float = 1e-3,
+        device: str = "cpu",
+        activation: Callable[[Tensor], Tensor] = torch.cos,
+        params_file: str = None,
+        use_complex: bool = False,
+        use_imag: bool = False,
+        rbm_type: str = "cosh"
+    ) -> None:
+        super(DBM, self).__init__()
+        self.device = device
+        self.iscale = iscale
+        self.use_complex = use_complex
+        self.param_dtype = torch.double
+        if self.use_complex:self.param_dtype = torch.complex128
+        self.factory_kwargs = {"device": self.device, "dtype": torch.double}
+        self.use_imag = use_imag
+        self.rbm_type = rbm_type
+
+        self.nqubits = nqubits
+        self.num_hidden = num_hidden
+        self.init_params()
+
+
+    def init_params(self):
+        shape_a = (self.nqubits,)
+        shape_b = (self.num_hidden[0],)
+        shape_b_prime = (self.num_hidden[1],)
+        shape_W = (self.nqubits, self.num_hidden[0],)
+        shape_W_prime = (self.num_hidden[0], self.num_hidden[1],)
+        if self.use_complex:
+            shape_a += (2,)
+            shape_b += (2,)
+            shape_b_prime += (2,)
+            shape_W += (2,)
+            shape_W_prime += (2,)
+
+        # parameters for RBM
+        a = torch.rand(shape_a, **self.factory_kwargs) * self.iscale # visable bias
+        b = torch.rand(shape_b, **self.factory_kwargs) * self.iscale # hidden bias
+        W = torch.rand(shape_W, **self.factory_kwargs) * self.iscale # hidden weight
+
+        # parameters for deep layer
+        b_prime = torch.zeros(shape_b_prime, **self.factory_kwargs) * self.iscale # deep bias
+        W_prime = torch.zeros(shape_W_prime, **self.factory_kwargs) * self.iscale # deep weight
+
+        factor = 1
+        if self.use_imag:factor = 1j
+
+        params_a = nn.Parameter(a*factor)
+        params_b = nn.Parameter(b*factor)
+        params_W = nn.Parameter(W*factor)
+        params_b_prime = nn.Parameter(b_prime*factor)
+        params_W_prime = nn.Parameter(W_prime*factor)
+
+        if self.use_complex:
+            self.params_a = torch.view_as_complex(params_a)
+            self.params_b = torch.view_as_complex(params_b)
+            self.params_b_prime = torch.view_as_complex(params_b_prime)
+            self.params_W = torch.view_as_complex(params_W)
+            self.params_W_prime = torch.view_as_complex(params_W_prime)
+
+
+    def cal_p1(self, x, h):
+        '''
+        $P_1(n,h) = \mathrm{e}^{\sum_i a_in_i}\mathrm{e}^{\sum_j b_jh_j+\sum_{ij}h_jW_{ji}n_i}$
+        '''
+        # (nbatch, nqubits) (nqubits,) -> (nbatch,)
+        term1 = torch.exp(x @ self.params_a) 
+        # (nbatch, nqubits) (nqubits, hidden1) (hnbatch, hidden1) -> (nbatch, hnbatch)
+        act =  torch.einsum("na,ah,mh->nm",x,self.params_W,h).T + (h @ self.params_b).view(-1,1)
+        term2 = torch.exp(act).T
+        return term1.view(-1,1) * term2 # (nbatch, hnbatch)
+
+
+    def cal_p2(self, h):
+        '''
+        $P_2(h,d) = \mathrm{e}^{\sum_ib^{\prime}_id_i + \sum_{ij}h_jW_{ji}^{\prime}d_i}$
+        '''
+        # (hnbatch, hidden1) (hidden1,hidden2) (dnbatch, hidden2) -> (hnbatch, dnbatch)
+        # (dnbatch, hidden2) (hidden2) -> (dnbatch,)
+        # act = torch.einsum("mh,hg,lg->ml",h,W_prime,d).T + (d @ b_prime).view(-1,1)
+        # act = torch.exp(act) # (dnbatch, hnbatch)
+        # return torch.sum(act,dim=0)
+        if self.rbm_type == "cosh":
+            return (2*torch.cosh(self.params_b_prime + h @ self.params_W_prime)).prod(dim=-1)
+        if self.rbm_type == "cos":
+            return (torch.cos(self.params_b_prime + h @ self.params_W_prime)).prod(dim=-1)
+
+    def forward(self, x: Tensor):
+        x = x.to(self.param_dtype)
+        h = onv_to_tensor(get_fock_space(self.num_hidden[0]),self.num_hidden[0]).to(self.device)
+        h = h.to(self.param_dtype)
+        psi = self.cal_p1(x,h) # (nbatch, hnbatch)
+        p2 = self.cal_p2(h).view(1,-1) # (1, hnbatch)
+        psi = psi * p2
+        return psi.sum(dim=-1)
+
+
+class Jastrow(nn.Module):
+    """
+    Jastrow factor in VMC
+    """
+    def __init__(self, nqubits, prod_dim=1, device = "cuda", iscale: float = 0.001, use_complex = False):
+        super(Jastrow, self).__init__()
+        self.nqubits = nqubits
+        self.device = device
+        self.iscale = iscale
+        self.use_complex = use_complex
+        self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
+        self.prod_dim = prod_dim
+
+        if self.use_complex:
+            shape_M = (self.nqubits, self.nqubits, self.prod_dim, 2,)
+            M = nn.Parameter(torch.rand(shape_M, **self.factory_kwargs_real) * self.iscale)
+            self.M = torch.view_as_complex(M)
+        else:
+            shape_M = (self.nqubits, self.nqubits, self.prod_dim,)
+            self.M = nn.Parameter(torch.rand(shape_M, **self.factory_kwargs_real) * self.iscale)
+        self.control = lambda x: x
+
+    def forward(self, x):
+        if self.use_complex:
+            x = x.to(torch.complex128)
+        wf = torch.einsum("ijk,ni,nj->nk",self.M, x, x)
+        wf = self.control(torch.exp(wf))
+        return torch.prod(wf, dim=-1)

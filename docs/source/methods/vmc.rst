@@ -1,12 +1,14 @@
-###
 VMC
 ###
 
-Variational Monte Carlo(VMC) algorithm
+Variational Monte Carlo(VMC) algorithm in second quantization.
 
+.. _vmc:
 
-.. _eloc:
+Theory of VMC in quantum chemistry
+=======================================
 
+.. _eloc+_grad:
 
 Local energy & Gradient
 ========================
@@ -18,8 +20,8 @@ The formula of local energy & gradient calculation.
 Classical VMC
 ~~~~~~~~~~~~~~
 
-For NQS :math:`\ket{\psi}`, we sample ON vector :math:`|n\rangle \sim |\psi(n)|^2/\langle\psi|\psi\rangle`
-, which can be sampled by using of MCMC sampling or Autoregressive sampling. So the expection of energy functional :math:`\langle E\rangle = \langle H\rangle` can caculated by 
+For NQS :math:`\ket{\psi}`, one can sample ON vector :math:`|n\rangle \sim |\psi(n)|^2/\langle\psi|\psi\rangle`
+, which can be sampled by using of MCMC sampling or Autoregressive sampling. So the expection of energy functional :math:`\langle E\rangle = \langle H\rangle` can be caculated by 
 
 .. math::
     \begin{aligned}
@@ -51,7 +53,7 @@ Gradient of energy :math:`\langle E\rangle` is
         \partial_\theta \langle E\rangle &= \dfrac{\partial}{\partial\theta}\dfrac{\langle\psi|H|\psi\rangle}{\langle\psi|\psi\rangle}
         = \bigg[\dfrac{\langle\partial_\theta\psi|H|\psi\rangle}{\langle\psi|\psi\rangle} - \dfrac{\langle \psi | H| \psi\rangle}{\langle \psi|\psi\rangle^2}\langle\partial_\theta\psi|\psi\rangle\bigg]+\mathrm{c.c.}\\
         &=2\Re\bigg[ \textcolor{purple}{\sum_n\dfrac{|\psi(n)|^2}{{\langle\psi|\psi\rangle}}}\dfrac{\partial_\theta\langle\psi|n\rangle}{\langle\psi|n\rangle}\dfrac{\langle n|H|\psi\rangle}{\langle n|\psi\rangle} - \langle E\rangle\textcolor{purple}{\sum_n\dfrac{|\psi(n)|^2}{{\langle\psi|\psi\rangle}}} \dfrac{\partial_\theta\langle\psi|n\rangle}{\langle\psi|n\rangle}\dfrac{\langle n|\psi\rangle}{\langle n|\psi\rangle} \bigg]\\
-        &=2\Re\big\langle \partial_\theta\ln\psi^*(n)(E_{\rm loc}-\langle E\rangle )\big\rangle
+        &=2\Re\big\langle \partial_\theta\ln\psi^*(n)(E_{\rm loc}-\langle E\rangle )\big\rangle_{n\sim |\psi(n)|^2/\langle \psi|\psi\rangle}
     \end{aligned}
 
 which conductor :math:`\partial_\theta := \dfrac{\partial}{\partial\theta}`, the derivative of the parameter :math:`\theta`.
@@ -95,13 +97,10 @@ The graident can be cauculated as
         = \bigg[\dfrac{\langle\partial_\theta\psi|H|\psi\rangle}{\langle\psi|\psi\rangle} - \dfrac{\langle \psi | H| \psi\rangle}{\langle \psi|\psi\rangle^2}\langle\partial_\theta\psi|\psi\rangle\bigg]+\mathrm{c.c.}\\
         &=2\Re\bigg[\dfrac{\sum_n\partial_\theta\langle \psi|n\rangle\langle n|H|\psi\rangle}{\sum_n|\psi(n)|^2} - \langle E\rangle \dfrac{\sum_n\partial_\theta\langle\psi|n\rangle\langle n|\psi\rangle}{\sum_n|\psi(n)|^2}\bigg] \\
         &=2\Re\bigg[ \dfrac{\sum_n|\phi(n)|^2\dfrac{\partial_\theta\langle \psi|n\rangle}{f_n^*\langle \phi|n\rangle}\dfrac{f_n^*\langle n|H|\psi\rangle}{\langle n|\phi\rangle}}{\sum_n|\psi(n)|^2} - \langle E\rangle\dfrac{\sum_n|\phi(n)|^2\dfrac{f^*_nf_n\partial_\theta\langle\psi | n\rangle}{f^*_n\langle \phi|n\rangle}}{\sum_n|\psi(n)|^2} \bigg] \\
-        &=2\Re\bigg[ \bigg\langle\dfrac{\partial_\theta\langle \psi|n\rangle}{\langle \psi|n\rangle} \bigg(\dfrac{1}{B}\dfrac{f_n^*\langle n|H|\psi\rangle}{\langle n|\phi\rangle}-|f_n|^2\bigg)\langle E\rangle\bigg\rangle \bigg] \\
-        &=2\Re\big[ \big\langle\partial_\theta\ln\langle\psi|n\rangle (E_{\rm loc}-\dfrac{|f_n|^2}{B}\langle E\rangle) \big\rangle \big]\\
-        &=2\Re\big[ \big\langle(\partial_\theta(f_n\phi(n))^*\rangle) (E_{\rm loc}-|\widetilde{f}_n|^2\langle E\rangle) \big\rangle \big]\\
+        &=2\Re\bigg[ \bigg\langle\dfrac{\partial_\theta\langle \psi|n\rangle}{\langle \psi|n\rangle} \bigg(\dfrac{1}{B}\dfrac{f_n^*\langle n|H|\psi\rangle}{\langle n|\phi\rangle}-|f_n|^2\bigg)\langle E\rangle\bigg\rangle_n \bigg] \\
+        &=2\Re\big[ \big\langle\partial_\theta\ln\langle\psi|n\rangle (E_{\rm loc}-\dfrac{|f_n|^2}{B}\langle E\rangle) \big\rangle_n \big]\\
+        &=2\Re\big[ \big\langle(\partial_\theta\ln(f_n\phi(n))^*\rangle) (E_{\rm loc}-|\widetilde{f}_n|^2\langle E\rangle) \big\rangle_n \big]\\
     \end{aligned}
-
-
-
 
 With some symmetry
 ^^^^^^^^^^^^^^^^^^^
@@ -126,9 +125,9 @@ the matrix elements like
 then :math:`U_{\rm SF} \ket{1_\alpha 1_\beta} = -\ket{1_\alpha 1_\beta}` can be varified. In conclusion 
 
 .. math:: 
-    U_{\rm SF}\ket{n} = \eta_n \ket{n}
+    U_{\rm SF}\ket{n} = \eta_n \ket{n_{\rm SF}} =: |\bar{n}\rangle
 
-If target state :math:`\ket{\psi}` with :math:`N` electrons has determinated eigenvalue :math:`\eta` of operator :math:`U_{\rm SF}` 
+Where :math:`|n_{\rm SF}\rangle` is the state whose spins be fliped in state :math:`\ket{n}`. If target state :math:`\ket{\psi}` with :math:`N` electrons has determinated eigenvalue :math:`\eta` of operator :math:`U_{\rm SF}` 
 (:math:`\eta` is defined by yourself. such as H-chain(:math:`n=50`), :math:`N_\alpha` is  25, if the target state is siglet, then :math:`\eta = (-1)^{25-0}=-1`)
 
 .. math:: 
@@ -151,16 +150,16 @@ the expection of energy is
         &=\dfrac{\bigg\langle \dfrac{\langle{\psi}|{n}\rangle\langle{n}|{HP_\eta}|{\psi}\rangle}{|\langle{n}|{\phi}\rangle|^2}\bigg\rangle_n}{\bigg\langle\dfrac{\langle{\psi}|{n}\rangle\langle{n}|{P_\eta}|{\psi}\rangle}{|\langle{n}|{\phi}\rangle|^2}\bigg\rangle_n}\\
         &=\dfrac{\bigg\langle \dfrac{f_n^*\langle{\phi}|{n}\rangle\langle{n}|{HP_\eta}|{\psi}\rangle}{|\langle{n}|{\phi}\rangle|^2}\bigg\rangle_n}
         {\bigg\langle\dfrac{f_n^*\langle{\phi}|{n}\rangle\langle{n}|{P_\eta}|{\psi}\rangle}{|\langle{n}|{\phi}\rangle|^2}\bigg\rangle_n}\\
-        &=\dfrac{\bigg\langle \dfrac{f_n^*\langle{n}|{HP_\eta}|{\psi}\rangle}{\langle{n}|{\phi}\rangle}\bigg\rangle_n}{\bigg\langle\dfrac{f_n^*\langle{n}|{P_\eta}|{\psi}\rangle}{\langle{n}|{\phi}\rangle}\bigg\rangle_n}=\langle E_{\rm loc}\rangle_n
+        &=\dfrac{\bigg\langle \dfrac{f_n^*\langle{n}|{HP_\eta}|{\psi}\rangle}{\langle{n}|{\phi}\rangle}\bigg\rangle_n}{\bigg\langle\dfrac{f_n^*\langle{n}|{P_\eta}|{\psi}\rangle}{\langle{n}|{\phi}\rangle}\bigg\rangle_n}=\langle E_{\rm loc}(n)\rangle_n
     \end{aligned}
 
-Define :math:`B = 2\bigg\langle \dfrac{f_n^*\langle n|P_\eta|\psi\rangle}{\langle n|\phi\rangle} \bigg\rangle, \ \widetilde{f}_{n} = f_n/\sqrt{B}`, Then 
+Define :math:`B = 2\bigg\langle \dfrac{f_n^*\langle n|P_\eta|\psi\rangle}{\langle n|\phi\rangle} \bigg\rangle_n, \ \widetilde{f}_{n} = f_n/\sqrt{B}`, Then 
 
 .. math:: 
     \begin{aligned}
         P_{\rm loc}(n) = \dfrac{1}{B} f_n^*\dfrac{\langle{n}|{P_\eta}|{\psi}\rangle}{\langle{n}|{\phi}\rangle} 
         = \dfrac{1}{B} f_n^*\dfrac{\langle{n}|{\psi}\rangle+\eta\langle n|\bar{\psi}\rangle}{\langle{n}|{\phi}\rangle} 
-        = \dfrac{1}{2B}(|f_n|^2+\eta f_n^*f_{\bar{n}}\dfrac{\braket{\bar{n}}{\phi}}{\langle{n}|{\phi}\rangle})
+        = \dfrac{1}{2B}(|f_n|^2+\eta f_n^*f_{\bar{n}}\dfrac{\langle{\bar{n}}|{\phi}\rangle}{\langle{n}|{\phi}\rangle})
     \end{aligned}
 
 local-energy is
@@ -170,7 +169,8 @@ local-energy is
         E_{\rm loc}(n) &= \dfrac{2f_n^*}{B}\dfrac{\langle{n}|{HP_\eta}|{\psi}\rangle}{\langle{n}|{\phi}\rangle} = \dfrac{f_n^*}{\langle P_{\rm loc}\rangle_n}\dfrac{\sum_m\langle{n}|{H}|{m}\rangle\langle{m}|{P_\eta}|{\psi}\rangle}
         {\langle{n}|{\phi}\rangle}\\
         &=\dfrac{1}{2}\dfrac{2f_n^*}{B}\dfrac{\sum_m H_{nm}(\langle{m}|{\psi}\rangle+\eta\langle m|\bar{\psi}\rangle )}{\langle{n}|{\phi}\rangle}\\
-        &=\dfrac{f_n^*}{\sqrt{B}}\dfrac{\sum_m H_{nm}(\frac{f_m}{\sqrt{B}}\langle{m}|{\phi}\rangle+\eta \frac{f_{\bar{m}}}{\sqrt{B}}\braket{\bar{m}}{\phi} )}{\phi(n)}
+        &=\dfrac{f_n^*}{\sqrt{B}}\dfrac{\sum_m H_{nm}(\frac{f_m}{\sqrt{B}}\langle{m}|{\phi}\rangle+\eta \frac{f_{\bar{m}}}{\sqrt{B}}\langle{\bar{m}}|{\phi}\rangle)}{\phi(n)}\\
+        &=\dfrac{\sum_m \widetilde{f}_n^* H_{nm}(\widetilde{f}_m\langle m|\phi\rangle + \eta \widetilde{f}_{\bar{m}}\langle \bar{m}|\phi\rangle)}{\phi(n)}
     \end{aligned}
 gradient of :math:`\langle E \rangle` is
 
@@ -178,8 +178,7 @@ gradient of :math:`\langle E \rangle` is
     \begin{aligned}
         \partial_\theta\langle E\rangle  =& \dfrac{\partial}{\partial \theta}\dfrac{\langle{\psi}|{H\textcolor{purple}{P_\eta}}|{\psi}\rangle}{\langle{\psi}|{\textcolor{purple}{P_\eta}|}{\psi}\rangle} \\
         =& 2\Re \Bigg[ \dfrac{\langle{\partial_\theta\psi}|{HP}|{\psi}\rangle}{\langle{\psi}|{P}|{\psi}\rangle}-\dfrac{\langle{\psi}|{HP}|{\psi}\rangle}{|\langle{\psi}|{P}|{\psi}\rangle|^2}\times \langle{\partial_\theta \psi}|{P}|{\psi}\rangle \Bigg]\\
-        =&2\Re \Bigg[ \dfrac{\sum_n\langle{\partial_\theta\psi}|{n}\rangle\langle{n}|{HP}|{\psi}\rangle}{B} \Bigg]\\
-        &-2\Re\Bigg[ \dfrac{\sum_n\langle{\psi}|{n}\rangle\langle{n}|{HP}|{\psi}\rangle}{B} \big\langle (\partial_\theta\ln (f_n\phi(n))^*) P_{\rm loc}(n)\big\rangle_n\Bigg]\\
+        =&2\Re \Bigg[ \dfrac{\sum_n\langle{\partial_\theta\psi}|{n}\rangle\langle{n}|{HP}|{\psi}\rangle}{B} - \dfrac{\sum_n\langle{\psi}|{n}\rangle\langle{n}|{HP}|{\psi}\rangle}{B} \big\langle (\partial_\theta\ln (f_n\phi(n))^*) P_{\rm loc}(n)\big\rangle_n\Bigg]\\
         =&2\Re \Bigg[ \big\langle (\partial_\theta\ln (f_n\phi(n))^*) E_{\rm loc}\big\rangle_n-\langle E\rangle \big\langle (\partial_\theta\ln (f_n\phi(n))^*) P_{\rm loc}\big\rangle_n\Bigg]\\
         =&2\Re \big[ \big\langle (\partial_\theta\ln (f_n\phi(n))^*) (E_{\rm loc}-\langle E\rangle P_{\rm loc})\big\rangle_n\big]
     \end{aligned}
