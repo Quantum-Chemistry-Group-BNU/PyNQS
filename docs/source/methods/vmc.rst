@@ -21,7 +21,7 @@ Classical VMC
 ~~~~~~~~~~~~~~
 
 For NQS :math:`\ket{\psi}`, one can sample ON vector :math:`|n\rangle \sim |\psi(n)|^2/\langle\psi|\psi\rangle`
-, which can be sampled by using of MCMC sampling or Autoregressive sampling. So the expection of energy functional :math:`\langle E\rangle = \langle H\rangle` can be caculated by 
+, which can be sampled by using of MCMC sampling or Autoregressive sampling. So the expectation of energy functional :math:`\langle E\rangle = \langle H\rangle` can be calculated by 
 
 .. math::
     \begin{aligned}
@@ -34,7 +34,7 @@ For NQS :math:`\ket{\psi}`, one can sample ON vector :math:`|n\rangle \sim |\psi
 When we use **Autoregressive Sampling** , :math:`\langle\psi|\psi\rangle=1`, then :math:`\langle E\rangle = \langle E_{\rm loc}\rangle_{n\sim |\psi(n)|^2}`.
 
 
-In general "Local-energy" :math:`E_{\rm loc}` can be caculated by
+In general "Local-energy" :math:`E_{\rm loc}` can be calculated by
 
 .. math::
     E_{\rm loc} = \dfrac{\sum_mH_{nm}\psi(m)}{\psi(n)} = \sum_mH_{nm}\dfrac{\psi(m)}{\psi(n)}
@@ -61,7 +61,7 @@ which conductor :math:`\partial_\theta := \dfrac{\partial}{\partial\theta}`, the
 Multi-Psi
 ~~~~~~~~~~
 In this case, we choose an autoregressive wavefunction ansatz, called sampling part :math:`\phi(n) := \langle n | \phi \rangle, \sum_n |\phi(n)|^2 = 1`,
-and a extra correction factor, called extra part :math:`f_n`. Then total wavefuncion :math:`\psi(n) = \langle n|\psi\rangle` can be represent as 
+and a extra correction factor, called extra part :math:`f_n`. Then total wavefunction :math:`\psi(n) = \langle n|\psi\rangle` can be represent as
 
 .. math:: 
     \psi(n) = \langle n|\psi\rangle := f_n \langle n|\phi\rangle = f_n\phi(n)
@@ -69,7 +69,7 @@ and a extra correction factor, called extra part :math:`f_n`. Then total wavefun
 In general
 ^^^^^^^^^^^
 
-The expaction of energy :math:`E` is
+The expectation of energy :math:`E` is
 
 .. math:: 
     \begin{aligned}
@@ -89,7 +89,7 @@ The denominator is actually a constant, so remark it as :math:`B = \big\langle |
 
 Formally, the correction factor provides a (nonlinear) transformation of the Hamiltonian.
 
-The graident can be cauculated as
+The gradient can be calculated as
 
 .. math:: 
     \begin{aligned}
@@ -105,7 +105,7 @@ The graident can be cauculated as
 With some symmetry
 ^^^^^^^^^^^^^^^^^^^
 
-We consider state :math:`\ket{N,S,M}` which is eigenvector of opeartors :math:`\{N,S,S_z\}`
+We consider state :math:`\ket{N,S,M}` which is eigenvector of operators :math:`\{N,S,S_z\}`
 , Let Spin Flip operator :math:`U_{\rm SF}:=\mathrm{e}^{\mathrm{i}\mathrm{\pi}(S_x-N/2)}`, can flip spins, such as
 
 .. math:: 
@@ -122,12 +122,12 @@ the matrix elements like
 .. math:: 
     [U_{\rm SF}] = \begin{bmatrix} 1&0&0&0\\ 0&0&1&0\\ 0&1&0&0\\ 0&0&0&-1\end{bmatrix}
 
-then :math:`U_{\rm SF} \ket{1_\alpha 1_\beta} = -\ket{1_\alpha 1_\beta}` can be varified. In conclusion 
+then :math:`U_{\rm SF} \ket{1_\alpha 1_\beta} = -\ket{1_\alpha 1_\beta}` can be verified. In conclusion 
 
 .. math:: 
     U_{\rm SF}\ket{n} = \eta_n \ket{n_{\rm SF}} =: |\bar{n}\rangle
 
-Where :math:`|n_{\rm SF}\rangle` is the state whose spins be fliped in state :math:`\ket{n}`. If target state :math:`\ket{\psi}` with :math:`N` electrons has determinated eigenvalue :math:`\eta` of operator :math:`U_{\rm SF}` 
+Where :math:`|n_{\rm SF}\rangle` is the state whose spins be flipped in state :math:`\ket{n}`. If target state :math:`\ket{\psi}` with :math:`N` electrons has determinate eigenvalue :math:`\eta` of operator :math:`U_{\rm SF}` 
 (:math:`\eta` is defined by yourself. such as H-chain(:math:`n=50`), :math:`N_\alpha` is  25, if the target state is siglet, then :math:`\eta = (-1)^{25-0}=-1`)
 
 .. math:: 
@@ -139,7 +139,7 @@ for our symmetry-projected NQS
 .. math:: 
     \ket{\psi_\eta} = \dfrac{P_{\eta}\ket{\psi}}{\sqrt{\langle \psi | P_\eta | \psi\rangle}}, \ \langle n|\psi\rangle  = f_n \langle n|\phi\rangle ,\ \langle\phi|\phi\rangle =1
 
-the expection of energy is 
+the expectation of energy is 
 
 .. math:: 
     \begin{aligned}
@@ -172,7 +172,7 @@ local-energy is
         &=\dfrac{f_n^*}{\sqrt{B}}\dfrac{\sum_m H_{nm}(\frac{f_m}{\sqrt{B}}\langle{m}|{\phi}\rangle+\eta \frac{f_{\bar{m}}}{\sqrt{B}}\langle{\bar{m}}|{\phi}\rangle)}{\phi(n)}\\
         &=\dfrac{\sum_m \widetilde{f}_n^* H_{nm}(\widetilde{f}_m\langle m|\phi\rangle + \eta \widetilde{f}_{\bar{m}}\langle \bar{m}|\phi\rangle)}{\phi(n)}
     \end{aligned}
-gradient of :math:`\langle E \rangle` is
+    gradient of :math:`\langle E \rangle` is
 
 .. math:: 
     \begin{aligned}
@@ -182,6 +182,8 @@ gradient of :math:`\langle E \rangle` is
         =&2\Re \Bigg[ \big\langle (\partial_\theta\ln (f_n\phi(n))^*) E_{\rm loc}\big\rangle_n-\langle E\rangle \big\langle (\partial_\theta\ln (f_n\phi(n))^*) P_{\rm loc}\big\rangle_n\Bigg]\\
         =&2\Re \big[ \big\langle (\partial_\theta\ln (f_n\phi(n))^*) (E_{\rm loc}-\langle E\rangle P_{\rm loc})\big\rangle_n\big]
     \end{aligned}
+
+.. _eloc:
 
 Method
 -------

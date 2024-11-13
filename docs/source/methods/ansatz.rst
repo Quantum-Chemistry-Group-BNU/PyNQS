@@ -64,6 +64,8 @@ Define: :math:`\psi(n) = f_n\phi(n), \ket{n} \sim |\phi(n)|^2`.
     \end{align}
 
 
+.. _spin_flip:
+
 ---------
 Spin-flip
 ---------

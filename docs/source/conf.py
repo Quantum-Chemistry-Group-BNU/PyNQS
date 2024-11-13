@@ -25,8 +25,8 @@ exclude_patterns = []
 
 import sphinx_rtd_theme
 html_theme = 'sphinx_rtd_theme'
-#html_static_path = ['_static']
-html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
+# html_static_path = ['_static']
+# html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 extensions = [
     'recommonmark', 
     'sphinx_markdown_tables',
@@ -41,7 +41,7 @@ latex_elements = {
     ''',
 }
 
-mathjax_config = {
+mathjax3_config = {
     'TeX': {
         'Macros': {
             'braket': [r'\langle #1 | #2 \rangle', 2],

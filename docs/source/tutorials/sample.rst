@@ -40,6 +40,7 @@ Sample
             use_spin_raising: bool = False,
             spin_raising_coeff: float = 1.0,
             given_state: Optional[Tensor] = None,
+            use_spin_flip: bool = False,
         ) -> None:
 
 .. _eloc-params:
@@ -108,6 +109,7 @@ sample-param
         "min_tree_height": 12,  # different rank-sample
         "use_dfs_sample": True,
         "eloc_param": eloc_param,
+        "use_spin_flip": False,
     }
 
 * ``n_sample``: the number of the sampling.
@@ -131,6 +133,8 @@ sample-param
 * ``use_dfs_sample``: the **DFS** (Depth first search) or **BFS** (Breadth first search) sampling.
 
 * ``eloc_param``: see :ref:`eloc-params`
+
+* ``use_spin_flip``: see: :ref:`spin_flip`, ``from utils.public_function import SpinProjection; SpinProjection.init(N=nele, S=0)``
 
 **Notes**:
 
