@@ -150,15 +150,21 @@ def fci_revise(
     """
     Convert FCI coeff coming from pyscf output to CIWavefunction Class.
     """
-    dim = fci_amp.shape[0]
-    for i in range(dim):
-        for j in range(dim):
-            s = onv_to_tensor(full_space[i * dim + j], sorb).flatten().to("cpu").numpy()
-            s = (1 + s) / 2  # 1: occupied, 0: unoccupied
-            # sign IaIb -> onv
-            fci_amp[i, j] *= ONV(onv=s).phase()
 
-    coeff = torch.from_numpy(fci_amp).reshape(-1).to(dtype=torch.double)
+    def batch_phase(onv_batch) -> np.ndarray:
+        result = np.zeros(onv_batch.shape[0])
+        for i in range(2, onv_batch.shape[1], 2):
+            onv_bool = onv_batch[:, i] # bool array, 0/1
+            result += np.sum(onv_batch[:, 1:i:2], axis=-1) % 2 * onv_bool
+        return -2 * (result % 2) + 1
+
+    ci_space = ((onv_to_tensor(full_space, sorb) + 1) / 2).long().numpy()
+    dim = fci_amp.shape[0]
+    assert full_space.shape[0] == dim * dim
+    fci_amp = np.asarray(fci_amp).reshape(-1)
+    fci_amp = batch_phase(ci_space) * fci_amp
+
+    coeff = torch.from_numpy(fci_amp).to(dtype=torch.double)
     return CIWavefunction(coeff, full_space, device=device)
 
 
