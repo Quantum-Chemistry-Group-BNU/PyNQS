@@ -10,6 +10,7 @@ from utils.public_function import (
 )
 from libs.C_extension import get_hij_torch
 
+
 class CIWavefunction:
     """
     CI Wavefunction class
@@ -80,17 +81,17 @@ def energy_CI(
     else:
         assert batch > 0
 
-    chunks_onv = torch.chunk(onstate, int((dim - 1)/batch) + 1, 0)
-    chunks_ci = torch.chunk(coeff, int((dim - 1)/batch) + 1, 0)
-    chunks_e: list[Tensor] = []
+    chunks_onv = torch.chunk(onstate, int((dim - 1) / batch) + 1, 0)
+    chunks_ci = torch.chunk(coeff, int((dim - 1) / batch) + 1, 0)
+    chunks_e = torch.zeros(len(chunks_onv), len(chunks_onv)).type_as(coeff)
 
     for i in range(len(chunks_onv)):
         p1_onv, p1_ci = chunks_onv[i], chunks_ci[i]
-        for j in range(len(chunks_onv)):
+        for j in range(i, len(chunks_onv)):
             p2_onv, p2_ci = chunks_onv[j], chunks_ci[j]
             hij = get_hij_torch(p1_onv, p2_onv, h1e, h2e, sorb, nele).type_as(coeff)
             e = torch.einsum("i, ij, j", p1_ci.flatten(), hij, p2_ci.flatten().conj())
-            chunks_e.append(e.reshape(-1))
-    e = torch.cat(chunks_e).sum() / torch.norm(coeff)**2 + ecore
+            chunks_e[i, j] = chunks_e[j, i] = e
+    e = chunks_e.sum() / torch.norm(coeff) ** 2 + ecore
 
     return e.real.item()
