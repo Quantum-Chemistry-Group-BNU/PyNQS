@@ -67,20 +67,30 @@ def energy_CI(
     ecore: float,
     sorb: int,
     nele: int,
+    batch: int = -1,
 ) -> float:
     """
     e = <psi|H|psi>/<psi|psi>
       <psi|H|psi> = \sum_{ij}c_i<i|H|j>c_j*
     """
-    # if abs(coeff.norm().to("cpu").item() - 1.00) >= 1.0e-06:
-    #     raise ValueError(f"Normalization CI coefficient")
+    assert coeff.shape[0] == onstate.shape[0]
+    dim = onstate.shape[0]
+    if batch == -1:
+        batch = dim
+    else:
+        assert batch > 0
 
-    # TODO:how block calculate energy, matrix block
-    hij = get_hij_torch(onstate, onstate, h1e, h2e, sorb, nele).type_as(coeff)
-    e = (
-        torch.einsum("i, ij, j", coeff.flatten(), hij, coeff.flatten().conj())
-        / (torch.norm(coeff) ** 2)
-        + ecore
-    )
+    chunks_onv = torch.chunk(onstate, int((dim - 1)/batch) + 1, 0)
+    chunks_ci = torch.chunk(coeff, int((dim - 1)/batch) + 1, 0)
+    chunks_e: list[Tensor] = []
+
+    for i in range(len(chunks_onv)):
+        p1_onv, p1_ci = chunks_onv[i], chunks_ci[i]
+        for j in range(len(chunks_onv)):
+            p2_onv, p2_ci = chunks_onv[j], chunks_ci[j]
+            hij = get_hij_torch(p1_onv, p2_onv, h1e, h2e, sorb, nele).type_as(coeff)
+            e = torch.einsum("i, ij, j", p1_ci.flatten(), hij, p2_ci.flatten().conj())
+            chunks_e.append(e.reshape(-1))
+    e = torch.cat(chunks_e).sum() / torch.norm(coeff)**2 + ecore
 
     return e.real.item()
