@@ -304,10 +304,10 @@ class DBM(nn.Module):
         iscale: float = 1e-3,
         device: str = "cpu",
         activation: Callable[[Tensor], Tensor] = torch.cos,
-        params_file: str = None,
         use_complex: bool = False,
         use_imag: bool = False,
-        rbm_type: str = "cosh"
+        rbm_type: str = "cosh",
+        params_before: str = None,
     ) -> None:
         super(DBM, self).__init__()
         self.device = device
@@ -318,9 +318,11 @@ class DBM(nn.Module):
         self.factory_kwargs = {"device": self.device, "dtype": torch.double}
         self.use_imag = use_imag
         self.rbm_type = rbm_type
+        self.params_before = params_before
 
         self.nqubits = nqubits
         self.num_hidden = num_hidden
+
         self.init_params()
 
 
@@ -337,14 +339,17 @@ class DBM(nn.Module):
             shape_W += (2,)
             shape_W_prime += (2,)
 
-        # parameters for RBM
-        a = torch.rand(shape_a, **self.factory_kwargs) * self.iscale # visable bias
-        b = torch.rand(shape_b, **self.factory_kwargs) * self.iscale # hidden bias
-        W = torch.rand(shape_W, **self.factory_kwargs) * self.iscale # hidden weight
+        if self.params_before is None:
+            # parameters for RBM
+            a = torch.rand(shape_a, **self.factory_kwargs) * self.iscale # visable bias
+            b = torch.rand(shape_b, **self.factory_kwargs) * self.iscale # hidden bias
+            W = torch.rand(shape_W, **self.factory_kwargs) * self.iscale # hidden weight
+        else:
+            a,b,W = self.init_from_RBM()
 
         # parameters for deep layer
-        b_prime = torch.zeros(shape_b_prime, **self.factory_kwargs) * self.iscale # deep bias
-        W_prime = torch.zeros(shape_W_prime, **self.factory_kwargs) * self.iscale # deep weight
+        b_prime = torch.rand(shape_b_prime, **self.factory_kwargs) * self.iscale # deep bias
+        W_prime = torch.rand(shape_W_prime, **self.factory_kwargs) * self.iscale # deep weight
 
         factor = 1
         if self.use_imag:factor = 1j
@@ -385,9 +390,36 @@ class DBM(nn.Module):
         # act = torch.exp(act) # (dnbatch, hnbatch)
         # return torch.sum(act,dim=0)
         if self.rbm_type == "cosh":
-            return (2*torch.cosh(self.params_b_prime + h @ self.params_W_prime)).prod(dim=-1)
+            return (torch.cosh(self.params_b_prime + h @ self.params_W_prime)).prod(dim=-1)
         if self.rbm_type == "cos":
             return (torch.cos(self.params_b_prime + h @ self.params_W_prime)).prod(dim=-1)
+
+
+    def init_from_RBM(self,):
+        '''
+        init. from RBM(ansatz/rbm/rbm.py)
+        '''
+        # read from checkpoints
+        x: dict[str, Tensor] = torch.load(self.params_before, map_location="cpu", weights_only=False)["model"]
+        # key: params_hidden_bias, params_weights
+        KEYS = (
+            "params_visible_bias",
+            "params_hidden_bias",
+            "params_weights",
+        )
+        params_dict: dict[str, Tensor] = {}
+        for key, param in x.items():
+            # 'module.extra.params_hidden_bias', 'module.params_hidden_bias' or 'module.hidden_bias'
+            key1 = key.split(".")[-1]
+            if not key1.startswith("params_"):
+                key1 = "params_" + key1
+            if key1 in KEYS:
+                params_dict[key1] = param
+        a = params_dict[KEYS[0]].clone().to(self.device)
+        b = params_dict[KEYS[1]].clone().to(self.device)
+        W = params_dict[KEYS[2]].clone().to(self.device)
+        return a,b,W.transpose(0,1)
+
 
     def forward(self, x: Tensor):
         x = x.to(self.param_dtype)
@@ -427,3 +459,122 @@ class Jastrow(nn.Module):
         wf = torch.einsum("ijk,ni,nj->nk",self.M, x, x)
         wf = self.control(torch.exp(wf))
         return torch.prod(wf, dim=-1)
+
+
+class mlp_linear(nn.Module):
+        def __init__(self, nqubits, hidden_list=[], device = "cuda", iscale: float = 0.001, use_complex = False, params_file=None, debug=False):
+            super(mlp_linear, self).__init__()
+            self.nqubits = nqubits
+            self.device = device
+            self.iscale = iscale
+            self.use_complex = use_complex
+            self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
+            self.hidden_list = hidden_list
+            self.params_file = params_file
+            self.debug = debug
+            
+            if self.use_complex:
+                raise NotImplementedError # load from checkpoint has not realized.
+                shape_M0 = (self.nqubits, self.hidden_list[0], 2,)
+                shape_M1 = (self.hidden_list[0], self.hidden_list[1], 2,)
+                shape_b0 = (self.hidden_list[0], 2,)
+                shape_b1 = (self.hidden_list[1], 2,)
+                M0_ = torch.rand(shape_M0, **self.factory_kwargs_real) * self.iscale
+                M1_ = torch.ones(shape_M1, **self.factory_kwargs_real) * self.iscale
+                b0_ = torch.rand(shape_b0, **self.factory_kwargs_real) * self.iscale
+                b1_ = torch.zeros(shape_b1, **self.factory_kwargs_real) * self.iscale
+                M0 = nn.Parameter(M0_)
+                M1 = nn.Parameter(M1_)
+                b0 = nn.Parameter(b0_)
+                b1 = nn.Parameter(b1_)
+                self.M0 = torch.view_as_complex(M0)
+                self.M1 = torch.view_as_complex(M1)
+                self.b0 = torch.view_as_complex(b0)
+                self.b1 = torch.view_as_complex(b1)
+                if len(self.hidden_list)>2:
+                    shape_M2 = (self.hidden_list[1], self.hidden_list[2], 2,)
+                    shape_b2 = (self.hidden_list[2], 2,)
+                    M2 = nn.Parameter(torch.ones(shape_M2, **self.factory_kwargs_real) * self.iscale)
+                    b2 = nn.Parameter(torch.zeros(shape_b2, **self.factory_kwargs_real) * self.iscale)
+                    self.M2 = torch.view_as_complex(M2)
+                    self.b2 = torch.view_as_complex(b2)
+            else:
+                if self.params_file is not None:
+                    if len(self.hidden_list)>2:
+                        raise NotImplementedError
+                        M0_, M1_, b0_, b1_, M2_, b2_ = self.init_from_file()
+                    else:
+                        M0_, M1_, b0_, b1_ = self.init_from_file()
+                else:
+                    shape_M0 = (self.nqubits, self.hidden_list[0],) # (nqubits, hidden0)
+                    shape_M1 = (self.hidden_list[0], self.hidden_list[1],) # (hidden0, hidden1)
+                    shape_b0 = (self.hidden_list[0],)
+                    shape_b1 = (self.hidden_list[1],)
+                    M0_ = torch.rand(shape_M0, **self.factory_kwargs_real) * self.iscale
+                    M1_ = torch.rand(shape_M1, **self.factory_kwargs_real) * self.iscale
+                    b0_ = torch.rand(shape_b0, **self.factory_kwargs_real) * self.iscale
+                    b1_ = torch.rand(shape_b1, **self.factory_kwargs_real) * self.iscale
+                    if len(self.hidden_list)>2:
+                        shape_M2 = (self.hidden_list[1], self.hidden_list[2],) # (hidden0, hidden1)
+                        shape_b2 = (self.hidden_list[2],)
+                        M2_ = torch.rand(shape_M2, **self.factory_kwargs_real) * self.iscale
+                        b2_ = torch.rand(shape_b2, **self.factory_kwargs_real) * self.iscale
+                self.M0 = nn.Parameter(M0_)
+                self.M1 = nn.Parameter(M1_)
+                self.b0 = nn.Parameter(b0_)
+                self.b1 = nn.Parameter(b1_)
+                if len(self.hidden_list)>2:
+                    self.M2 = nn.Parameter(M2_)
+                    self.b2 = nn.Parameter(b2_)
+                if self.up:
+                    a = torch.rand((3,), **self.factory_kwargs_real) * self.iscale
+                    a[0]=1
+                    a[1]=1
+                    a[2]=0
+                    self.a = nn.Parameter(a)
+
+        def init_from_file(self,):
+            self.up = True # a,b=1;c=0
+            # read from checkpoints
+            x: dict[str, Tensor] = torch.load(self.params_file, map_location="cpu", weights_only=False)["model"]
+            # key: params_hidden_bias, params_weights
+            KEYS = (
+                "params_M0",
+                "params_M1",
+                "params_b0",
+                "params_b1",
+            )
+            params_dict: dict[str, Tensor] = {}
+            for key, param in x.items():
+                # 'module.extra.params_hidden_bias', 'module.params_hidden_bias' or 'module.hidden_bias'
+                key1 = key.split(".")[-1]
+                if not key1.startswith("params_"):
+                    key1 = "params_" + key1
+                if key1 in KEYS:
+                    params_dict[key1] = param
+            M0 = params_dict[KEYS[0]].clone().to(self.device)
+            M1 = params_dict[KEYS[1]].clone().to(self.device)
+            b0 = params_dict[KEYS[2]].clone().to(self.device)
+            b1 = params_dict[KEYS[3]].clone().to(self.device)
+            return M0, M1, b0, b1
+
+        
+        def GELU(self, x):
+            return 0.5*x*(1+torch.tanh(torch.sqrt(torch.tensor(2/torch.pi))*(x+0.044715*x**3)))
+
+
+        def forward(self, x):
+            if self.up:
+                self.f0 = lambda x: self.a[0] * x**2 + self.a[1] * x + self.a[2]
+            else:
+                self.f0 = lambda x: x**2 + x
+            if len(self.hidden_list)>2:
+                self.f1 = self.f0
+            if self.use_complex:
+                x = x.to(torch.complex128)
+            hidden_0 = torch.einsum("ik,ni->nk", self.M0, x) + self.b0 # (nbatch, hidden0)
+            wf = torch.einsum("ij,ni->nj", self.M1, 2*torch.pi * self.f0(hidden_0)) + self.b1 # (nbatch, hidden1)
+            if len(self.hidden_list)>2:
+                wf = torch.einsum("ij,ni->nj", self.M2, self.f1(wf)) + self.b2 # (nbatch, hidden2)
+            assert len(wf.shape) == 2
+            return torch.prod(torch.cos(wf), dim=-1)
