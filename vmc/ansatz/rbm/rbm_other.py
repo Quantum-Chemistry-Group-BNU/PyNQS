@@ -472,6 +472,7 @@ class mlp_linear(nn.Module):
             self.hidden_list = hidden_list
             self.params_file = params_file
             self.debug = debug
+            self.up = False
             
             if self.use_complex:
                 raise NotImplementedError # load from checkpoint has not realized.
