@@ -99,18 +99,18 @@
     //"-nocudainc", // check kernel functions <<< >>>
     "-DGPU=1",
     "-DMAGMA=1",
-    "-nocudalib",
+    // "-nocudalib",
     //"--cuda-path=/opt/cuda",
     // "-L/opt/cuda/lib64",
-    "--cuda-path=/home/zbwu/soft/miniconda3",
-    "-L/home/zbwu/soft/miniconda3/lib",
+    "--cuda-path=/usr/local/cuda",
+    "-L/usr/local/cuda/lib64",
     "--cuda-host-only",
     "-lcudart_static",
     "--cuda-gpu-arch=sm_75",
     "-lmagma",
     "-pthread",
     // clang does not discover both the cpp and cuda header files.
-    // "-xcuda",
+    "-xcuda",
     "-fsyntax-only",
     "-DMAGMA_ILP64", // 
 ]

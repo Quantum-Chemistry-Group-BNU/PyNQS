@@ -1,4 +1,5 @@
 #include "onstate.h"
+
 #include <algorithm>
 #include <bitset>
 #include <cstdint>
@@ -93,11 +94,21 @@ void get_olst_ab_cpu(const unsigned long *bra, int *olst, const int _len) {
 
 void get_vlst_cpu(const unsigned long *bra, int *vlst, const int sorb,
                   const int _len) {
+  // int ic = 0;
+  // auto onv = std::bitset<64>(bra[0]);
+  // for (auto i = 0; i < sorb; i++) {
+  //   if (onv[i] == 0) {
+  //     vlst[ic] = i;
+  //     ic++;
+  //   }
+  // }
   int ic = 0;
   unsigned long tmp;
   for (int i = 0; i < _len; i++) {
     // be careful about the virtual orbital case
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64 ==0 ? 64: sorb % 64));
+    tmp = (i != _len - 1)
+              ? (~bra[i])
+              : ((~bra[i]) & get_ones_cpu(sorb % 64 == 0 ? 64 : sorb % 64));
     while (tmp != 0) {
       int j = __builtin_ctzl(tmp);
       vlst[ic] = i * 64 + j;
@@ -114,7 +125,9 @@ void get_vlst_ab_cpu(const unsigned long *bra, int *vlst, const int sorb,
   int ida = 0;
   unsigned long tmp;
   for (int i = 0; i < _len; i++) {
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64 ==0 ? 64: sorb % 64));
+    tmp = (i != _len - 1)
+              ? (~bra[i])
+              : ((~bra[i]) & get_ones_cpu(sorb % 64 == 0 ? 64 : sorb % 64));
     while (tmp != 0) {
       int j = __builtin_ctzl(tmp);
       int s = i * 64 + j;
@@ -160,7 +173,9 @@ void get_olst_vlst_ab_cpu(const unsigned long *bra, int *lst, const int sorb,
   }
   // virtual orbital
   for (int i = 0; i < _len; i++) {
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64 ==0 ? 64: sorb % 64));
+    tmp = (i != _len - 1)
+              ? (~bra[i])
+              : ((~bra[i]) & get_ones_cpu(sorb % 64 == 0 ? 64 : sorb % 64));
     while (tmp != 0) {
       int j = __builtin_ctzl(tmp);
       int s = i * 64 + j;
@@ -188,7 +203,7 @@ void get_zvec_cpu(const unsigned long *bra, double *lst, const int sorb,
     }
   }
   int reset = sorb % block;
-  reset = reset > 0 ? reset:64;
+  reset = reset > 0 ? reset : 64;
   for (int j = 1; j <= reset; j++) {
     // if (idx >= sorb) break;
     lst[idx] = num_parity_cpu(bra[bra_len - 1], j);
