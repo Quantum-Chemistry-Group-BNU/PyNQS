@@ -23,6 +23,7 @@ __device__ int parity_cuda(const unsigned long *bra, const int sorb) {
     p ^= get_parity_cuda(bra[i]);
   }
   if (sorb % 64 != 0) {
+    // TODO: check
     p ^= get_parity_cuda((bra[sorb / 64] & get_ones_cuda(sorb % 64)));
   }
   return -2 * p + 1;
@@ -99,7 +100,9 @@ __device__ void get_vlst_cuda(const unsigned long *bra, int *vlst,
   unsigned long tmp;
   for (int i = 0; i < _len; i++) {
     // be careful about the virtual orbital case
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cuda(sorb % 64));
+    tmp = (i != _len - 1)
+              ? (~bra[i])
+              : ((~bra[i]) & get_ones_cuda(sorb % 64 == 0 ? 64 : sorb % 64));
     while (tmp != 0) {
       int j = __ctzl(tmp);
       vlst[ic] = i * 64 + j;
@@ -117,7 +120,9 @@ __device__ void get_vlst_ab_cuda(const unsigned long *bra, int *vlst,
   int ida = 0;
   unsigned long tmp;
   for (int i = 0; i < _len; i++) {
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cuda(sorb % 64));
+    tmp = (i != _len - 1)
+              ? (~bra[i])
+              : ((~bra[i]) & get_ones_cuda(sorb % 64 == 0 ? 64 : sorb % 64));
     while (tmp != 0) {
       int j = __ctzl(tmp);
       int s = i * 64 + j;
@@ -164,8 +169,9 @@ __device__ void get_ovlst_cuda(const unsigned long *bra, int *merged,
   }
   // virtual orbital
   for (int i = 0; i < bra_len; i++) {
-    tmp =
-        (i != bra_len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cuda(sorb % 64));
+    tmp = (i != bra_len - 1)
+              ? (~bra[i])
+              : ((~bra[i]) & get_ones_cuda(sorb % 64 == 0 ? 64 : sorb % 64));
     while (tmp != 0) {
       int j = __ctzl(tmp);
       int s = i * 64 + j;

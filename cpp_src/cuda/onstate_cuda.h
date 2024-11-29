@@ -10,7 +10,11 @@ __device__ inline int get_parity_cuda(const unsigned long x) {
   return __popcll(x) & 1;
 }
 __device__ inline unsigned long get_ones_cuda(const int n) {
-  return (1ULL << n) - 1ULL;
+  if (n == 64) {
+    return ~0ULL;
+  } else {
+    return (1ULL << n) - 1ULL;
+  }
 }  // parenthesis must be added due to priority
 __device__ inline double num_parity_cuda(unsigned long x, int i) {
   // return 2.0f * static_cast<double>(x >> ( i - 1) & 1) - 1.0f;

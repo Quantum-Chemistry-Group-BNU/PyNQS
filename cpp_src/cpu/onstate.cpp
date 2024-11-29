@@ -24,6 +24,7 @@ int parity_cpu(const unsigned long *bra, const int sorb) {
     p ^= get_parity_cpu(bra[i]);
   }
   if (sorb % 64 != 0) {
+    // TODO: check
     p ^= get_parity_cpu((bra[sorb / 64] & get_ones_cpu(sorb % 64)));
   }
   return -2 * p + 1;
@@ -96,7 +97,7 @@ void get_vlst_cpu(const unsigned long *bra, int *vlst, const int sorb,
   unsigned long tmp;
   for (int i = 0; i < _len; i++) {
     // be careful about the virtual orbital case
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64));
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64 ==0 ? 64: sorb % 64));
     while (tmp != 0) {
       int j = __builtin_ctzl(tmp);
       vlst[ic] = i * 64 + j;
@@ -113,7 +114,7 @@ void get_vlst_ab_cpu(const unsigned long *bra, int *vlst, const int sorb,
   int ida = 0;
   unsigned long tmp;
   for (int i = 0; i < _len; i++) {
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64));
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64 ==0 ? 64: sorb % 64));
     while (tmp != 0) {
       int j = __builtin_ctzl(tmp);
       int s = i * 64 + j;
@@ -159,7 +160,7 @@ void get_olst_vlst_ab_cpu(const unsigned long *bra, int *lst, const int sorb,
   }
   // virtual orbital
   for (int i = 0; i < _len; i++) {
-    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64));
+    tmp = (i != _len - 1) ? (~bra[i]) : ((~bra[i]) & get_ones_cpu(sorb % 64 ==0 ? 64: sorb % 64));
     while (tmp != 0) {
       int j = __builtin_ctzl(tmp);
       int s = i * 64 + j;
