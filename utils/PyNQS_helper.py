@@ -120,9 +120,8 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
             elif line.startswith("Sample/Extra ansatz Max-grad:"):
                 max_grad_multi.append(list(map(float, line.split()[-2:])))
             elif line.startswith("Learning Rate:"):
-                ...
                 # Learning Rate: 1.00000E-07 1.00000E-08
-                # lr.append(list(map(float, line.split()[2:].rstrip('.'))))
+                lr.append(list(map(float, line.split()[2:])))
 
     if len(grad_time) == 0:
         only_sampling = True
@@ -256,7 +255,7 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         sample_comm_time,
         LUT_broadcast,
         eloc_time,
-        # grad_time,
+        grad_time,
         total_time,
         unique_sample,
         energy,
@@ -273,9 +272,8 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         l2_grad,
         l2_grad_multi,
         max_grad_multi,
-        # lr,
+        lr,
     ]
-    # breakpoint()
     x = np.column_stack(t)
 
     names = [
@@ -288,8 +286,8 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
         "comb-x",
         "hij",
         "psi(x)",
-        # "auto-grad",
-        # "update-param",
+        "auto-grad",
+        "update-param",
         "total",
         "n-sample",
         "energy",

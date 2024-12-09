@@ -228,10 +228,10 @@ if __name__ == "__main__":
     # E = -3.236066279892  2S+1 = 1.0000000
     import networkx as nx
 
-    graph_index = list(map(int, nx.read_graphml("./H6-2.00-Bohr.graphml").adj))
-    M = 8
+    graph_index = list(map(int, nx.read_graphml("./graph/H6-maxdes0.graphml").adj))
+    M = 30
     Rmps2mpsrnn(
-        fci_dump_file="H6-2bohr-fcidump.txt",
+        fci_dump_file="H6-fcidump.txt",
         nbas=6,
         nelec=[3, 3],
         bond_dim_init=M,
@@ -245,7 +245,7 @@ if __name__ == "__main__":
             [M, 0],
             [M, 0],
         ],
-        # reorder_index=graph_index,
+        reorder_index=graph_index,
         dtype="complex",
         output_file="params_1site.pth",
         debug=True,
