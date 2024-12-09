@@ -29,15 +29,11 @@ from vmc.ansatz import (
     RBMSites,
     DecoderWaveFunction,
     MPS_RNN_2D,
-    Graph_MPS_RNN,
+    Graph_MPS_RNN,MultiPsi
 )
 from vmc.optim import VMCOptimizer, GD
-from torchinfo import summary
-from tmp.support import make_prefix
 from ci_vmc.hybrid import NqsCi
-from ci import unpack_ucisd, ucisd_to_fci, fci_revise, CIWavefunction
 from libs.C_extension import onv_to_tensor, tensor_to_onv, check_sorb
-from torchinfo import summary
 
 # from qubic import MPS_c, mps_CIcoeff, mps_sample, RunQubic
 # from qubic.qmatrix import convert_mps
@@ -55,7 +51,7 @@ if __name__ == "__main__":
     # local_rank = int(os.environ["LOCAL_RANK"])
     local_rank = 0
     # seed =int(time.time_ns() % 2**31)
-    seed = 555
+    seed = 365
     setup_seed(seed)
     # if device == "cuda":
     #     torch.cuda.set_device(local_rank)
@@ -65,21 +61,22 @@ if __name__ == "__main__":
 
     # electronic structure information
     # if dist.get_rank() == 0:
-    #     atom: str = ""
-    #     bond = 2.20
-    #     for k in range(50):
+    #     atom = ""
+    #     bond = 1.6
+    #     for k in range(8):
     #         atom += f"H, 0.00, 0.00, {k * bond:.3f} ;"
     #     integral_file = tempfile.mkstemp()[1]
     #     sorb, nele, e_lst, fci_amp, ucisd_amp, mf = interface(
     #         atom,
     #         integral_file=integral_file,
     #         cisd_coeff=True,
-    #         basis="sto-6g",
-    #         unit="bohr", # bohr 
+    #         basis="sto-3g",
+    #         # unit="bohr", # bohr 
     #         localized_orb=True,
     #         localized_method="meta-lowdin",
+    #         fci_dump_file="/Users/imacbook/Desktop/Research/zbh_push/Renormalizer_H6/H6-1.6Angstrom-fcidump.txt"
     #     )
-    #     breakpoint()
+    #     # breakpoint()
     #     # cas = (sorb // 2, (nele // 2, nele // 2))
     #     # # run_shci(mf, cas, det_file="./molecule/SHCI-N2-1.10-ccpvdz/N2-1.10-dets.bin")
     #     # run_shci(mf, cas, det_file="./tmp/dets.bin", epsilon1=[0.0001])
@@ -89,7 +86,7 @@ if __name__ == "__main__":
     #         nele,
     #         # save_onstate=True,
     #         # external_onstate="profiler/H12-1.50",
-    #         given_sorb= (nele + 2),
+    #         # given_sorb= (nele + 2),
     #         device=device,
     #         # prefix="test-onstate",
     #     )
@@ -107,13 +104,13 @@ if __name__ == "__main__":
     #             "ucisd_amp": ucisd_amp,
     #             "fci_amp": fci_amp,
     #         },
-    #         "./molecule/H-chain-50-2.20-bobr.pth",
+    #         "/Users/imacbook/Desktop/Research/zbh_push/Renormalizer_H6/H6-1.6Angstrom-fcidump.pth",
     #     )
     # breakpoint()
     # from utils.pyscf_helper.dice_pyscf import read_dice_wf
-    e = torch.load("./molecule/H8-1.60.pth", map_location="cpu")
-    h1e = e["h1e"].cuda()
-    h2e = e["h2e"].cuda()
+    e = torch.load("./molecule/H6-2.0bohr.pth", map_location="cpu")
+    h1e = e["h1e"]
+    h2e = e["h2e"]
     sorb = e["sorb"]
     noa = e["noa"]
     nob = e["nob"]
@@ -138,45 +135,103 @@ if __name__ == "__main__":
     electron_info = ElectronInfo(info_dict, device=device)
     # pre-train wavefunction, fci_wf and ucisd_wf
     ucisd_amp = e["ucisd_amp"]
-    ucisd_wf = unpack_ucisd(ucisd_amp, sorb, nele, device=device)
+    # ucisd_wf = unpack_ucisd(ucisd_amp, sorb, nele, device=device)
     # fci_wf = fci_revise(e["fci_amp"], ci_space, sorb, device=device)
     # ucisd_fci_wf = ucisd_to_fci(ucisd_amp, ci_space, sorb, nele, device=device)
     pre_train_info = {"pre_max_iter": 20, "interval": 10, "loss_type": "sample"}
-    dcut=6
-    MPS_RNN = MPS_RNN_2D(
-        use_symmetry=True,
-        nqubits=sorb,
-        nele=nele,
-        device=device,
-        dcut=dcut,
-        param_dtype=torch.complex128,
-        use_tensor=False,
-        # 这两个是规定二维计算的长宽的。
-        M=sorb,
-        hilbert_local=4,
-        # det_lut=det_lut,
-        # dcut_params=params,
-        # dcut_step=dcut+i-2,
-    )
-    # import networkx as nx
-    # graph_nn = nx.read_graphml("./graph/H12-34-maxdes1.graphml")
-    # # breakpoint()
-    # model = Graph_MPS_RNN(
+    dcut=10
+    # MPS_RNN = MPS_RNN_2D(
     #     use_symmetry=True,
-    #     param_dtype=torch.complex128,
-    #     hilbert_local=4,
     #     nqubits=sorb,
     #     nele=nele,
     #     device=device,
     #     dcut=dcut,
-    #     graph=graph_nn,
+    #     param_dtype=torch.complex128,
+    #     use_tensor=False,
+    #     # 这两个是规定二维计算的长宽的。
+    #     M=sorb,
+    #     hilbert_local=4,
+    #     # det_lut=det_lut,
+    #     # dcut_params=params,
+    #     # dcut_step=dcut+i-2,
+    # )
+    import networkx as nx
+    graph_nn = nx.read_graphml("./H6-2.00-Bohr.graphml")
+    # # breakpoint()
+    # breakpoint()
+    mpsrnn = Graph_MPS_RNN(
+        use_symmetry=True,
+        param_dtype=torch.complex128,
+        hilbert_local=4,
+        nqubits=sorb,
+        nele=nele,
+        device=device,
+        dcut=dcut,
+        graph=graph_nn,
+        # params_file="params.pth",
+        # Z2_symmetry= True,
+    )
+
+    # ansatz = model
+    rbm = RBMWavefunction(sorb, alpha=1, device=device, rbm_type="cos", iscale=1e-3)
+    # d_model = 16
+    # n_warmup = 2000
+    # transformer = DecoderWaveFunction(
+    #     sorb=sorb,
+    #     nele=nele,
+    #     alpha_nele=nele//2,
+    #     beta_nele=nele//2,
+    #     use_symmetry=True,
+    #     wf_type="complex",
+    #     n_layers=4,
+    #     device=device,
+    #     d_model=d_model,
+    #     n_heads=4,
+    #     phase_hidden_size=[512, 512],
+    #     n_out_phase=4,
+    #     use_kv_cache=True,
+    #     norm_method=0,
     # )
 
-    ansatz = MPS_RNN
-    # ansatz = MPS_RNN
+    # rnn = RNNWavefunction(
+    #     sorb,
+    #     nele,
+    #     num_hiddens=sorb * 2,
+    #     num_labels=2,
+    #     rnn_type="complex",
+    #     num_layers=1,
+    #     device=device,
+    #     common_linear=False,
+    #     combine_amp_phase=False,
+    #     phase_batch_norm=False,
+    #     phase_hidden_size=[64, 64],
+    #     n_out_phase=1,
+    # ).to(device=device)
+    # # ansatz = MultiPsi(mpsrnn, rbm)
+    # ansatz = transformer
+    # from vmc.ansatz import IsingRBM, RIsingRBM
+    # IRBM = IsingRBM(
+    #     nqubits=sorb, alpha=1, device=device, iscale=1e-3, 
+    #     # use_cmpr=True,
+    #     # params_file=None,
+    #     # params_file="test-checkpoint-1.pth",
+    # )
+    # ansatz = IRBM
+    from vmc.ansatz import DBM
+    dbm = DBM(nqubits=sorb,num_hidden=[sorb,2*sorb])
+    # RIRBM = RIsingRBM(
+    #      nqubits=sorb, alpha=2, dcut=2, device=device, iscale=1e-3,
+    #     params_file="test-checkpoint-1.pth",
+    # )
+    # # ansatz = MultiPsi(mpsrnn, imlp)
+    # ansatz = MultiPsi(mpsrnn, IRBM)
+    ansatz = MultiPsi(mpsrnn, dbm)
+    # ansatz = RIRBM
+
+    # ansatz = mpsrnn
 
     co_sh = lambda step: 0
-    lr_sh = lambda step: 0.05 * torch.exp(torch.tensor(-0.0005*step))
+    
     def clip_sh_model(dcut,step,):
         if step <= 4999:
             max_grad = 1e-2
@@ -186,7 +241,7 @@ if __name__ == "__main__":
             #     max_grad = 5*1e-3
             # else:
             #     max_grad = 1e-3
-        return max_grad
+        return 100
     def clip_sh(step):
         return clip_sh_model(dcut,step)
     if rank == 0:
@@ -201,51 +256,90 @@ if __name__ == "__main__":
         model = DDP(ansatz)
 
     nsample = int(1e4)
+    # eloc_param = {
+    #     "method": ElocMethod.REDUCE,
+    #     "use_unique": True,
+    #     "use_LUT": True,
+    #     "eps": 1e-10,
+    #     "alpha": 1.0,
+    #     "max_memory": 5,
+    #     # "batch": -1,
+    #     # "fp_batch": -1,
+    # }
     eloc_param = {
-        "method": ElocMethod.REDUCE,
+        # "method": ElocMethod.SIMPLE, # Reduce(), sample_space(样本空间), simple(精确计算)
+        "method": ElocMethod.REDUCE, # Reduce(), sample_space(样本空间), simple(精确计算)
+        # "method": ElocMethod.SAMPLE_SPACE, # Reduce(), sample_space(样本空间), simple(精确计算)
         "use_unique": True,
-        "use_LUT": True,
         "eps": 1e-10,
-        "alpha": 1.0,
-        "max_memory": 5,
-        # "batch": -1,
-        # "fp_batch": -1,
-    }
+        "eps-sample": 0,
+        # "alpha": 1.5,
+        "max_memory": 10,
+        # "batch": int(100),
+        # "batch": int(100),
+        "batch": int(1.0*1e4),
+        # "fp_batch": int(100),
+        "fp_batch": int(2*1e5),
+        }
     sampler_param = {
-        "n_sample": nsample,
+        "n_sample": int(300),
         # "start_n_sample": ss,
         # "start_iter": int(500),
         # "max_n_sample": int(1.0e7),
         # "max_unique_sample": int(1e5),
         "debug_exact": False,
-        # "therm_step": 10000,
         "seed": seed,
         "method_sample": "AR",
-        "use_LUT": True,
         "only_AD": False,
         "use_same_tree": True,
         "min_batch": 25000,
         "min_tree_height": 5, 
-        "use_dfs_sample": True, 
+        "use_dfs_sample": False, 
         # "det_lut": det_lut, # only use in CI-NQS exact optimization
         "eloc_param": eloc_param
     }
     # opt
+    # opt_type = optim.AdamW
     opt_type = optim.AdamW
-    opt_params = {"lr": 1, "betas": (0.9, 0.99)}
-    lr_scheduler = optim.lr_scheduler.LambdaLR
+    opt_params = {"lr": 1, "betas": (0.9, 0.99), "amsgrad": True}
+    # lr_scheduler = optim.lr_scheduler.LambdaLR
+    lr_sh = lambda step: 1e-2 * torch.exp(torch.tensor(-step * 0.0005))
+    lr_sh = lambda step: 1e-2
     lr_sch_params = {"lr_lambda": lr_sh}
 
+    # import torch_kfac
+    # opt = torch_kfac.KFAC(model=model,learning_rate=1e-2,damping=1e-3)
+    # # opt_params = {"lr": 1, "betas": (0.9, 0.99)}
+    # opt_params = {}
+    # normal
+    # opt = opt_type(
+    #     [
+    #         {"params": model.module.parameters()},
+    #     ], **opt_params
+    # )
+    # lr_lambda = optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_sh)
+
+    # mix
+    opt = opt_type(
+        [
+            {"params": model.module.sample.parameters()},
+            {"params": model.module.extra.parameters()}
+        ], **opt_params
+    )
+    lambda1 = lambda step: 1 * 1e-3
+    lambda2 = lambda step: 1 * 1e-3
+    lr_lambda = optim.lr_scheduler.LambdaLR(opt, lr_lambda=[lambda1, lambda2])
+
+    from kfac.preconditioner import KFACPreconditioner
+    kfac_pre = KFACPreconditioner(model,)
     # data-dtype
     dtype = Dtype(dtype=torch.complex128, device=device)
 
     vmc_opt_params = {
         "nqs": model, 
-        "opt_type": opt_type,
-        "opt_params": opt_params,
-        "lr_scheduler": lr_scheduler,
-        "lr_sch_params": lr_sch_params,
-        # "external_model": "H4-1.60-sample.pth",
+        "opt": opt,
+        "kfac": kfac_pre,
+        # "lr_scheduler": lr_lambda,
         "dtype": dtype,
         "sampler_param": sampler_param,
         "only_sample": False,
@@ -253,7 +347,7 @@ if __name__ == "__main__":
         "max_iter": 500,
         "interval": 100,
         "MAX_AD_DIM": 30000,
-        "pre_CI": ucisd_wf,
+        # "pre_CI": ucisd_wf,
         "pre_train_info": pre_train_info,
         "noise_lambda": 0.0,
         # "check_point": checkpoint_file,
@@ -266,7 +360,7 @@ if __name__ == "__main__":
         "start_clip_grad": -1,
         "use_spin_raising": True,
         "spin_raising_coeff": 1,
-        "only_output_spin_raising": False,
+        "only_output_spin_raising": True,
         "spin_raising_scheduler":co_sh,
     }
     e_ref = e_lst[0]
