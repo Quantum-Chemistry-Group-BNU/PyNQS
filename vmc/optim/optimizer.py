@@ -264,6 +264,7 @@ class VMCOptimizer(BaseVMCOptimizer):
         self.sampler.use_spin_raising = False
 
         # Sampling
+        self.sampler.seed += 1  # change random seed
         initial_state = self.onstate[0].clone().detach()
         epoch = self.max_iter
         state, state_prob, (eloc, sloc), (eloc_mean, sloc_mean) = self.sampler.run(

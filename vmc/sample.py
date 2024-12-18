@@ -559,11 +559,8 @@ class Sampler:
         Auto regressive sampling
         """
         t0 = time.time_ns()
-        # if using 'only-sample', seed should been changed
-        if self.only_sample:
-            seed = self.epoch + self.seed
-        else:
-            seed = self.seed
+        # change random seed in every iteration
+        seed = self.seed + self.epoch
         setup_seed(seed)
         while True:
             #  0/1

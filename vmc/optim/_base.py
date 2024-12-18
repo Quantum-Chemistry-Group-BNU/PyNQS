@@ -12,7 +12,7 @@ import numpy as np
 
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from typing import List, Callable, Tuple, Union, Optional
+from typing import List, Callable, Literal, Tuple, Union, Optional
 from torch import Tensor, nn
 from torch.optim.optimizer import Optimizer, required
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -194,11 +194,12 @@ class BaseVMCOptimizer(ABC):
 
         # clip grad
         self.use_clip_grad: bool = use_clip_grad
+        self.clip_grad_method: Literal["L2", "Value", None] = None
         if use_clip_grad:
             if start_clip_grad is None or start_clip_grad >= max_iter:
                 raise ValueError(f"start-clip-grad:{start_clip_grad} must be in (0, {max_iter})")
             clip_grad_method = clip_grad_method.capitalize()
-            if clip_grad_method not in ("L2", "Value"):
+            if clip_grad_method not in ("L2", "Value", None):
                 raise ValueError(f"clip_grad_method: {clip_grad_method} excepted in ('L2', 'Value')")
             self.clip_grad_method = clip_grad_method
         self.start_clip_grad = start_clip_grad
@@ -382,6 +383,8 @@ class BaseVMCOptimizer(ABC):
             self._clip_grad_L2(epoch)
         elif self.clip_grad_method == "Value":
             self._clip_grad_value(epoch)
+        elif self.clip_grad_method == None:
+            ...
         else:
             raise NotImplementedError
 
