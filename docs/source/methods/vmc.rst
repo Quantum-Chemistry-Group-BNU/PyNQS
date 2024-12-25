@@ -74,7 +74,7 @@ The expectation of energy :math:`E` is
 .. math:: 
     \begin{aligned}
         \langle E\rangle :=& \dfrac{\langle\psi|H|\psi\rangle}{\langle\psi|\psi\rangle}
-        =\dfrac{\sum_n|\langle\phi|\phi\rangle|^2\dfrac{\langle \psi | n\rangle \langle n|H|\psi\rangle}{|\langle\phi|\phi\rangle|^2}}{\sum_n |\phi(n)|^2} = \dfrac{\bigg\langle f_n^*\dfrac{\langle n|H|\psi\rangle}{\langle n|\phi \rangle} \bigg\rangle_{n\sim |\phi(n)|^2}}{\big\langle |\phi(n)|^2\big\rangle_{n\sim |\phi(n)|^2}}
+        =\dfrac{\sum_n|\langle\phi|\phi\rangle|^2\dfrac{\langle \psi | n\rangle \langle n|H|\psi\rangle}{|\langle\phi|\phi\rangle|^2}}{\sum_n |\phi(n)|^2 |f_n|^2} = \dfrac{\bigg\langle f_n^*\dfrac{\langle n|H|\psi\rangle}{\langle n|\phi \rangle} \bigg\rangle_{n\sim |\phi(n)|^2}}{\big\langle |\phi(n)|^2\big\rangle_{n\sim |\phi(n)|^2}}
     \end{aligned}
 
 The denominator is actually a constant, so remark it as :math:`B = \big\langle |\phi(n)|^2\big\rangle_{n\sim |\phi(n)|^2}, \widetilde{f}_n := f_n/\sqrt B`. Define local energy as

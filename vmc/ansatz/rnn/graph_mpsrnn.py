@@ -1013,7 +1013,7 @@ class Graph_MPS_RNN(nn.Module):
                     P = P[..., inverse_i]
                     h_ud = h_ud[..., inverse_i]
                     rate = _nbatch / n_batch * 100
-                    logger.debug(f"Reduce {i}-th qubits : {n_batch} -> {_nbatch}, rate: {rate:.4f}%")
+                    # logger.debug(f"Reduce {i}-th qubits : {n_batch} -> {_nbatch}, rate: {rate:.4f}%")
             else:
                 # h: (sorb//2, dcut, nbatch), target: (nbatch, sorb)
                 # h_ud: (4, dcut, nbatch), w: (dcut), c: scalar

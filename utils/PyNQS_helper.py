@@ -315,7 +315,7 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
     data = []
     columns = []
     for i in range(x.shape[1]):
-        if not np.allclose(x[..., i], np.zeros_like(x[..., i])):
+        if not np.allclose(x[..., i], np.zeros_like(x[..., i]), rtol=1e-10, atol=1e-12):
             columns.append(names[i])
             data.append(x[..., i])
     data = np.column_stack(data)
