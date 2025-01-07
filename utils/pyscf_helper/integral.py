@@ -192,6 +192,34 @@ def change_integral_order(
 
     return h1e, h2e
 
+def extract_kij(h1e: Tensor, h2e: Tensor,sorb: int) -> Tensor:
+    """
+    extract kij from compress 'Antisymmetrize V[pqrs]=<pq||rs>'
+    """
+
+    # check size, h1e and h2e is 1D.
+    pair = sorb * (sorb - 1) // 2
+    assert h2e.size(0) == (pair * (pair + 1)) // 2
+
+    try:
+        from libs.C_extension import decompress_h1e_h2e as decompress
+    except ImportError:
+        warnings.warn("Using compress h1e/h2e using python is pretty slower", stacklevel=2)
+        from .operator import _decompress_h1e_h2e_py as decompress
+
+    _h2e = decompress(h1e.cpu().numpy(), h2e.cpu().numpy(), sorb)[0]
+    norb = sorb // 2
+    kij = np.zeros((norb,norb))
+    for i in range(norb):
+        for j in range(norb):
+            p, q = 2 * i, 2 * i + 1
+            r, s = 2 * j, 2 * j + 1
+            kij[i, j] = _h2e[p, q, r, s]
+
+    device = h2e.device
+    return torch.from_numpy(kij).to(device=device)
+
+
 if __name__ == "__main__":
     from libs.C_extension import compress_h1e_h2e as compress
     from libs.C_extension import decompress_h1e_h2e as decompress
