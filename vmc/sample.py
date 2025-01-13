@@ -225,6 +225,8 @@ class Sampler:
         # Use WaveFunction LooKup-Table to speed up local-energy calculations
         self.use_LUT: bool = eloc_param.get("use_LUT", True)
         self.WF_LUT: Optional[WavefunctionLUT] = None
+        # sort fci space
+        self.sort_fci_space: bool = False
 
         # only sampling not backward
         self.only_sample = only_sample
@@ -981,7 +983,7 @@ class Sampler:
         """
         # using simple-eloc
         self.use_sample_space = False
-        self.reduce_psi = False
+        # self.reduce_psi = False
         fp_batch: int = self.eloc_param["fp_batch"]
 
         # split rank
@@ -1019,10 +1021,15 @@ class Sampler:
             psi_all,
             self.sorb,
             self.device,
+            sort = not self.sort_fci_space
         )
         # calculate prob
         prob_all = ((psi_all * psi_all.conj())).real / psi_all.norm() ** 2
         state_prob = prob_all[begin:end] * self.world_size
+        # avoid sort
+        if not self.sort_fci_space:
+            self.ci_space = WF_LUT.bra_key
+            self.sort_fci_space = True
         del psi_all, prob_all
         return WF_LUT, state_prob
 
