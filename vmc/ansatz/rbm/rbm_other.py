@@ -1,10 +1,10 @@
 import torch, math
 from torch import nn, Tensor
 
-from typing import Union, Any, Tuple, Union, Callable, List
+from typing import Optional, Union, Any, Tuple, Union, Callable, List
 
 from utils import get_fock_space
-from libs.C_extension  import onv_to_tensor
+from libs.C_extension import onv_to_tensor
 
 class IsingRBM(nn.Module):
     """
@@ -60,6 +60,9 @@ class IsingRBM(nn.Module):
         # fill parameters
         if self.params_file is not None:
             _hidden_bias, _weight_1, _weight_2 = self.read_param_file(self.params_file)
+            if _weight_2 is None:
+                # from RBM
+                _weight_2 = weight_2 * 0.1
             _num_hidden = _hidden_bias.shape[0]
             if self._use_cmpr:
                 _K, _U = _weight_2
@@ -87,7 +90,7 @@ class IsingRBM(nn.Module):
         else:
             self.params_weight_2 = nn.Parameter(weight_2)
 
-    def read_param_file(self, file: str) -> None:
+    def read_param_file(self, file: str) -> tuple[Tensor, Tensor, Optional[Tensor]]:
         # read from checkpoints
         x: dict[str, Tensor] = torch.load(file, map_location="cpu", weights_only=False)["model"]
         # key: params_hidden_bias, params_weights
@@ -105,6 +108,9 @@ class IsingRBM(nn.Module):
                 key1 = "params_" + key1
             if key1 in KEYS:
                 params_dict[key1] = param
+            # support RBM params (num_hidden, nqubits) -> (nqubits, num_hidden)
+            if key1 == "params_weights" and "params_weight_1" not in params_dict.keys():
+                params_dict["params_weight_1"] = param.T
 
         _hidden_bias = params_dict[KEYS[0]].clone().to(self.device)
         _weight_1 = params_dict[KEYS[1]].clone().to(self.device)
@@ -115,7 +121,10 @@ class IsingRBM(nn.Module):
             _weight_2 = (_K, _U)
         else:
             self._use_cmpr = False
-            _weight_2 = params_dict[KEYS[2]].clone().to(self.device)
+            if "params_weight_2" in params_dict.keys():
+                _weight_2 = params_dict[KEYS[2]].clone().to(self.device)
+            else:
+                _weight_2 = None
         return (_hidden_bias, _weight_1, _weight_2)
 
     def forward(self, x: Tensor):
