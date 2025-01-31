@@ -116,7 +116,7 @@ def read_integral(
     if external_onstate is not None:
         s = f"{external_onstate}.pth"
         print(f"Read the onstate from '{s}'")
-        x = torch.load(s)
+        x = torch.load(s, weights_only=False)
         onstate = x["onstate"]
     else:
         # bra/ket
