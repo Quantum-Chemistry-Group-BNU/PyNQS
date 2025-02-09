@@ -18,7 +18,7 @@ inline double num_parity_cpu(unsigned long x, int i) {
 void diff_type_cpu(const unsigned long *bra, const unsigned long *ket, int *p,
                    const int _len);
 
-int parity_cpu(const unsigned long *bra, const int sorb);
+int parity_cpu(const unsigned long *bra, const int n);
 
 void diff_orb_cpu(const unsigned long *bra, const unsigned long *ket,
                   const int _len, int *cre, int *ann);

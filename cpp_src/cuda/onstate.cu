@@ -17,14 +17,14 @@ __device__ void diff_type_cuda(const unsigned long *bra,
   }
 }
 
-__device__ int parity_cuda(const unsigned long *bra, const int sorb) {
+__device__ int parity_cuda(const unsigned long *bra, const int n) {
   int p = 0;
-  for (int i = 0; i < sorb / 64; i++) {
+  for (int i = 0; i < n / 64; i++) {
     p ^= get_parity_cuda(bra[i]);
   }
-  if (sorb % 64 != 0) {
+  if (n % 64 != 0) {
     // TODO: check
-    p ^= get_parity_cuda((bra[sorb / 64] & get_ones_cuda(sorb % 64)));
+    p ^= get_parity_cuda((bra[n / 64] & get_ones_cuda(n % 64)));
   }
   return -2 * p + 1;
 }

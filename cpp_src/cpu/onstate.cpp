@@ -19,14 +19,14 @@ void diff_type_cpu(const unsigned long *bra, const unsigned long *ket, int *p,
   }
 }
 
-int parity_cpu(const unsigned long *bra, const int sorb) {
+int parity_cpu(const unsigned long *bra, const int n) {
   int p = 0;
-  for (int i = 0; i < sorb / 64; i++) {
+  for (int i = 0; i < n / 64; i++) {
     p ^= get_parity_cpu(bra[i]);
   }
-  if (sorb % 64 != 0) {
+  if (n % 64 != 0) {
     // TODO: check
-    p ^= get_parity_cpu((bra[sorb / 64] & get_ones_cpu(sorb % 64)));
+    p ^= get_parity_cpu((bra[n / 64] & get_ones_cpu(n % 64)));
   }
   return -2 * p + 1;
 }
