@@ -143,13 +143,22 @@ class VMCOptimizer(BaseVMCOptimizer):
             else:
                 initial_state = self.onstate[0].clone().detach()
 
+            # change random seed, continue train from checkpoint
+            if self.lr_scheduler is not None:
+                _epoch = self.lr_scheduler[0].last_epoch
+            else:
+                # read checkpoint
+                if len(self.grad_e_lst[0]) > epoch:
+                    _epoch = len(self.grad_e_lst[0])
+                else:
+                    _epoch = epoch
             state, state_prob, (eloc, sloc), (eloc_mean, sloc_mean) = self.sampler.run(
-                initial_state, epoch=epoch
+                initial_state, epoch=_epoch
             )
             if self.only_sample:
-                delta = (time.time_ns() - t0) / 1.00e06
+                delta = (time.time_ns() - t0) / 1.00e09
                 if self.rank == 0:
-                    s = f"{epoch}-th only Sampling finished, cost time {delta:.3f} ms\n"
+                    s = f"{epoch}-th only Sampling finished, cost time {delta:.3f} s\n"
                     s += "=" * 100
                     logger.info(s, master=True)
                 continue
@@ -158,7 +167,7 @@ class VMCOptimizer(BaseVMCOptimizer):
 
             if self.spin_raising_scheduler is not None:
                 c0 = self.initial_spin_spin_coeff
-                self.spin_raising_coeff = self.spin_raising_scheduler(epoch) * c0
+                self.spin_raising_coeff = self.spin_raising_scheduler(_epoch) * c0
             # calculate model grad
             t1 = time.time_ns()
             if self.sr:
@@ -200,7 +209,7 @@ class VMCOptimizer(BaseVMCOptimizer):
             delta_grad = (time.time_ns() - t1) / 1.00e09
 
             # save the energy grad and clip-grad
-            self.clip_grad(epoch=epoch)
+            self.clip_grad(epoch=_epoch)
             e_total = (eloc_mean + sloc_mean).real.item() + self.ecore
             self.save_grad_energy(e_total)
 

@@ -6,6 +6,7 @@ import random
 import tempfile
 import warnings
 import torch
+import torch.distributed as dist
 
 from typing import Callable, Tuple, List, Union, Optional
 from typing_extensions import TypedDict, NotRequired
@@ -23,7 +24,6 @@ from libs.C_extension import (
     tensor_to_onv,
     merge_rank_sample,
 )
-from utils import ElectronInfo, check_para, get_nbatch, diff_rank_seed
 from utils.distributed import (
     all_gather_tensor,
     all_reduce_tensor,
@@ -35,14 +35,19 @@ from utils.distributed import (
     broadcast_tensor,
 )
 from utils.public_function import (
-    torch_unique_index,
-    WavefunctionLUT,
     split_length_idx,
     split_batch_idx,
     setup_seed,
+    diff_rank_seed,
+    get_nbatch,
+    check_para,
     ansatz_batch,
     spin_flip_onv,
     spin_flip_sign,
+    torch_sort_onv,
+    torch_unique_index,
+    WavefunctionLUT,
+    ElectronInfo,
     SpinProjection,
 )
 from utils.det_helper import DetLUT
@@ -986,6 +991,12 @@ class Sampler:
         # self.reduce_psi = False
         fp_batch: int = self.eloc_param["fp_batch"]
 
+        # avoid sort
+        if not self.sort_fci_space:
+            idx = torch_sort_onv(self.ci_space)
+            self.ci_space = self.ci_space[idx]
+            self.sort_fci_space = True
+
         # split rank
         dim = self.ci_space.size(0)
         idx_rank_lst = [0] + split_length_idx(dim, length=self.world_size)
@@ -1007,8 +1018,6 @@ class Sampler:
                 model = self.nqs
             psi_rank = self.ansatz_batch(ci_space_rank, model, fp_batch)
         t1 = time.time_ns()
-        if self.rank == 0:
-            logger.info(f"Rank-psi: {(t1-t0)/1.0e9:.3E} s", master=True)
 
         psi_all = all_gather_tensor(psi_rank, self.device, self.world_size)
         synchronize()
@@ -1021,16 +1030,14 @@ class Sampler:
             psi_all,
             self.sorb,
             self.device,
-            sort = not self.sort_fci_space
+            sort = False,
         )
         # calculate prob
-        prob_all = ((psi_all * psi_all.conj())).real / psi_all.norm() ** 2
-        state_prob = prob_all[begin:end] * self.world_size
-        # avoid sort
-        if not self.sort_fci_space:
-            self.ci_space = WF_LUT.bra_key
-            self.sort_fci_space = True
-        del psi_all, prob_all
+        norm_all = (psi_rank.norm()**2).reshape(-1)
+        all_reduce_tensor(norm_all, op=dist.ReduceOp.SUM)
+        state_prob = (psi_rank * psi_rank.conj()).real / norm_all
+        if self.rank == 0:
+            logger.info(f"End construct, cost time: {(t1-t0)/1.0e9:.3E} s", master=True)
         return WF_LUT, state_prob
 
     @torch.no_grad

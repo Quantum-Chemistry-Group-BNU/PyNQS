@@ -373,12 +373,6 @@ class BaseVMCOptimizer(ABC):
         del x1, x2
 
     def clip_grad(self, epoch: int) -> None:
-        if self.lr_scheduler is not None:
-            epoch = self.lr_scheduler[0].last_epoch
-        else:
-            # read epoch checkpoint
-            if len(self.grad_e_lst[0]) > epoch:
-                epoch = len(self.grad_e_lst[0])
         if self.clip_grad_method == "L2":
             self._clip_grad_L2(epoch)
         elif self.clip_grad_method == "Value":
