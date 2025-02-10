@@ -119,6 +119,46 @@ Tensor get_merged_tensor_cuda(const Tensor bra, const int nele, const int sorb,
   return merged;
 }
 
+tuple_tensor_2d get_comb_tensor_fused_cuda(const Tensor &bra_tensor,
+                                           const int sorb, const int nele,
+                                           const int noA, const int noB,
+                                           const Tensor &h1e,
+                                           const Tensor &h2e) {
+  // bra_tensor: (nbatch, bra_len * 8)
+  const int bra_len = (sorb - 1) / 64 + 1;
+  const int ncomb = squant::get_Num_SinglesDoubles_cuda(sorb, noA, noB) + 1;
+  const int nbatch = bra_tensor.size(0);
+
+  Tensor comb, Hmat;
+  // bra is empty
+  if (bra_tensor.numel() == 0) {
+    auto device = bra_tensor.device();
+    comb = torch::empty(
+        {0, ncomb, bra_len * 8},
+        torch::TensorOptions().dtype(torch::kUInt8).device(device));
+    Hmat = torch::empty(
+        {0, ncomb},
+        torch::TensorOptions().dtype(torch::kDouble).device(device));
+    return std::make_tuple(comb, Hmat);
+  }
+
+  // comb: (nbatch, ncomb, bra_len * 8)
+  Hmat = torch::empty({nbatch, ncomb}, h1e.options());
+  comb = bra_tensor.unsqueeze(1).repeat({1, ncomb, 1});
+  unsigned long *comb_ptr =
+      reinterpret_cast<unsigned long *>(comb.data_ptr<uint8_t>());
+  double *Hmat_ptr = Hmat.data_ptr<double>();
+  double *h1e_ptr = h1e.data_ptr<double>();
+  double *h2e_ptr = h2e.data_ptr<double>();
+
+  // run cuda, merged: (nbatch, ncomb)
+  Tensor merged = get_merged_tensor_cuda(bra_tensor, nele, sorb, noA, noB);
+  int *merged_ptr = merged.data_ptr<int32_t>();
+  squant::get_comb_fused_cuda(comb_ptr, merged_ptr, h1e_ptr, h2e_ptr, Hmat_ptr, sorb,
+                              bra_len, noA, noB, nbatch, ncomb);
+  return std::make_tuple(comb, Hmat);
+}
+
 tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
                                      const int nele, const int noA,
                                      const int noB, bool flag_bit) {

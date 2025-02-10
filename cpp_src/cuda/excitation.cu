@@ -1,9 +1,14 @@
 #include "../common/default.h"
 #include "excitation_cuda.h"
 
+#include "hamiltonian_cuda.h"
+#include "onstate_cuda.h"
+#include "stdio.h"
+
 namespace squant {
 
-__host__ __device__ int get_Num_SinglesDoubles_cuda(const int sorb, const int noA, const int noB) {
+__host__ __device__ int
+get_Num_SinglesDoubles_cuda(const int sorb, const int noA, const int noB) {
   int k = sorb / 2;
   int nvA = k - noA, nvB = k - noB;
   int nSa = noA * nvA, nSb = noB * nvB;
@@ -38,6 +43,7 @@ __device__ void unpack_Singles_Doubles_cuda(const int sorb, const int noA,
   int icase = i0 + i1 + i2 + i3;
   int i, a, j, b;
   i = a = j = b = -1;
+  int case_SD = 0;
   switch (icase) {
   case 0: {
     // aa
@@ -68,6 +74,7 @@ __device__ void unpack_Singles_Doubles_cuda(const int sorb, const int noA,
     j = s1[1] * 2;
     a = (s2[0] + noA) * 2;
     b = (s2[1] + noA) * 2;
+    case_SD = 1;
     break;
   }
   case 3: {
@@ -83,6 +90,7 @@ __device__ void unpack_Singles_Doubles_cuda(const int sorb, const int noA,
     j = s1[1] * 2 + 1;
     a = (s2[0] + noB) * 2 + 1; // a > b
     b = (s2[1] + noB) * 2 + 1;
+    case_SD = 1;
     break;
   }
   case 4: {
@@ -94,6 +102,7 @@ __device__ void unpack_Singles_Doubles_cuda(const int sorb, const int noA,
     a = (iaA / noA + noA) * 2;
     j = (jbB % noB) * 2 + 1;
     b = (jbB / noB + noB) * 2 + 1;
+    case_SD = 1;
     break;
   }
   }
@@ -101,14 +110,15 @@ __device__ void unpack_Singles_Doubles_cuda(const int sorb, const int noA,
   idx_lst[1] = a;
   idx_lst[2] = j;
   idx_lst[3] = b;
+  idx_lst[4] = case_SD;
 }
 
 __device__ void get_comb_SD_cuda(unsigned long *comb, double *lst,
                                  const int *merged, const int r0,
                                  const int sorb, const int noA, const int noB) {
-  int idx_lst[4] = {0};
+  int idx_lst[5] = {0};
   unpack_Singles_Doubles_cuda(sorb, noA, noB, r0, idx_lst);
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
     BIT_FLIP(comb[idx / 64], idx % 64);
@@ -116,12 +126,60 @@ __device__ void get_comb_SD_cuda(unsigned long *comb, double *lst,
   }
 }
 
+__device__ double get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
+                                         const double *h1e, const double *h2e,
+                                         unsigned long *bra, const int r0,
+                                         const int sorb, const int len,
+                                         const int noA, const int noB) {
+  int idx_lst[5] = {0};
+  int orbital_lst[4] = {0};
+  int p[2], q[2];
+
+  unpack_Singles_Doubles_cuda(sorb, noA, noB, r0, idx_lst);
+  for (int i = 0; i < 4; i++) {
+    int idx = merged[idx_lst[i]];
+    orbital_lst[i] = idx;
+    BIT_FLIP(comb[idx / 64], idx % 64); // in-place
+  }
+
+  double Hij = 0.00;
+  if (idx_lst[4] == 0) {
+    // Single
+    p[0] = orbital_lst[0];
+    q[0] = orbital_lst[1];
+    Hij += h1e_get_cuda(h1e, p[0], q[0], sorb); // hpq
+    for (int i = 0; i < len; i++) {
+      unsigned long repr = bra[i];
+      while (repr != 0) {
+        int j = 63 - __clzl(repr);
+        int k = 64 * i + j;
+        Hij += h2e_get_cuda(h2e, p[0], k, q[0], k); //<pk||qk>
+        repr &= ~(1ULL << j);
+      }
+    }
+    int sgn = parity_cuda(bra, p[0]) * parity_cuda(comb, q[0]);
+    Hij *= static_cast<double>(sgn);
+  } else {
+    // double
+    p[0] = max(orbital_lst[0], orbital_lst[2]);
+    p[1] = min(orbital_lst[0], orbital_lst[2]);
+    q[0] = max(orbital_lst[1], orbital_lst[3]);
+    q[1] = min(orbital_lst[1], orbital_lst[3]);
+    int sgn = parity_cuda(bra, p[0]) * parity_cuda(bra, p[1]) *
+              parity_cuda(comb, q[0]) * parity_cuda(comb, q[1]);
+    Hij = h2e_get_cuda(h2e, p[0], p[1], q[0], q[1]);
+    Hij *= static_cast<double>(sgn);
+    // printf("hij: %.4e\n", Hij);
+  }
+  return Hij;
+}
+
 __device__ void get_comb_SD_cuda(unsigned long *comb, const int *merged,
                                  const int r0, const int sorb, const int noA,
                                  const int noB) {
-  int idx_lst[4] = {0};
+  int idx_lst[5] = {0};
   unpack_Singles_Doubles_cuda(sorb, noA, noB, r0, idx_lst);
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
     BIT_FLIP(comb[idx / 64], idx % 64);

@@ -298,7 +298,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("flag_bit") = false,
         "Return all singles and doubles excitation for given onstate(1D, 2D) "
         "using CPU or GPU");
-  m.def("get_comb_tensor_fused", &get_comb_tensor_fused_cpu);
+  m.def("get_comb_tensor_fused_cpu", &get_comb_tensor_fused_cpu);
+  m.def("get_comb_tensor_fused_cuda", &get_comb_tensor_fused_cuda);
   m.def("onv_to_tensor", &onv_to_tensor, py::arg("bra"), py::arg("sorb"),
         "convert onv to bit (-1:unoccupied, 1: occupied) for given onv(1D, 2D) "
         "using CPU or GPU");

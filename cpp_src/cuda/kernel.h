@@ -49,6 +49,12 @@ __host__ void get_comb_cuda(unsigned long *comb, const int *merged_ovlst,
                             const int sorb, const int bra_len, const int noA,
                             const int noB, const int nbatch, const int ncomb);
 
+__host__ void get_comb_fused_cuda(unsigned long *comb, const int *merged,
+                                  const double *h1e, const double *h2e,
+                                  double *Hmat, const int sorb, const int len,
+                                  const int noA, const int noB,
+                                  const int nbatch, const int ncomb);
+
 __host__ void permute_sng_batch_cuda(const int64_t *image2,
                                      const int64_t *onstate, int64_t *index,
                                      int64_t *sgn, const int size,

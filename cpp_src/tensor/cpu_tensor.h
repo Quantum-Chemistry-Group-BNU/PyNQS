@@ -21,7 +21,7 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
 tuple_tensor_2d get_comb_tensor_fused_cpu(const Tensor &bra_tensor,
                                           const int sorb, const int nele,
                                           const int noA, const int noB,
-                                          const Tensor h1e, const Tensor h2e);
+                                          const Tensor &h1e, const Tensor &h2e);
 
 Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
                           const Tensor &h1e_tensor, const Tensor &h2e_tensor,
