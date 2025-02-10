@@ -149,10 +149,6 @@ Tensor get_merged_tensor_cpu(const Tensor bra, const int nele, const int sorb,
                                    sorb, bra_len);
     }
   });
-  // for (int i = 0; i < nbatch; i++) {
-  //   squant::get_olst_vlst_ab_cpu(&bra_ptr[i * bra_len], &merged_ptr[i * sorb],
-  //                                sorb, bra_len);
-  // }
   return merged;
 }
 
@@ -210,6 +206,51 @@ tuple_tensor_2d get_comb_tensor_cpu(const Tensor &bra_tensor, const int sorb,
     }
   });
   return std::make_tuple(comb, comb_bit);
+}
+
+tuple_tensor_2d get_comb_tensor_fused_cpu(const Tensor &bra_tensor,
+                                          const int sorb, const int nele,
+                                          const int noA, const int noB,
+                                          const Tensor h1e, const Tensor h2e) {
+  const int bra_len = (sorb - 1) / 64 + 1;
+  const int ncomb = squant::get_Num_SinglesDoubles(sorb, noA, noB) + 1;
+  const int nbatch = bra_tensor.size(0);
+  Tensor Hmat = torch::empty({nbatch, ncomb}, h1e.options());
+  double *h1e_ptr = h1e.data_ptr<double>();
+  double *h2e_ptr = h2e.data_ptr<double>();
+  double *Hmat_ptr = Hmat.data_ptr<double>();
+  Tensor comb, comb_bit;
+
+  // bra is empty
+  if (bra_tensor.numel() == 0) {
+    auto device = bra_tensor.device();
+    comb = torch::empty(
+        {0, ncomb, bra_len * 8},
+        torch::TensorOptions().dtype(torch::kUInt8).device(device));
+    return std::make_tuple(comb, Hmat);
+  }
+
+  // bra_tensor: (nbatch, ncomb, bra_len *8)
+  comb = bra_tensor.unsqueeze(1).repeat({1, ncomb, 1});
+  unsigned long *comb_ptr =
+      reinterpret_cast<unsigned long *>(comb.data_ptr<uint8_t>());
+
+  // merged: (nbatch, ncomb)
+  Tensor merged = get_merged_tensor_cpu(bra_tensor, nele, sorb, noA, noB);
+  int *merged_ptr = merged.data_ptr<int32_t>();
+  at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+    for (const auto i : c10::irange(begin, end)) {
+      auto n0 = &comb_ptr[i * ncomb * bra_len];
+      Hmat_ptr[i * ncomb] =
+          squant::get_Hii_cpu(n0, n0, h1e_ptr, h2e_ptr, sorb, nele, bra_len);
+      for (int j = 1; j < ncomb; j++) {
+        Hmat_ptr[i * ncomb + j] = squant::get_comb_SD_fused(
+            &comb_ptr[i * ncomb * bra_len + j * bra_len], &merged_ptr[i * sorb],
+            h1e_ptr, h2e_ptr, n0, j - 1, sorb, bra_len, noA, noB);
+      }
+    }
+  });
+  return std::make_tuple(comb, Hmat);
 }
 
 Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
@@ -493,8 +534,8 @@ Tensor merge_sample_cpu(const Tensor &idx, const Tensor &counts,
 
 Tensor constrain_make_charts_cpu(const Tensor &sym_index) {
   const int64_t nbatch = sym_index.size(0);
-  
-  if(nbatch == 0){
+
+  if (nbatch == 0) {
     return torch::zeros({0, 4}).to(torch::kDouble);
   }
 
@@ -576,7 +617,8 @@ int64_t binary_search_BigInteger(const IntType *arr, const IntType *target,
 }
 
 tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
-                            const int sorb, const bool little_endian = true) {
+                                     const int sorb,
+                                     const bool little_endian = true) {
   // bra_key: (length, bra_len * 8)
   // onv: (nbatch, bra_len * 8)
   // little_endian: the order of the bra_key, default is little-endian
@@ -586,8 +628,10 @@ tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
   const int64_t nbatch = onv.size(0);
   int64_t length = bra_key.size(0);
 
-  auto options = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU);
-  auto options_bool =  torch::TensorOptions().dtype(torch::kBool).device(torch::kCPU);
+  auto options =
+      torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU);
+  auto options_bool =
+      torch::TensorOptions().dtype(torch::kBool).device(torch::kCPU);
 
   if (onv.numel() == 0) {
     Tensor result = torch::zeros({0}, options);
@@ -608,7 +652,7 @@ tuple_tensor_2d wavefunction_lut_cpu(const Tensor &bra_key, const Tensor &onv,
   // parallel, ref: https://zhuanlan.zhihu.com/p/652659936
   // std::cout << "nbatch: " << nbatch << " length: " << length << std::endl;
   at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
-    for (const auto i: c10::irange(begin, end)) {
+    for (const auto i : c10::irange(begin, end)) {
       auto x = binary_search_BigInteger<unsigned long>(
           bra_key_ptr, &onv_ptr[i * bra_len], length, bra_len, little_endian);
       result_ptr[i] = x;

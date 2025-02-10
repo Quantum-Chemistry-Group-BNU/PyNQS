@@ -1,5 +1,8 @@
 #include "excitation.h"
 
+#include "cpu/onstate.h"
+#include "hamiltonian.h"
+
 namespace squant {
 
 int get_Num_SinglesDoubles(const int sorb, const int noA, const int noB) {
@@ -13,7 +16,7 @@ int get_Num_SinglesDoubles(const int sorb, const int noA, const int noB) {
 }
 
 void unpack_SinglesDoubles(const int sorb, const int noA, const int noB,
-                            const int idx, int *idx_lst) {
+                           const int idx, int *idx_lst) {
   int k = sorb / 2;
   int nvA = k - noA, nvB = k - noB;
   int nSa = noA * nvA, nSb = noB * nvB;
@@ -36,6 +39,7 @@ void unpack_SinglesDoubles(const int sorb, const int noA, const int noB,
   int icase = i0 + i1 + i2 + i3;
   int i, a, j, b;
   i = a = j = b = -1;
+  int case_SD = 0;
   switch (icase) {
     case 0: {
       // aa
@@ -66,6 +70,7 @@ void unpack_SinglesDoubles(const int sorb, const int noA, const int noB,
       j = s1[1] * 2;
       a = (s2[0] + noA) * 2;
       b = (s2[1] + noA) * 2;
+      case_SD = 1;
       break;
     }
     case 3: {
@@ -81,6 +86,7 @@ void unpack_SinglesDoubles(const int sorb, const int noA, const int noB,
       j = s1[1] * 2 + 1;
       a = (s2[0] + noB) * 2 + 1;  // a > b
       b = (s2[1] + noB) * 2 + 1;
+      case_SD = 1;
       break;
     }
     case 4: {
@@ -92,6 +98,7 @@ void unpack_SinglesDoubles(const int sorb, const int noA, const int noB,
       a = (iaA / noA + noA) * 2;
       j = (jbB % noB) * 2 + 1;
       b = (jbB / noB + noB) * 2 + 1;
+      case_SD = 1;
       break;
     }
   }
@@ -99,24 +106,71 @@ void unpack_SinglesDoubles(const int sorb, const int noA, const int noB,
   idx_lst[1] = a;
   idx_lst[2] = j;
   idx_lst[3] = b;
+  idx_lst[4] = case_SD;
 }
 
 void get_comb_SD(unsigned long *comb, const int *merged, const int r0,
                  const int sorb, const int len, const int noA, const int noB) {
-  int idx_lst[4] = {0};
+  int idx_lst[5] = {0};
   // std::cout << "i j k l: ";
   unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
     BIT_FLIP(comb[idx / 64], idx % 64);
+    // std::cout << idx << std::endl;
   }
-  // std::cout << std::endl;
+}
+
+double get_comb_SD_fused(unsigned long *comb, const int *merged, double *h1e,
+                         double *h2e, unsigned long *bra, const int r0,
+                         const int sorb, const int len, const int noA,
+                         const int noB) {
+  int idx_lst[5] = {0};
+  int orbital_lst[4] = {0};
+  int p[2], q[2];
+
+  unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
+  for (int i = 0; i < 4; i++) {
+    int idx = merged[idx_lst[i]];
+    orbital_lst[i] = idx;
+    BIT_FLIP(comb[idx / 64], idx % 64);  // in-place
+  }
+
+  double Hij = 0.00;
+  if (idx_lst[4] == 0) {
+    // Single
+    p[0] = orbital_lst[0];
+    q[0] = orbital_lst[1];
+    Hij += h1e_get_cpu(h1e, p[0], q[0], sorb);  // hpq
+    for (int i = 0; i < len; i++) {
+      unsigned long repr = bra[i];
+      while (repr != 0) {
+        int j = 63 - __builtin_clzl(repr);
+        int k = 64 * i + j;
+        Hij += h2e_get_cpu(h2e, p[0], k, q[0], k);  //<pk||qk>
+        repr &= ~(1ULL << j);
+      }
+    }
+    int sgn = parity_cpu(bra, p[0]) * parity_cpu(comb, q[0]);
+    Hij *= static_cast<double>(sgn);
+  } else {
+    assert(idx_lst[4] == 1);
+    // double
+    std::tie(p[1], p[0]) = std::minmax(orbital_lst[0], orbital_lst[2]);
+    std::tie(q[1], q[0]) = std::minmax(orbital_lst[1], orbital_lst[3]);
+    int sgn = parity_cpu(bra, p[0]) * parity_cpu(bra, p[1]) *
+              parity_cpu(comb, q[0]) * parity_cpu(comb, q[1]);
+    Hij = h2e_get_cpu(h2e, p[0], p[1], q[0], q[1]);
+
+    Hij *= static_cast<double>(sgn);
+  }
+  return Hij;
 }
 
 void get_comb_SD(unsigned long *comb, double *lst, const int *merged,
                  const int r0, const int sorb, const int len, const int noA,
-                 const int noB){
-  int idx_lst[4] = {0};
+                 const int noB) {
+  int idx_lst[5] = {0};
   unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];

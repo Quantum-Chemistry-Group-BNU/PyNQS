@@ -22,4 +22,8 @@ void get_comb_SD(unsigned long *comb, double *lst, const int *merged,
                  const int r0, const int sorb, const int len, const int noA,
                  const int noB);
 
+double get_comb_SD_fused(unsigned long *comb, const int *merged, double *h1e,
+                       double *h2e, unsigned long *bra, const int r0, const int sorb, const int len,
+                       const int noA, const int noB);
+
 }  // namespace squant
