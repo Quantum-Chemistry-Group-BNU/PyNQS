@@ -232,8 +232,11 @@ __global__ void get_comb_SD_fused_kernel(unsigned long *comb, const int *merged,
   if (threadIdx.x < sorb) {
     _merged_sh[threadIdx.x] = merged[idx * sorb + threadIdx.x];
   }
-  if (threadIdx.x < _len) {
-    n0[threadIdx.x] = comb[idx * ncomb + threadIdx.x];
+  if (threadIdx.x == 0) {
+#pragma unroll
+    for (int i = 0; i < _len; i++) {
+      n0[i] = comb[idx * ncomb * _len + i];
+    }
   }
   __syncthreads();
 
@@ -251,14 +254,14 @@ __global__ void get_comb_SD_fused_kernel(unsigned long *comb, const int *merged,
   }
 }
 
-__host__ void squant::get_comb_fused_cuda(unsigned long *comb, const int *merged,
-                                  const double *h1e, const double *h2e,
-                                  double *Hmat, const int sorb, const int len,
-                                  const int noA, const int noB,
-                                  const int nbatch, const int ncomb) {
+__host__ void squant::get_comb_fused_cuda(unsigned long *comb,
+                                          const int *merged, const double *h1e,
+                                          const double *h2e, double *Hmat,
+                                          const int sorb, const int len,
+                                          const int noA, const int noB,
+                                          const int nbatch, const int ncomb) {
   dim3 blockDim(256);
   dim3 gridDim(nbatch * ((ncomb - 1) / blockDim.x + 1));
-  // printf("grid-num: %d, nbatch: %d, ncomb: %d\n", gridDim.x, nbatch, ncomb);
   get_comb_SD_fused_kernel<MAX_SORB_LEN><<<gridDim, blockDim>>>(
       comb, merged, h1e, h2e, Hmat, sorb, noA, noB, nbatch, ncomb);
   cudaError_t cudaStatus = cudaGetLastError();
