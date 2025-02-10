@@ -153,7 +153,7 @@ class VMCOptimizer(BaseVMCOptimizer):
                 else:
                     _epoch = epoch
             state, state_prob, (eloc, sloc), (eloc_mean, sloc_mean) = self.sampler.run(
-                initial_state, epoch=_epoch
+                initial_state, epoch=_epoch if not self.only_sample else epoch
             )
             if self.only_sample:
                 delta = (time.time_ns() - t0) / 1.00e09
