@@ -8,7 +8,6 @@
 #include <tuple>
 #include <vector>
 
-#include "c10/cuda/CUDAFunctions.h"
 #include "common/utils.h"
 #include "cuda/kernel.h"
 #include "interface_magma.h"

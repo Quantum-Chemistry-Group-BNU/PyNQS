@@ -3,8 +3,8 @@
 
 #include "cpu_tensor.h"
 #include "cuda_tensor.h"
-#include "utils_tensor.h"
 #include "integral.h"
+#include "utils_tensor.h"
 
 Tensor tensor_to_onv(const Tensor &bra_tensor, const int sorb) {
   const auto dim = bra_tensor.dim();
@@ -236,6 +236,19 @@ tuple_tensor_2d wavefunction_lut(const Tensor &bra_key, const Tensor &onv,
   }
 }
 
+tuple_tensor_2d get_comb_hij_fused(const Tensor &bra, const Tensor &h1e,
+                                   const Tensor &h2e, const int sorb,
+                                   const int nele, const int noA,
+                                   const int noB) {
+  if (bra.is_cpu() && h1e.is_cpu() && h2e.is_cpu()) {
+#ifdef GPU
+    return get_comb_tensor_fused_cpu(bra, sorb, nele, noA, noB, h1e, h2e);
+  } else {
+    return get_comb_tensor_fused_cuda(bra, sorb, nele, noA, noB, h1e, h2e);
+#endif
+  }
+}
+
 tuple_tensor_2d wavefunction_lut_map(const Tensor &bra_key,
                                      const Tensor &wf_value, const Tensor &onv,
                                      const int sorb) {
@@ -287,7 +300,6 @@ void check_sorb(const int sorb, const int nele) {
   }
 }
 
-
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
@@ -298,8 +310,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("flag_bit") = false,
         "Return all singles and doubles excitation for given onstate(1D, 2D) "
         "using CPU or GPU");
-  m.def("get_comb_tensor_fused_cpu", &get_comb_tensor_fused_cpu);
-  m.def("get_comb_tensor_fused_cuda", &get_comb_tensor_fused_cuda);
+  m.def("get_comb_hij_fused", &get_comb_hij_fused, py::arg("bra"),
+        py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
+        py::arg("noA"), py::arg("noB"),
+        "Fused get_comb_tensor and get_hij_torch");
   m.def("onv_to_tensor", &onv_to_tensor, py::arg("bra"), py::arg("sorb"),
         "convert onv to bit (-1:unoccupied, 1: occupied) for given onv(1D, 2D) "
         "using CPU or GPU");
