@@ -134,12 +134,16 @@ __device__ double get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
   int idx_lst[5] = {0};
   int orbital_lst[4] = {0};
   int p[2], q[2];
+  unsigned long ket[MAX_SORB_LEN] = {0};
+  for(int i = 0; i < MAX_SORB_LEN; i++){
+    ket[i] = bra[i];
+  }
 
   unpack_Singles_Doubles_cuda(sorb, noA, noB, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
     orbital_lst[i] = idx;
-    BIT_FLIP(comb[idx / 64], idx % 64); // in-place
+    BIT_FLIP(ket[idx / 64], idx % 64); // in-place
   }
 
   double Hij = 0.00;
@@ -157,7 +161,7 @@ __device__ double get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
         repr &= ~(1ULL << j);
       }
     }
-    int sgn = parity_cuda(bra, p[0]) * parity_cuda(comb, q[0]);
+    int sgn = parity_cuda(bra, p[0]) * parity_cuda(ket, q[0]);
     Hij *= static_cast<double>(sgn);
   } else {
     // double
@@ -166,10 +170,13 @@ __device__ double get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
     q[0] = max(orbital_lst[1], orbital_lst[3]);
     q[1] = min(orbital_lst[1], orbital_lst[3]);
     int sgn = parity_cuda(bra, p[0]) * parity_cuda(bra, p[1]) *
-              parity_cuda(comb, q[0]) * parity_cuda(comb, q[1]);
+              parity_cuda(ket, q[0]) * parity_cuda(ket, q[1]);
     Hij = h2e_get_cuda(h2e, p[0], p[1], q[0], q[1]);
     Hij *= static_cast<double>(sgn);
     // printf("hij: %.4e\n", Hij);
+  }
+  for(int i = 0; i < MAX_SORB_LEN; i++){
+    comb[i] = ket[i];
   }
   return Hij;
 }

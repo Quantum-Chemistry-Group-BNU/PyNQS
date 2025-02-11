@@ -143,18 +143,27 @@ tuple_tensor_2d get_comb_tensor_fused_cuda(const Tensor &bra_tensor,
 
   // comb: (nbatch, ncomb, bra_len * 8)
   Hmat = torch::empty({nbatch, ncomb}, h1e.options());
-  comb = bra_tensor.unsqueeze(1).repeat({1, ncomb, 1});
+  comb = torch::empty({nbatch, ncomb, bra_len * 8}, bra_tensor.options());
   unsigned long *comb_ptr =
       reinterpret_cast<unsigned long *>(comb.data_ptr<uint8_t>());
+  auto *bra_ptr = reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
   double *Hmat_ptr = Hmat.data_ptr<double>();
   double *h1e_ptr = h1e.data_ptr<double>();
   double *h2e_ptr = h2e.data_ptr<double>();
 
   // run cuda, merged: (nbatch, ncomb)
+  // torch::cuda::synchronize();
+  // auto t0 = tools::get_time();
   Tensor merged = get_merged_tensor_cuda(bra_tensor, nele, sorb, noA, noB);
+  // torch::cuda::synchronize();
+  // auto t1 = tools::get_time();
   int *merged_ptr = merged.data_ptr<int32_t>();
-  squant::get_comb_fused_cuda(comb_ptr, merged_ptr, h1e_ptr, h2e_ptr, Hmat_ptr, sorb,
-                              bra_len, noA, noB, nbatch, ncomb);
+  squant::get_comb_fused_cuda(bra_ptr, comb_ptr, merged_ptr, h1e_ptr, h2e_ptr,
+                              Hmat_ptr, sorb, bra_len, noA, noB, nbatch, ncomb);
+  // torch::cuda::synchronize();
+  // auto t2 = tools::get_time();
+  // std::cout << std::setprecision(6) << "merged, fused: " << tools::get_duration_nano(t1-t0)/1.0e06 << " "
+  // << tools::get_duration_nano(t2-t1)/1.0e06 << " ms " <<std::endl;
   return std::make_tuple(comb, Hmat);
 }
 

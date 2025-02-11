@@ -216,7 +216,8 @@ __global__ void get_comb_SD_kernel(unsigned long *comb, const int *merged,
 }
 
 template <const int _len>
-__global__ void get_comb_SD_fused_kernel(unsigned long *comb, const int *merged,
+__global__ void get_comb_SD_fused_kernel(unsigned long *bra,
+                                         unsigned long *comb, const int *merged,
                                          const double *h1e, const double *h2e,
                                          double *Hmat, const int sorb,
                                          const int noA, const int noB,
@@ -234,7 +235,8 @@ __global__ void get_comb_SD_fused_kernel(unsigned long *comb, const int *merged,
   if (threadIdx.x == 0) {
 #pragma unroll
     for (int i = 0; i < _len; i++) {
-      n0[i] = comb[idx * ncomb * _len + i];
+      // n0[i] = comb[idx * ncomb * _len + i];
+      n0[i] = bra[idx * _len + i];
     }
   }
   __syncthreads();
@@ -244,6 +246,10 @@ __global__ void get_comb_SD_fused_kernel(unsigned long *comb, const int *merged,
     return;
   // auto n0 = &comb[idx * ncomb * _len];
   if (idy == 0) {
+#pragma unroll
+    for (int i = 0; i < _len; i++) {
+      comb[idx * ncomb * _len + i] = n0[i];
+    }
     Hmat[idx * ncomb] =
         squant::get_Hii_cuda(n0, n0, h1e, h2e, sorb, noA + noB, _len);
   } else {
@@ -253,7 +259,8 @@ __global__ void get_comb_SD_fused_kernel(unsigned long *comb, const int *merged,
   }
 }
 
-__host__ void squant::get_comb_fused_cuda(unsigned long *comb,
+__host__ void squant::get_comb_fused_cuda(unsigned long *bra,
+                                          unsigned long *comb,
                                           const int *merged, const double *h1e,
                                           const double *h2e, double *Hmat,
                                           const int sorb, const int len,
@@ -262,7 +269,7 @@ __host__ void squant::get_comb_fused_cuda(unsigned long *comb,
   dim3 blockDim(256);
   dim3 gridDim(nbatch * ((ncomb - 1) / blockDim.x + 1));
   get_comb_SD_fused_kernel<MAX_SORB_LEN><<<gridDim, blockDim>>>(
-      comb, merged, h1e, h2e, Hmat, sorb, noA, noB, nbatch, ncomb);
+      bra, comb, merged, h1e, h2e, Hmat, sorb, noA, noB, nbatch, ncomb);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
