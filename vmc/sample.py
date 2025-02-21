@@ -990,6 +990,7 @@ class Sampler:
         self.use_sample_space = False
         # self.reduce_psi = False
         fp_batch: int = self.eloc_param["fp_batch"]
+        assert self.ci_space.size(0) == self.fci_size
 
         # avoid sort
         if not self.sort_fci_space:
