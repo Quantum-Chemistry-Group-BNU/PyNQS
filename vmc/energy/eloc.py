@@ -11,7 +11,7 @@ from torch import Tensor, nn
 from libs.C_extension import get_hij_torch, get_comb_tensor, onv_to_tensor
 from utils.public_function import WavefunctionLUT, get_Num_SinglesDoubles, check_para
 
-from .flip import Func, _reduce_psi_flip, _simple_flip
+from .flip import Func, _reduce_psi_flip, _simple_flip, _only_sample_space_flip
 # from torch.profiler import profile, record_function, ProfilerActivity
 
 
@@ -71,11 +71,16 @@ def local_energy(
     with torch.no_grad():
         if use_sample_space:
             assert WF_LUT is not None, "WF_ULT must be used if use_sample"
+            if use_multi_psi:
+                raise NotImplementedError
+            if use_spin_flip:
+                func = _only_sample_space_flip
+            else:
+                func = _only_sample_space
             func = partial(
-                _only_sample_space,
+                func,
                 index=index,
                 alpha=alpha,
-                use_multi_psi=use_multi_psi,
             )
         else:
             if reduce_psi:
@@ -86,20 +91,14 @@ def local_energy(
                     func = _reduce_psi
                 func = partial(
                     func,
-                    n_sample=eps_sample,
-                    use_multi_psi=use_multi_psi,
-                    extra_norm=extra_norm,
+                    eps=eps,
+                    eps_sample=eps_sample,
                 )
             else:
                 if use_spin_flip:
                     func = _simple_flip
                 else:
                     func = _simple
-                func = partial(
-                    func,
-                    use_multi_psi=use_multi_psi,
-                    extra_norm=extra_norm,
-                )
         # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         #              record_shapes=True, profile_memory=True) as prof:
         #     value = func(x, h1e, h2e, ansatz, sorb, nele, noa, nob, dtype, WF_LUT, use_unique, eps)
@@ -123,7 +122,8 @@ def local_energy(
             h2e_spin,
             WF_LUT,
             use_unique,
-            eps,
+            use_multi_psi,
+            extra_norm,
         )
 
 def _simple(
@@ -142,7 +142,6 @@ def _simple(
     h2e_spin: Optional[Tensor] = None,
     WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
-    eps: float = 1.0e-12,
     use_multi_psi: bool = False,
     extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
@@ -212,10 +211,10 @@ def _reduce_psi(
     h2e_spin: Optional[Tensor] = None,
     WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
-    eps: float = 1.0e-12,
-    n_sample: int = 0,
     use_multi_psi: bool = False,
     extra_norm: Optional[Tensor] = None,
+    eps: float = 1.0e-12,
+    eps_sample: int = 0,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
@@ -248,7 +247,7 @@ def _reduce_psi(
     t2 = time.time_ns()
 
     # n_sample = 1000
-    stochastic = True if n_sample > 0 else False
+    stochastic = True if eps_sample > 0 else False
     semi_stochastic = True if eps > 0.0 else False
     if stochastic:
         if semi_stochastic:
@@ -262,14 +261,14 @@ def _reduce_psi(
         # 1/N \sum_m' H[n,m'] psi[m'] / p[m']
         _prob = hij / hij.sum(1, keepdim=True)
         # (batch, n_Sample)
-        _counts = torch.multinomial(_prob, n_sample, replacement=True)
+        _counts = torch.multinomial(_prob, eps_sample, replacement=True)
         # add index
         _counts += torch.arange(batch, device=device).reshape(-1, 1) * n_comb
         # unique counts
         _index1, _count = _counts.unique(sorted=True, return_counts=True)
         # H[n, m]/p[m'] N_m/N_sample
         _prob = _prob.flatten()
-        comb_hij.view(-1)[_index1] = (_count / n_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
+        comb_hij.view(-1)[_index1] = (_count / eps_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
         # if use_spin_raising:
         #     hij_spin.view(-1)[_index1] = (_count / N_SAMPLE) * hij_spin.flatten()[_index1] / _prob[_index1]
         gt_eps_idx = _index1
@@ -281,7 +280,7 @@ def _reduce_psi(
         gt_eps_idx = torch.where(comb_hij.reshape(-1).abs() >= eps)[0]
 
     rate = gt_eps_idx.size(0) / comb_hij.reshape(-1).size(0) * 100
-    s = f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}, "
+    s = f"N-sample: {eps_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}, "
     s += f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %"
     logger.debug(s)
 
@@ -331,11 +330,11 @@ def _only_sample_space(
     h2e_spin: Optional[Tensor] = None,
     WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
-    eps: float = 1.0e-12,
-    index: tuple[int, int] = None,
-    alpha: float = 2,
+    # eps: float = 1.0e-12,
     use_multi_psi: bool = False,
     extra_norm: Optional[Tensor] = None,
+    index: tuple[int, int] = None,
+    alpha: float = 2,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     check_para(x)
 

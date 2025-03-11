@@ -546,7 +546,7 @@ class BaseVMCOptimizer(ABC):
         e_lst: List[float] = None,
         prefix: str = "VMC",
     ) -> None:
-        if self.rank != 0:
+        if self.rank != 0 and self.only_sample:
             return None
         import matplotlib.pyplot as plt
         from mpl_toolkits.axes_grid1.inset_locator import inset_axes

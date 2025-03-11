@@ -17,6 +17,12 @@ from utils.public_function import (
     SpinProjection,
 )
 
+FUSED_HIJ = True
+try:
+    from libs.C_extension import get_comb_hij_fused
+    FUSED_HIJ = True
+except ImportError:
+    FUSED_HIJ = False
 
 def Func(
     func: Callable[..., Tensor],
@@ -71,7 +77,6 @@ def _simple_flip(
     h2e_spin: Optional[Tensor] = None,
     WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
-    eps: float = 1.0e-12,
     use_multi_psi: bool = False,
     extra_norm: Optional[Tensor] = None,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
@@ -157,10 +162,10 @@ def _reduce_psi_flip(
     h2e_spin: Optional[Tensor] = None,
     WF_LUT: Optional[WavefunctionLUT] = None,
     use_unique: bool = True,
-    eps: float = 1.0e-12,
-    n_sample: int = 0,
     use_multi_psi: bool = False,
     extra_norm: Optional[Tensor] = None,
+    eps: float = 1.0e-12,
+    eps_sample: int = 0,
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
     """
     E_loc(x) = \sum_x' psi(x')/psi(x) * <x|H|x'>
@@ -195,7 +200,7 @@ def _reduce_psi_flip(
     t2 = time.time_ns()
 
     # n_sample = 1000
-    stochastic = True if n_sample > 0 else False
+    stochastic = True if eps_sample > 0 else False
     semi_stochastic = True if eps > 0.0 else False
     if stochastic:
         if semi_stochastic:
@@ -209,7 +214,7 @@ def _reduce_psi_flip(
         # 1/N \sum_m' H[n,m'] psi[m'] / p[m']
         _prob = hij / hij.sum(1, keepdim=True)
         # (batch, n_Sample)
-        _counts = torch.multinomial(_prob, n_sample, replacement=True)
+        _counts = torch.multinomial(_prob, eps_sample, replacement=True)
         # add index
         _counts += torch.arange(batch, device=device).reshape(-1, 1) * n_comb
         # unique counts
@@ -217,7 +222,7 @@ def _reduce_psi_flip(
         # H[n, m]/p[m'] N_m/N_sample
         _prob = _prob.flatten()
         comb_hij.view(-1)[_index1] = (
-            (_count / n_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
+            (_count / eps_sample) * comb_hij.flatten()[_index1] / _prob[_index1]
         )
         gt_eps_idx = _index1
         if semi_stochastic:
@@ -228,7 +233,7 @@ def _reduce_psi_flip(
         gt_eps_idx = torch.where(comb_hij.reshape(-1).abs() >= eps)[0]
 
     rate = gt_eps_idx.size(0) / comb_hij.reshape(-1).size(0) * 100
-    s = f"N-sample: {n_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}, "
+    s = f"eps-sample: {eps_sample}, STOCHASTIC: {stochastic}, SEMI_STOCHASTIC: {semi_stochastic}, "
     s += f"reduce rate: {comb_hij.reshape(-1).size(0)} -> {gt_eps_idx.size(0)}, {rate:.2f} %"
     logger.debug(s)
 
@@ -304,5 +309,88 @@ def _reduce_psi_flip(
         + f"nqs time: {delta2:.3E} ms"
     )
     del comb_hij, comb_x, gt_eps_idx
+
+    return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
+
+def _only_sample_space_flip(
+    x: Tensor,
+    h1e: Tensor,
+    h2e: Tensor,
+    ansatz: Callable[..., Tensor],
+    ansatz_batch: Callable[[Callable], Tensor],
+    sorb: int,
+    nele: int,
+    noa: int,
+    nob: int,
+    dtype=torch.double,
+    use_spin_raising: bool = False,
+    h1e_spin: Optional[Tensor] = None,
+    h2e_spin: Optional[Tensor] = None,
+    WF_LUT: Optional[WavefunctionLUT] = None,
+    use_unique: bool = True,
+    use_multi_psi: bool = False,
+    extra_norm: Optional[Tensor] = None,
+    index: tuple[int, int] = None,
+    alpha: float = 2,
+) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
+
+    from utils.public_function import get_Num_SinglesDoubles
+    device = x.device
+    dim: int = x.dim()
+    assert dim == 2
+    t0 = time.time_ns()
+
+    batch = x.size(0)
+    bra_len = x.size(1)
+    nSD = get_Num_SinglesDoubles(sorb, noa, nob) + 1
+    n_sample = WF_LUT.bra_key.size(0)
+
+    # memory usage: batch * n_comb_sd * (sorb - 1/64 + 1) / 8 / 2**20 MiB
+    # maybe n_comb_sd * batch <= n_sample maybe be better
+    is_complex: bool = dtype.is_complex
+    _len = (sorb - 1) // 64 + 1
+    alpha = max(alpha, 1)
+    sd_le_sample = nSD * (2 + is_complex + _len) * alpha <= n_sample
+    eta = SpinProjection.eta
+
+    t0 = time.time_ns()
+    if FUSED_HIJ:
+        comb_x, comb_hij = get_comb_hij_fused(x, h1e, h2e, sorb, nele, noa, nob)
+    else:
+        comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
+    t1 = time.time_ns()
+
+    if not FUSED_HIJ:
+        comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
+    if use_spin_raising:
+        hij_spin = get_hij_torch(x, comb_x, h1e_spin, h2e_spin, sorb, nele)
+    t2 = time.time_ns()
+
+    if True:
+        psi = torch.zeros(batch * nSD * 2, device=device, dtype=WF_LUT.dtype)
+        x1_flip = spin_flip_onv(comb_x.reshape(-1, bra_len), sorb)
+        eta_m = spin_flip_sign(comb_x.reshape(-1, bra_len), sorb).reshape(batch, -1)
+        x1 = torch.cat([comb_x.reshape(-1, bra_len), x1_flip])
+        idx, _, value = WF_LUT.lookup(x1)
+        psi[idx] = value
+        psi_x1 = psi[: batch * nSD].reshape(batch, nSD)
+        psi_x1_flip = psi[batch * nSD:].reshape(batch, nSD)
+        f_psi = (psi_x1 + eta * eta_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
+    else:
+        ...
+    eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
+
+    if not use_spin_raising:
+        sloc = torch.zeros_like(eloc)
+    else:
+        sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
+    t3 = time.time_ns()
+
+    delta0 = (t1 - t0) / 1.0e06
+    delta1 = (t2 - t1) / 1.0e06
+    delta2 = (t3 - t2) / 1.0e06
+    logger.debug(
+        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " + f"nqs time: {delta2:.3E} ms"
+    )
 
     return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)

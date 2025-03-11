@@ -122,6 +122,20 @@ def get_hij_torch(
     """
     ...
 
+def get_comb_hij_fused(
+    bra: Tensor,
+    h1e: Tensor,
+    h2e: Tensor,
+    sorb: int,
+    nele: int,
+    noA: int,
+    noB: int,
+) -> Tuple[Tensor, Tensor]:
+    r"""
+    fused nSD and Hij
+    """
+    ...
+
 def MCMC_sample(
     model_file: str,
     initial_state: Tensor,

@@ -1109,9 +1109,14 @@ class Sampler:
         # flip-spin
         eta_n = spin_flip_sign(x, self.sorb)
         x_flip = spin_flip_onv(x, self.sorb)
-        psi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch)
-        _psi = 1 + self.eta * eta_n * psi_flip / psi
+        if self.use_sample_space:
+            psi_flip = torch.zeros(x_flip.size(0), dtype=self.dtype, device=self.device)
+            idx, _, value = self.WF_LUT.lookup(x_flip)
+            psi_flip[idx] = value
+        else:
+            psi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch)
 
+        _psi = 1 + self.eta * eta_n * psi_flip / psi
         # stats
         if self.debug_exact:
             n_sample = float("inf")
