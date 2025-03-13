@@ -241,8 +241,8 @@ tuple_tensor_2d get_comb_hij_fused(const Tensor &bra, const Tensor &h1e,
                                    const int nele, const int noA,
                                    const int noB) {
   if (bra.is_cpu() && h1e.is_cpu() && h2e.is_cpu()) {
-#ifdef GPU
     return get_comb_tensor_fused_cpu(bra, sorb, nele, noA, noB, h1e, h2e);
+#ifdef GPU
   } else {
     return get_comb_tensor_fused_cuda(bra, sorb, nele, noA, noB, h1e, h2e);
 #endif
