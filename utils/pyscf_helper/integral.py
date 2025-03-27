@@ -207,7 +207,7 @@ def extract_kij(h1e: Tensor, h2e: Tensor,sorb: int) -> Tensor:
         warnings.warn("Using compress h1e/h2e using python is pretty slower", stacklevel=2)
         from .operator import _decompress_h1e_h2e_py as decompress
 
-    _h2e = decompress(h1e.cpu().numpy(), h2e.cpu().numpy(), sorb)[0]
+    _h2e = decompress(h1e.cpu().numpy(), h2e.cpu().numpy(), sorb)[1]
     norb = sorb // 2
     kij = np.zeros((norb,norb))
     for i in range(norb):

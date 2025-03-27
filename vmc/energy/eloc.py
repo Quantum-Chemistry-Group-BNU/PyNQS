@@ -71,8 +71,8 @@ def local_energy(
     with torch.no_grad():
         if use_sample_space:
             assert WF_LUT is not None, "WF_ULT must be used if use_sample"
-            if use_multi_psi:
-                raise NotImplementedError
+            # if use_multi_psi:
+            #     raise NotImplementedError
             if use_spin_flip:
                 func = _only_sample_space_flip
             else:

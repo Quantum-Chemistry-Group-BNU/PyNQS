@@ -20,9 +20,11 @@ from utils.public_function import (
 FUSED_HIJ = True
 try:
     from libs.C_extension import get_comb_hij_fused
+
     FUSED_HIJ = True
 except ImportError:
     FUSED_HIJ = False
+
 
 def Func(
     func: Callable[..., Tensor],
@@ -312,6 +314,7 @@ def _reduce_psi_flip(
 
     return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
 
+
 def _only_sample_space_flip(
     x: Tensor,
     h1e: Tensor,
@@ -335,6 +338,7 @@ def _only_sample_space_flip(
 ) -> tuple[Tensor, Tensor, Tensor, tuple[float, float, float]]:
 
     from utils.public_function import get_Num_SinglesDoubles
+
     device = x.device
     dim: int = x.dim()
     assert dim == 2
@@ -349,8 +353,8 @@ def _only_sample_space_flip(
     # maybe n_comb_sd * batch <= n_sample maybe be better
     is_complex: bool = dtype.is_complex
     _len = (sorb - 1) // 64 + 1
-    alpha = max(alpha, 1)
-    sd_le_sample = nSD * (2 + is_complex + _len) * alpha <= n_sample
+    # alpha = max(alpha, 1)
+    # sd_le_sample = nSD * (2 + is_complex + _len) * alpha <= n_sample
     eta = SpinProjection.eta
 
     t0 = time.time_ns()
@@ -366,18 +370,30 @@ def _only_sample_space_flip(
         hij_spin = get_hij_torch(x, comb_x, h1e_spin, h2e_spin, sorb, nele)
     t2 = time.time_ns()
 
-    if True:
-        psi = torch.zeros(batch * nSD * 2, device=device, dtype=WF_LUT.dtype)
-        x1_flip = spin_flip_onv(comb_x.reshape(-1, bra_len), sorb)
-        eta_m = spin_flip_sign(comb_x.reshape(-1, bra_len), sorb).reshape(batch, -1)
-        x1 = torch.cat([comb_x.reshape(-1, bra_len), x1_flip])
-        idx, _, value = WF_LUT.lookup(x1)
-        psi[idx] = value
-        psi_x1 = psi[: batch * nSD].reshape(batch, nSD)
-        psi_x1_flip = psi[batch * nSD:].reshape(batch, nSD)
-        f_psi = (psi_x1 + eta * eta_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
+    psi = torch.zeros(batch * nSD * 2, device=device, dtype=WF_LUT.dtype)
+    x1_flip = spin_flip_onv(comb_x.reshape(-1, bra_len), sorb)
+    eta_m = spin_flip_sign(comb_x.reshape(-1, bra_len), sorb).reshape(batch, -1)
+    x1 = torch.cat([comb_x.reshape(-1, bra_len), x1_flip])
+    idx, _, value = WF_LUT.lookup(x1)
+    psi[idx] = value
+    psi_x1 = psi[: batch * nSD].reshape(batch, nSD)
+    psi_x1_flip = psi[batch * nSD :].reshape(batch, nSD)
+
+    if use_multi_psi:
+        ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
+        _f = torch.zeros_like(psi)
+        _f[idx] = Func(ansatz_extra, x1[idx], None, True)
+        f = _f[: batch * nSD].reshape(batch, nSD)
+        f_flip = _f[batch * nSD:].reshape(batch, nSD)
+        # [batch, nSD]
+        f_psi = (
+            (f * psi_x1 + eta * eta_m * f_flip * psi_x1_flip)
+            * f[..., 0].reshape(-1, 1).conj()
+            / extra_norm**2
+        )
     else:
-        ...
+        f_psi = (psi_x1 + eta * eta_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
+
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
 
     if not use_spin_raising:
@@ -390,7 +406,8 @@ def _only_sample_space_flip(
     delta1 = (t2 - t1) / 1.0e06
     delta2 = (t3 - t2) / 1.0e06
     logger.debug(
-        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, " + f"nqs time: {delta2:.3E} ms"
+        f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, "
+        + f"nqs time: {delta2:.3E} ms"
     )
 
     return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)
