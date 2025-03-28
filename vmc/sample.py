@@ -1066,10 +1066,22 @@ class Sampler:
         # spin flip symmetry
         if self.use_spin_flip:
             x_flip = spin_flip_onv(x, self.sorb)
-            f_flip = self.ansatz_batch(x_flip, self.nqs.module.extra, fp_batch)
+            if self.use_sample_space:
+                from libs.C_extension import wavefunction_lut
+                # Maybe construct f lut
+                _, mask = wavefunction_lut(self.WF_LUT.bra_key, x_flip, self.sorb)
+                f_flip = torch.zeros_like(f)
+                f_flip[mask] = self.ansatz_batch(x_flip[mask], self.nqs.module.extra, fp_batch)
+            else:
+                f_flip = self.ansatz_batch(x_flip, self.nqs.module.extra, fp_batch)
             eta_n = spin_flip_sign(x, self.sorb)
             psi = self.ansatz_batch(x, self.nqs.module.sample, fp_batch)
-            psi_flip = self.ansatz_batch(x_flip, self.nqs.module.sample, fp_batch)
+            if self.use_sample_space:
+                psi_flip = torch.zeros_like(psi)
+                idx, _, value = self.WF_LUT.lookup(x_flip)
+                psi_flip[idx] = value
+            else:
+                psi_flip = self.ansatz_batch(x_flip, self.nqs.module.sample, fp_batch)
             f_psi = _f + self.eta * eta_n * f.conj() * f_flip * psi_flip / psi
 
         # stats
@@ -1110,7 +1122,7 @@ class Sampler:
         eta_n = spin_flip_sign(x, self.sorb)
         x_flip = spin_flip_onv(x, self.sorb)
         if self.use_sample_space:
-            psi_flip = torch.zeros(x_flip.size(0), dtype=self.dtype, device=self.device)
+            psi_flip = torch.zeros_like(psi)
             idx, _, value = self.WF_LUT.lookup(x_flip)
             psi_flip[idx] = value
         else:
