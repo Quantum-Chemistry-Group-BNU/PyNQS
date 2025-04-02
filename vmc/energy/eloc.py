@@ -14,6 +14,11 @@ from utils.public_function import WavefunctionLUT, get_Num_SinglesDoubles, check
 from .flip import Func, _reduce_psi_flip, _simple_flip, _only_sample_space_flip
 # from torch.profiler import profile, record_function, ProfilerActivity
 
+FUSED_HIJ = True
+try:
+    from libs.C_extension import get_comb_hij_fused
+except ImportError:
+    FUSED_HIJ = False
 
 def local_energy(
     x: Tensor,
@@ -344,7 +349,7 @@ def _only_sample_space(
     t0 = time.time_ns()
 
     batch = x.size(0)
-    n_comb_sd = get_Num_SinglesDoubles(sorb, noa, nob) + 1
+    nSD = get_Num_SinglesDoubles(sorb, noa, nob) + 1
     n_sample = WF_LUT.bra_key.size(0)
 
     # XXX: reduce memory usage
@@ -353,92 +358,130 @@ def _only_sample_space(
     is_complex: bool = dtype.is_complex
     _len = (sorb - 1) // 64 + 1
     alpha = max(alpha, 1)
-    sd_le_sample = n_comb_sd * (2 + is_complex + _len) * alpha <= n_sample
+    sd_le_sample = nSD * (2 + is_complex + _len) * alpha <= n_sample
     # sd_le_sample = False
 
-    if use_multi_psi:
-        raise NotImplementedError(f"Not implement in multi-psi")
-        ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
-
-    if sd_le_sample:
-        # (batch, n_comb_sd, bra_len)
-        comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
+    t0 = time.time_ns()
+    if FUSED_HIJ:
+        comb_x, comb_hij = get_comb_hij_fused(x, h1e, h2e, sorb, nele, noa, nob)
     else:
-        # (n_sample, bra_len)
-        comb_x = WF_LUT.bra_key
+        comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
 
     t1 = time.time_ns()
-    # (batch, n_comb_sd) or (batch, n_sample)
-
+    if not FUSED_HIJ:
+        comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
     if use_spin_raising:
         hij_spin = get_hij_torch(x, comb_x, h1e_spin, h2e_spin, sorb, nele)
-    comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
-
     t2 = time.time_ns()
-    if sd_le_sample:
-        bra_len = comb_x.size(2)
-        psi_x1 = torch.zeros(batch * n_comb_sd, device=device, dtype=WF_LUT.dtype)
-        lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(comb_x.reshape(-1, bra_len))
-        psi_x1[lut_idx] = lut_value
-        psi_x1 = psi_x1.reshape(batch, n_comb_sd)
 
-        # <x|H|x'>psi(x')/psi(x)
-        # T1 = time.time_ns()
-        # psi_x = psi_x1[..., 0].view(-1)
-        # eloc1 = torch.sum(torch.div(psi_x1.T, psi_x).T * comb_hij, -1)  # (batch)
-        # torch.cuda.synchronize()
-        # T2 = time.time_ns()
+    bra_len = comb_x.size(2)
+    x1 = comb_x.reshape(-1, bra_len)
+    psi_x1 = torch.zeros(batch, nSD, device=device, dtype=WF_LUT.dtype)
+    idx, _, value = WF_LUT.lookup(x1)
+    psi_x1.view(-1)[idx] = value
 
-        psi_x = psi_x1[..., 0].view(-1).clone()
-
-        if use_multi_psi:
-            x1 = onv_to_tensor(comb_x.reshape(-1, bra_len), sorb)
-            _psi = ansatz_extra(x1)
-            # f(n).conj() Hnm * f(m) / extra_norm**2
-            _psi = _psi.reshape(batch, -1)
-            value = _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
-            comb_hij = comb_hij * value
-            if use_spin_raising:
-                hij_spin = hij_spin * value
-
-        if use_spin_raising:
-            sloc = psi_x1.mul(hij_spin).sum(-1).divide(psi_x)
-        eloc = psi_x1.mul_(comb_hij).sum(-1).divide_(psi_x)  # (nbatch)
-
-        # torch.cuda.synchronize()
-        # T3 = time.time_ns()
-        # print(f"{(T2-T1)/1.0e6:.5f} ms, {(T3-T2)/1.0e6:.5f} ms")
-        # print(torch.allclose(eloc, eloc1))
-
-        # breakpoint()
+    if use_multi_psi:
+        ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
+        f = torch.zeros_like(psi_x1)
+        f.view(-1)[idx] = Func(ansatz_extra, x1[idx], None, True)
+        f_psi = psi_x1 * f * f[..., 0].reshape(-1, 1).conj() / extra_norm**2  # [nbatch, nSD]
     else:
-        sample_value = WF_LUT.wf_value
-        psi_x = WF_LUT.index_value(*index)
-        # not_idx, psi_x1 = WF_LUT.lookup(x)[1:]
-        # assert torch.allclose(psi_x1, psi_x1)
-        # WF_LUT coming from sampling x must been found in WF_LUT.
-        # assert not_idx.size(0) == 0
+        # <x|H|x'>psi(x')/psi(x)
+        f_psi = psi_x1
 
-        if WF_LUT.dtype == torch.complex128:
-            value = torch.empty(batch * 2, device=device, dtype=torch.double)
-            value[0::2] = torch.matmul(comb_hij, sample_value.real)  # Real-part
-            value[1::2] = torch.matmul(comb_hij, sample_value.imag)  # Imag-part
-            eloc = torch.view_as_complex(value.view(-1, 2)).div(psi_x)
+    eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
+    if use_spin_raising:
+        sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
+    else:
+        sloc = torch.zeros_like(eloc)
+    # eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
+    # if use_spin_raising:
+    #     sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
+    # else:
+        
+    # if use_multi_psi:
+    #     raise NotImplementedError(f"Not implement in multi-psi")
+    #     ansatz_extra = partial(ansatz_batch, func=ansatz.module.extra)
 
-            if use_spin_raising:
-                value_spin = torch.empty(batch * 2, device=device, dtype=torch.double)
-                value_spin[0::2] = torch.matmul(hij_spin, sample_value.real)  # Real-part
-                value_spin[1::2] = torch.matmul(hij_spin, sample_value.imag)  # Imag-part
-                sloc = torch.view_as_complex(value_spin.view(-1, 2)).div(psi_x)
+    # if sd_le_sample:
+    #     # (batch, n_comb_sd, bra_len)
+    #     comb_x = get_comb_tensor(x, sorb, nele, noa, nob, False)[0]
+    # else:
+    #     # (n_sample, bra_len)
+    #     comb_x = WF_LUT.bra_key
 
-        elif WF_LUT.dtype == torch.double:
-            eloc = torch.matmul(comb_hij, sample_value).div(psi_x)
-            # eloc = torch.einsum("ij, j, i ->i", comb_hij, sample_value, 1 / psi_x)
+    # t1 = time.time_ns()
+    # # (batch, n_comb_sd) or (batch, n_sample)
 
-            if use_spin_raising:
-                sloc = torch.matmul(hij_spin, sample_value).div(psi_x)
-        else:
-            raise NotImplementedError(f"Single/Complex-Single does not been supported")
+    # if use_spin_raising:
+    #     hij_spin = get_hij_torch(x, comb_x, h1e_spin, h2e_spin, sorb, nele)
+    # comb_hij = get_hij_torch(x, comb_x, h1e, h2e, sorb, nele)
+
+    # t2 = time.time_ns()
+    # if sd_le_sample:
+    #     bra_len = comb_x.size(2)
+    #     psi_x1 = torch.zeros(batch * n_comb_sd, device=device, dtype=WF_LUT.dtype)
+    #     lut_idx, lut_not_idx, lut_value = WF_LUT.lookup(comb_x.reshape(-1, bra_len))
+    #     psi_x1[lut_idx] = lut_value
+    #     psi_x1 = psi_x1.reshape(batch, n_comb_sd)
+
+    #     # <x|H|x'>psi(x')/psi(x)
+    #     # T1 = time.time_ns()
+    #     # psi_x = psi_x1[..., 0].view(-1)
+    #     # eloc1 = torch.sum(torch.div(psi_x1.T, psi_x).T * comb_hij, -1)  # (batch)
+    #     # torch.cuda.synchronize()
+    #     # T2 = time.time_ns()
+
+    #     psi_x = psi_x1[..., 0].view(-1).clone()
+
+    #     if use_multi_psi:
+    #         x1 = onv_to_tensor(comb_x.reshape(-1, bra_len), sorb)
+    #         _psi = ansatz_extra(x1)
+    #         # f(n).conj() Hnm * f(m) / extra_norm**2
+    #         _psi = _psi.reshape(batch, -1)
+    #         value = _psi * (_psi[:, 0].reshape(-1, 1).conj() / extra_norm**2)
+    #         comb_hij = comb_hij * value
+    #         if use_spin_raising:
+    #             hij_spin = hij_spin * value
+
+    #     if use_spin_raising:
+    #         sloc = psi_x1.mul(hij_spin).sum(-1).divide(psi_x)
+    #     eloc = psi_x1.mul_(comb_hij).sum(-1).divide_(psi_x)  # (nbatch)
+
+    #     # torch.cuda.synchronize()
+    #     # T3 = time.time_ns()
+    #     # print(f"{(T2-T1)/1.0e6:.5f} ms, {(T3-T2)/1.0e6:.5f} ms")
+    #     # print(torch.allclose(eloc, eloc1))
+
+    #     # breakpoint()
+    # else:
+    #     sample_value = WF_LUT.wf_value
+    #     psi_x = WF_LUT.index_value(*index)
+    #     # not_idx, psi_x1 = WF_LUT.lookup(x)[1:]
+    #     # assert torch.allclose(psi_x1, psi_x1)
+    #     # WF_LUT coming from sampling x must been found in WF_LUT.
+    #     # assert not_idx.size(0) == 0
+
+    #     if WF_LUT.dtype == torch.complex128:
+    #         value = torch.empty(batch * 2, device=device, dtype=torch.double)
+    #         value[0::2] = torch.matmul(comb_hij, sample_value.real)  # Real-part
+    #         value[1::2] = torch.matmul(comb_hij, sample_value.imag)  # Imag-part
+    #         eloc = torch.view_as_complex(value.view(-1, 2)).div(psi_x)
+
+    #         if use_spin_raising:
+    #             value_spin = torch.empty(batch * 2, device=device, dtype=torch.double)
+    #             value_spin[0::2] = torch.matmul(hij_spin, sample_value.real)  # Real-part
+    #             value_spin[1::2] = torch.matmul(hij_spin, sample_value.imag)  # Imag-part
+    #             sloc = torch.view_as_complex(value_spin.view(-1, 2)).div(psi_x)
+
+    #     elif WF_LUT.dtype == torch.double:
+    #         eloc = torch.matmul(comb_hij, sample_value).div(psi_x)
+    #         # eloc = torch.einsum("ij, j, i ->i", comb_hij, sample_value, 1 / psi_x)
+
+    #         if use_spin_raising:
+    #             sloc = torch.matmul(hij_spin, sample_value).div(psi_x)
+    #     else:
+    #         raise NotImplementedError(f"Single/Complex-Single does not been supported")
 
     t3 = time.time_ns()
     delta0 = (t1 - t0) / 1.0e06
@@ -456,4 +499,4 @@ def _only_sample_space(
     if not use_spin_raising:
         sloc = torch.zeros_like(eloc)
 
-    return eloc.to(dtype), sloc.to(dtype), psi_x, (delta0, delta1, delta2)
+    return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)

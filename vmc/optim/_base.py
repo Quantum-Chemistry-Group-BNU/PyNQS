@@ -235,12 +235,12 @@ class BaseVMCOptimizer(ABC):
             logger.info(s, master=True)
 
         # save model
-        if int(interval) != 1:
-            self.nprt = int(self.max_iter / interval)
+        if int(interval) > 0:
+            self.interval = int(interval)
         else:
-            self.nprt = 1
+            self.interval = 1
         if self.rank == 0:
-            logger.info(f"Save model interval: {self.nprt}", master=True)
+            logger.info(f"Save model interval: {self.interval}", master=True)
         self.prefix = prefix
 
         self.kfac = kfac
@@ -444,7 +444,7 @@ class BaseVMCOptimizer(ABC):
         save the model/opt/lr_scheduler to '.pth' file for resuming calculations
         """
         if self.rank == 0:
-            if epoch % self.nprt == 0 or epoch == self.max_iter - 1:
+            if epoch % self.interval == 0 or epoch == self.max_iter - 1:
                 checkpoint_file = f"{self.prefix}-checkpoint.pth"
                 logger.info(f"Save model/opt state: -> {checkpoint_file}", master=True)
                 if self.lr_scheduler is None:
@@ -514,7 +514,7 @@ class BaseVMCOptimizer(ABC):
         """
         if prefix is None:
             prefix = self.prefix
-        if self.rank == 0:
+        if self.rank == 0 and not self.only_sample:
             # old version and use checkpoint-file
             # self._save_model(prefix)
             self._plot_figure(e_ref, e_lst, prefix)
