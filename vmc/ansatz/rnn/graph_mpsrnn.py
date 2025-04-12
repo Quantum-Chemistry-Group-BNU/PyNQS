@@ -689,11 +689,11 @@ class Graph_MPS_RNN(nn.Module):
             else:
                 self.init_params_tensor(use_complex=True, T_r=T_r)
 
-    def reset_parameters(self, params: List[Tensor], iscale: float) -> None:
-        stdv = 1 / self.dcut**0.5
-        for param in params:
-            nn.init.uniform_(param, -stdv, stdv)
-            param *= iscale
+    # def reset_parameters(self, params: List[Tensor], iscale: float) -> None:
+    #     stdv = 1 / self.dcut**0.5
+    #     for param in params:
+    #         nn.init.uniform_(param, -stdv, stdv)
+    #         param *= iscale
 
     def param_init_two_site_real(self) -> None:
         all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
@@ -703,9 +703,11 @@ class Graph_MPS_RNN(nn.Module):
         shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut)
         shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut)
         # initialize parameters
-        M_r = torch.empty(shape2, **self.factory_kwargs_real)
-        v_r = torch.empty(shape1, **self.factory_kwargs_real)
-        self.reset_parameters([M_r, v_r], self.iscale)
+        M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
+        v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
+        # M_r = torch.empty(shape2, **self.factory_kwargs_real)
+        # v_r = torch.empty(shape1, **self.factory_kwargs_real)
+        # self.reset_parameters([M_r, v_r], self.iscale)
         eta_r = torch.ones(shape01r, **self.factory_kwargs_real) * (1 / (2**0.5))
         w_r = torch.zeros(shape01c, **self.factory_kwargs_real) * self.iscale
         c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
@@ -1124,7 +1126,7 @@ class Graph_MPS_RNN(nn.Module):
             else:
                 raise NotImplementedError(f"Please use the 2-sites mode")
 
-            logger.info(f"psi_amp_K: {psi_amp_k.shape}, h :{h.shape}, h_ud: {h_ud.shape}")
+            # logger.info(f"psi_amp_K: {psi_amp_k.shape}, h :{h.shape}, h_ud: {h_ud.shape}")
             psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
             psi_orth_mask = self.orth_mask(states=x0, k=2 * i, num_up=num_up, num_down=num_down)
             psi_mask *= psi_orth_mask
@@ -1170,7 +1172,6 @@ class Graph_MPS_RNN(nn.Module):
 
             # update hidden states
             i_pos = self.graph_nodes[i]
-            breakpoint()
             h.repeat_interleave(repeat_nums, -1)
             h[i_pos] = h_i
 
