@@ -689,6 +689,12 @@ class Graph_MPS_RNN(nn.Module):
             else:
                 self.init_params_tensor(use_complex=True, T_r=T_r)
 
+    def reset_parameters(self, params: List[Tensor], iscale: float) -> None:
+        stdv = 1 / self.dcut**0.5
+        for param in params:
+            nn.init.uniform_(param, -stdv, stdv)
+            param *= iscale
+
     def param_init_two_site_real(self) -> None:
         all_in = torch.tensor([t[-1] for t in list(self.graph.in_degree)]).sum()
         shape00 = (self.nqubits // 2, 2)
@@ -697,8 +703,9 @@ class Graph_MPS_RNN(nn.Module):
         shape1 = (self.nqubits // 2, self.hilbert_local, self.dcut)
         shape2 = (all_in + 1, self.hilbert_local, self.dcut, self.dcut)
         # initialize parameters
-        M_r = torch.rand(shape2, **self.factory_kwargs_real) * self.iscale
-        v_r = torch.rand(shape1, **self.factory_kwargs_real) * self.iscale
+        M_r = torch.empty(shape2, **self.factory_kwargs_real)
+        v_r = torch.empty(shape1, **self.factory_kwargs_real)
+        self.reset_parameters([M_r, v_r], self.iscale)
         eta_r = torch.ones(shape01r, **self.factory_kwargs_real) * (1 / (2**0.5))
         w_r = torch.zeros(shape01c, **self.factory_kwargs_real) * self.iscale
         c_r = torch.zeros(shape00, **self.factory_kwargs_real) * self.iscale
@@ -1117,7 +1124,7 @@ class Graph_MPS_RNN(nn.Module):
             else:
                 raise NotImplementedError(f"Please use the 2-sites mode")
 
-            # logger.info(f"psi_amp_K: {psi_amp_k.shape}, h :{h.shape}, h_ud: {h_ud.shape}")
+            logger.info(f"psi_amp_K: {psi_amp_k.shape}, h :{h.shape}, h_ud: {h_ud.shape}")
             psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
             psi_orth_mask = self.orth_mask(states=x0, k=2 * i, num_up=num_up, num_down=num_down)
             psi_mask *= psi_orth_mask
@@ -1163,6 +1170,7 @@ class Graph_MPS_RNN(nn.Module):
 
             # update hidden states
             i_pos = self.graph_nodes[i]
+            breakpoint()
             h.repeat_interleave(repeat_nums, -1)
             h[i_pos] = h_i
 
@@ -1363,16 +1371,163 @@ class Graph_MPS_RNN(nn.Module):
         """
         return self.forward_sample(n_sample, min_batch, min_tree_height, use_dfs_sample)
 
+    @staticmethod
+    def log1mexp(x) -> Tensor:
+        # log(1-e^x)
+        return torch.where(torch.greater(x, -0.693),
+                        torch.log(-torch.expm1(x)),
+                        torch.log1p(-torch.exp(x)))
+
+    @staticmethod
+    def log1pexp(x) -> Tensor:
+        # log(1+e^x)
+        return torch.where(torch.less(x, 18.),
+                        torch.log1p(torch.exp(x)),
+                        x + torch.exp(-x))
+
+    def sample_gumbels_given_max(self, centres: Tensor, maxes: Tensor) -> Tensor:
+        # centers: (n-unique, 4), maxes: n-unique
+        gumbels = centres - torch.log(-torch.log(torch.rand_like(centres)))
+        observed_maxes, _ = torch.max(gumbels, dim=-1)
+        v_variables = torch.unsqueeze(maxes, dim=-1) - gumbels + self.log1mexp(
+            gumbels - torch.unsqueeze(observed_maxes, dim=-1))
+        # numerically stable,
+        cond_gumbels = (torch.unsqueeze(maxes, dim=-1)
+                        - torch.maximum(v_variables, torch.zeros_like(v_variables))
+                        - self.log1pexp(-torch.abs(v_variables)))
+
+        return cond_gumbels
+
+    @torch.no_grad()
+    def gumbels_sample(self, n_sample: int= 1000):
+        # ref:
+        # https://jmlr.org/papers/volume21/19-985/19-985.pdf, 
+        # https://arxiv.org/abs/2408.07625
+        # TODO: how to implement DFS and distributed
+        sample_unique = torch.zeros((1, 0), dtype=torch.int64, device=self.device)
+        log_probs = torch.zeros(1, dtype=torch.double, device=self.device)
+        gumbels = torch.zeros(1, dtype=torch.double, device=self.device)
+        psi_amp = torch.ones(1, **self.factory_kwargs)
+        phi = torch.zeros(1, device=self.device)  # (n_batch,)
+        
+        h = HiddenStates(
+            self.nqubits // 2,
+            self.h_boundary.unsqueeze(-1).repeat(self.nqubits // 2, 1, 1),
+            self.device,
+            use_list=False,
+        )
+        breakpoint()
+        logger.info(f"Begin Gumber")
+        # NE_INF = torch.finfo(torch.double).min
+        NE_INF = float('-inf')
+        for i in range(0, self.nqubits//2):
+            logger.info(f"{i}-th")
+            x0 = sample_unique
+            amps_value = psi_amp
+            num_up = sample_unique[:, ::2].sum(dim=1)
+            num_down = sample_unique[:, 1::2].sum(dim=1)
+            n_batch = x0.shape[0]
+
+            # h_ud: (4, dcut, n-unique), psi_amp_k: (4, n-unique)
+            # h: (n-qubits//2, dcut, n-unique)
+            h_ud, psi_amp_k, w, c = self.calculate_two_site(h, x0, n_batch, i)
+
+            logger.info(f"psi_amp_K: {psi_amp_k.shape}, h :{h.shape}, h_ud: {h_ud.shape}")
+            psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
+            psi_orth_mask = self.orth_mask(states=x0, k=2 * i, num_up=num_up, num_down=num_down)
+            psi_mask *= psi_orth_mask
+            psi_amp_k = psi_amp_k.T * psi_mask
+
+            # avoid numerical error
+            psi_amp_k /= psi_amp_k.max(dim=1, keepdim=True)[0]
+            F.normalize(psi_amp_k, dim=1, eps=1e-14, out=psi_amp_k)
+
+            # if i >= self.min_n_sorb//2:
+            #     breakpoint()
+            # breakpoint()
+            log_probs = log_probs.unsqueeze(-1) + (psi_amp_k**2).log()  # (n-unique, 4)
+            # log_probs = torch.nan_to_num(log_probs, nan=float('-inf'), neginf=NE_INF)
+            gumbels = self.sample_gumbels_given_max(log_probs, gumbels)
+            # gumbels = torch.nan_to_num(gumbels, nan=float('-inf'), neginf=NE_INF)
+            gumbels = gumbels.reshape(-1)
+            log_probs = log_probs.reshape(-1)
+
+            # Top-K
+            logger.info("top-K")
+            sorted_value, sorted_idx = torch.sort(gumbels, descending=True)
+            # avoid '-inf'
+            idx_reversed = torch.searchsorted(torch.flip(sorted_value, dims=[0]), NE_INF, side='right')
+            true_idx = gumbels.size(0) - idx_reversed
+            logger.info(f"true-idx/n-sample: {true_idx}/{n_sample}")
+            _n_sample = min(true_idx, n_sample)
+
+            # [n-unique * 4]/n-sample: index
+            idx = sorted_idx[:_n_sample]
+            inverse_idx = torch.sort(idx)[0]
+            log_probs = log_probs[inverse_idx]
+            gumbels = gumbels[inverse_idx]
+            # breakpoint()
+
+            mask = torch.zeros(psi_amp_k.size(0) * 4, dtype=torch.bool)
+            mask[idx] = True
+            mask = mask.reshape(-1, 4)
+            
+            sample_unique = self.joint_next_samples(sample_unique, mask=mask)
+            repeat_nums = mask.sum(dim=1)  # bool in [0, 4]
+            amps_value = torch.mul(amps_value.repeat_interleave(repeat_nums, 0), psi_amp_k[mask])
+            psi_amp = amps_value
+            logger.info(f"{torch.allclose((psi_amp.abs()**2), log_probs.exp())}")
+            # breakpoint()
+
+            logger.info("calculate phase")
+            index = self.state_to_int(sample_unique[:, -2:], sites=2).view(1, -1)
+            index = index.view(1, 1, -1).expand(1, self.dcut, index.size(1))
+            h_ud = h_ud.repeat_interleave(repeat_nums, dim=-1)
+            h_i = h_ud.gather(0, index).view(self.dcut, -1)
+            if self.param_dtype == torch.complex128:
+                phi_i = w @ h_i.to(torch.complex128) + c
+            else:
+                phi_i = torch.empty(h_i.size(1) * 2, device=self.device, dtype=torch.double)
+                phi_i[0::2] = torch.matmul(w.real, h_i) + c.real  # Real-part
+                phi_i[1::2] = torch.matmul(w.imag, h_i) + c.imag  # Imag-part
+                phi_i = torch.view_as_complex(phi_i.view(-1, 2))
+            phi = phi.repeat_interleave(repeat_nums, dim=-1)
+            phi = phi + torch.angle(phi_i)
+
+            # update hidden states
+            i_pos = self.graph_nodes[i]
+            h.repeat_interleave(repeat_nums, -1)
+            h[i_pos] = h_i
+
+        logger.info("End Gumbel")
+        psi_phase = torch.exp(phi * 1j)
+        psi = psi_amp * psi_phase
+        # sample-phase
+        # the extra phase is the order of change the sample order to natural order(i.e. 0,1,2,...)
+        extra_phase = permute_sgn(self.exchange_order, sample_unique.long(), self.nqubits)
+        psi = psi * extra_phase
+        # for cal. the s,d excited
+        sample_unique = sample_unique[:, self.exchange_order]
+
+        log_probs = log_probs - torch.logsumexp(log_probs, dim=0)
+        freqs = torch.exp(log_probs)
+        wf = self.forward(sample_unique)
+        assert torch.allclose(wf, psi)
+
+        logger.info(f"Difference: WF^2-freq: {(wf.abs()**2 - freqs).abs().sum()}")
+        logger.info(f"WF^2.sum(): {(wf.abs()**2).sum()}")
+        # breakpoint()
+        return sample_unique, freqs, psi
 
 if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     setup_seed(333)
     device = "cpu"
-    sorb = 24
-    nele = 12
+    sorb = 20
+    nele = 14
     # fock_space = onv_to_tensor(get_fock_space(sorb), sorb).to(device)
     # length = fock_space.shape[0]
-    fci_space = torch.load("./H12-FCI-space.pth", map_location="cpu")
+    fci_space = torch.load("./molecule/H12-FCI-space.pth", map_location="cpu")
     # fci_space = onv_to_tensor(get_special_space(x=sorb, sorb=sorb, noa=nele // 2, nob=nele // 2, device=device), sorb)
     # dim = fci_space.size(0)
     # print(fock_space)
@@ -1388,7 +1543,7 @@ if __name__ == "__main__":
     # graph_nn = nx.read_graphml("./graph/H_Plane/H12-34-1.graphml")
     # graph_nn = nx.read_graphml("./graph/H6-maxdes.graphml")
     # x = onv_to_tensor(get_special_space(sorb, sorb, nele//2, nele//2), sorb)
-    graph_nn = nx.read_graphml("./graph/H12-2.00-Bohr.graphml")
+    graph_nn = nx.read_graphml("./molecule/SF-N2-STO3G/N2-STO-3G-1.5R0.graphml")
     # breakpoint()
     model = Graph_MPS_RNN(
         use_symmetry=True,
@@ -1397,16 +1552,16 @@ if __name__ == "__main__":
         nqubits=sorb,
         nele=nele,
         device=device,
-        dcut=50,
+        dcut=12,
         graph=graph_nn,
-        # params_file="params.pth",
+        params_file="./tmp/N2-3t2j2a2e-checkpoint.pth",
     )
-    wf = model(fci_space[:10000])
     # torch.save(wf.detach(), "new-wf.pth")
     # x1 = torch.load("old-wf.pth")
     # breakpoint()
     # assert torch.allclose(x1, wf)
     # exit()
+    model.gumbels_sample(10000)
     sample, counts, wf = model.ar_sampling(
         n_sample=int(1e5),
         min_tree_height=5,
@@ -1414,6 +1569,7 @@ if __name__ == "__main__":
         min_batch=50000,
     )
     x = sample = (sample * 2 - 1).double()
+    wf = model(fci_space[:10000])
     wf1 = model(x)
     assert torch.allclose(wf, wf1)
     # # torch.save()
