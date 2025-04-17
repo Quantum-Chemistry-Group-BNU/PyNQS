@@ -23,6 +23,7 @@ from libs.C_extension import (
     MCMC_sample,
     tensor_to_onv,
     merge_rank_sample,
+    wavefunction_lut,
 )
 from utils.distributed import (
     all_gather_tensor,
@@ -1066,22 +1067,21 @@ class Sampler:
         # spin flip symmetry
         if self.use_spin_flip:
             x_flip = spin_flip_onv(x, self.sorb)
+            eta_n = spin_flip_sign(x, self.sorb)
             if self.use_sample_space:
-                from libs.C_extension import wavefunction_lut
-                # Maybe construct f lut
+                x1 = torch.cat([x, x_flip])
+                idx, _, value = self.WF_LUT.lookup(x1)
+                _psi = torch.zeros(x1.size(0), dtype=value.dtype, device=self.device)
+                _psi[idx] = value
+                psi = _psi[:x.size(0)]  # maybe numerical error if use lut
+                psi_flip = _psi[x.size(0):]
                 _, mask = wavefunction_lut(self.WF_LUT.bra_key, x_flip, self.sorb)
                 f_flip = torch.zeros_like(f)
                 f_flip[mask] = self.ansatz_batch(x_flip[mask], self.nqs.module.extra, fp_batch)
             else:
-                f_flip = self.ansatz_batch(x_flip, self.nqs.module.extra, fp_batch)
-            eta_n = spin_flip_sign(x, self.sorb)
-            psi = self.ansatz_batch(x, self.nqs.module.sample, fp_batch)
-            if self.use_sample_space:
-                psi_flip = torch.zeros_like(psi)
-                idx, _, value = self.WF_LUT.lookup(x_flip)
-                psi_flip[idx] = value
-            else:
+                psi = self.ansatz_batch(x, self.nqs.module.sample, fp_batch)
                 psi_flip = self.ansatz_batch(x_flip, self.nqs.module.sample, fp_batch)
+                f_flip = self.ansatz_batch(x_flip, self.nqs.module.extra, fp_batch)
             f_psi = _f + self.eta * eta_n * f.conj() * f_flip * psi_flip / psi
 
         # stats
@@ -1114,18 +1114,19 @@ class Sampler:
         return:
             || 1 + η * psi(n-flip)/psi(n)||
         """
-
         fp_batch: int = self.eloc_param["fp_batch"]
-        psi = self.ansatz_batch(x, self.nqs.module, fp_batch)
-
         # flip-spin
         eta_n = spin_flip_sign(x, self.sorb)
         x_flip = spin_flip_onv(x, self.sorb)
         if self.use_sample_space:
-            psi_flip = torch.zeros_like(psi)
-            idx, _, value = self.WF_LUT.lookup(x_flip)
-            psi_flip[idx] = value
+            x1 = torch.cat([x, x_flip])
+            idx, _, value = self.WF_LUT.lookup(x1)
+            _psi0 = torch.zeros(x1.size(0), dtype=value.dtype, device=self.device)
+            _psi0[idx] = value
+            psi = _psi0[:x.size(0)]  # maybe numerical error if use lut
+            psi_flip = _psi0[x.size(0):]
         else:
+            psi = self.ansatz_batch(x, self.nqs.module, fp_batch)
             psi_flip = self.ansatz_batch(x_flip, self.nqs.module, fp_batch)
 
         _psi = 1 + self.eta * eta_n * psi_flip / psi
