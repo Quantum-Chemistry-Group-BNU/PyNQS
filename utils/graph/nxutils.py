@@ -3,7 +3,8 @@ from __future__ import annotations
 import numpy as np
 import networkx as nx
 
-from typing import List
+from heapq import heapify, heappush, heappop
+from typing import List, Tuple, Dict
 from networkx import Graph, DiGraph
 
 def displayCircular(G):
@@ -263,3 +264,58 @@ def check_tesnor(graph: DiGraph):
         if len(list(graph.predecessors(site))) >= 2:
             result = False
     return result
+
+def calculate_min_hidden_states(
+    graph: nx.DiGraph,
+) -> Tuple[int, Dict[int,int], Dict[int,int]]:
+
+    topo = list(map(int, graph.adj))
+    # timestamp
+    start = {u: i for i, u in enumerate(topo)}
+    mapping = {node: int(node) for node in graph.nodes}
+    graph = nx.relabel_nodes(graph, mapping)
+    end = {
+        u: max((start[v] for v in graph.successors(u)), default=start[u])
+        for u in graph.nodes()
+    }
+
+    # scanning line
+    events: List[Tuple[float,int]] = []
+    for u in topo:
+        l, r = start[u], end[u]
+        events.append((l, +1))
+        events.append((r + 0.1, -1))  # +ε release
+    events.sort(key=lambda x: (x[0], -x[1]))
+
+    active = max_active = 0
+    for _, delta in events:
+        active += delta
+        if active > max_active:
+            max_active = active
+
+    return max_active, start, end
+
+def allocate_registers(
+    graph: nx.DiGraph,
+) -> Tuple[Dict[int,int], Dict[int,int], int, Dict[int,int]]:
+    # interval graph coloring / register allocation
+    regs_max, start, end = calculate_min_hidden_states(graph)
+
+    topo = list(map(int, graph.adj))
+    free_regs = list(range(regs_max))
+    heapify(free_regs)
+    heap_active: List[Tuple[int,int,int]] = []  # (release_time, node, reg_id)
+    regs_map: Dict[int,int] = {}
+
+    for u in topo:
+        now = start[u]
+        while heap_active and heap_active[0][0] < now:
+            _, expired_u, reg = heappop(heap_active)
+            free_regs.append(reg)
+
+        # print(free_regs)
+        reg_u = heappop(free_regs)
+        regs_map[u] = reg_u
+        heappush(heap_active, (end[u], u, reg_u))
+
+    return start, end, regs_max, regs_map
