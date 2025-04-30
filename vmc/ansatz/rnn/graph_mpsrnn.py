@@ -19,7 +19,7 @@ from vmc.ansatz.utils import joint_next_samples
 from libs.C_extension import onv_to_tensor, permute_sgn
 
 from utils.det_helper import DetLUT
-from utils.graph import checkgraph, num_count, scan_tensor
+from utils.graph import checkgraph, num_count, scan_tensor, allocate_registers
 from utils.public_function import (
     get_fock_space,
     get_special_space,
@@ -31,6 +31,7 @@ from utils.public_function import (
     torch_lexsort,
 )
 from utils.distributed import get_rank, get_world_size, synchronize
+from utils.config import dtype_config
 
 import torch.autograd.profiler as profiler
 
@@ -99,7 +100,7 @@ class HiddenStates:
 
     def __setitem__(self, index, value: Tensor) -> None:
         i = index
-        assert self.hTensor[i].shape == value.shape
+        assert self.hTensor[i].shape == value.shape, f"{self.hTensor[i].shape} {value.shape}"
         self.hTensor[i] = value
 
     @property
@@ -334,6 +335,12 @@ class Graph_MPS_RNN(nn.Module):
                     self.max_degree = 1e26  # (have no condeition with max(#pred))
                 self.tensor_index = scan_tensor(self.graph, max_degree=self.max_degree)
 
+        # self.use_unique = False
+        self.h_min: int = None
+        self.h_map: dict[int, int] = {}
+        self.h_min, self.h_map = allocate_registers(self.graph)[-2:]
+        self.use_h_min = False
+
         # distributed
         self.rank = get_rank()
         self.world_size = get_world_size()
@@ -345,9 +352,29 @@ class Graph_MPS_RNN(nn.Module):
         self.left_boundary = torch.ones(self.dcut, device=self.device, dtype=self.param_dtype)
         # 是按照一维链排列的最左端边界
         # 初始化部分
+
+        assert self.param_dtype in (torch.double, torch.float, torch.complex128, torch.complex64)
+        self.use_float64 = dtype_config.use_float64
+        if self.use_float64:
+            # float32
+            assert self.param_dtype.to_real() == torch.double, f"dtype: {self.param_dtype}"
+        else:
+            # float32
+            assert self.param_dtype.to_real() == torch.float, f"dtype: {self.param_dtype}"
+
+        self.use_complex: bool = True
+        if self.param_dtype in (torch.double, torch.float):
+            self.use_complex: bool = False
+
         self.factory_kwargs = {"device": self.device, "dtype": self.param_dtype}
-        self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
-        self.factory_kwargs_complex = {"device": self.device, "dtype": torch.complex128}
+
+        if self.use_float64:
+            self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
+            self.factory_kwargs_complex = {"device": self.device, "dtype": torch.complex128}
+        else:
+            self.factory_kwargs_real = {"device": self.device, "dtype": torch.float}
+            self.factory_kwargs_complex = {"device": self.device, "dtype": torch.complex64}
+
         # |->初始化
         self.param_init_two_site()
 
@@ -401,6 +428,11 @@ class Graph_MPS_RNN(nn.Module):
             s += f"{str(node)} <-- {list(neighbors)}\n"
         s += f"The cal.(and the sampling) order is (Spatial orbital).\n"
         s += f"-> {list(map(int, self.graph.adj))} ->.\n"
+
+        s += "hidden-states:\n"
+        s += f"h-min: {self.h_min}\n"
+        for node, pos in self.h_map.items():
+            s += f"{node} -> {pos}\n"
 
         if self.params_file is not None:
             s += f"Old-params-files: {self.params_file}, dcut-before: {self.dcut_before}.\n"
@@ -473,6 +505,7 @@ class Graph_MPS_RNN(nn.Module):
             "params_K.all_sites",
             "params_U.all_sites",
         )
+        dtype = dtype_config.default_dtype
         params_dict: dict[str, Tensor] = {}
         # key: 'sample.params_w.all_sites' or 'params_w.all_sites'
         for key, param in params.items():
@@ -483,12 +516,12 @@ class Graph_MPS_RNN(nn.Module):
                     # Focus-params is list[Tensor]:
                     if isinstance(param, list) and isinstance(param[0], Tensor):
                         for i, p in enumerate(param):
-                            param[i] = param[i].to(device=self.device)
+                            param[i] = param[i].to(device=self.device, dtype=dtype)
                         params_dict[key1] = param
                     else:
-                        params_dict[key1] = param.to(device=self.device)
+                        params_dict[key1] = param.to(device=self.device, dtype=dtype)
                 else:
-                    params_dict[key1] = param.to(device=self.device)
+                    params_dict[key1] = param.to(device=self.device, dtype=dtype)
 
         return params_dict
     
@@ -759,12 +792,10 @@ class Graph_MPS_RNN(nn.Module):
     def param_init_two_site(self) -> None:
         if self.params_file is not None:
             self.iscale = 1e-14
-        if self.param_dtype == torch.complex128:
+        if self.use_complex:
             self.param_init_two_site_complex()
-        elif self.param_dtype == torch.double:
-            self.param_init_two_site_real()
         else:
-            raise NotImplementedError(f"Not implement dtype: {self.param_dtype}")
+            self.param_init_two_site_real()
 
     def symmetry_mask(self, k: int, num_up: Tensor, num_down: Tensor) -> Tensor:
         """
@@ -773,7 +804,7 @@ class Graph_MPS_RNN(nn.Module):
         if self.use_symmetry:
             return self._symmetry_mask(k=k, num_up=num_up, num_down=num_down)
         else:
-            return torch.ones(num_up.size(0), 4, **self.factory_kwargs)
+            return torch.ones(num_up.size(0), 4, **self.factory_kwargs_real)
 
     def mask_input(self, x, mask, val) -> Tensor:
         """
@@ -817,7 +848,7 @@ class Graph_MPS_RNN(nn.Module):
 
     def _calculate_prob(self, h_ud: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         # cal. prob. by h_ud
-        if self.param_dtype == torch.complex128:
+        if self.use_complex:
             _h_ud = h_ud.abs().pow(2)
             normal = (_h_ud).mean((0, 1)).sqrt()
             # normal = (h_ud.abs().pow(2)).mean((0, 1)).sqrt()
@@ -829,15 +860,13 @@ class Graph_MPS_RNN(nn.Module):
             P = (_h_ud / normal**2 * eta.reshape(1, -1, 1)).sum(1)
             # print(torch.exp(self.parm_eta[a, b]))
             P = torch.sqrt(P)
-        elif self.param_dtype == torch.double:
+        else:
             _h_ud = h_ud.pow(2)
             normal = (_h_ud).mean((0, 1)).sqrt()
             h_ud = h_ud / normal  # (4, dcut, nbatch)
             eta = eta**2  # (dcut)
             P = (_h_ud / normal**2 * eta.reshape(1, -1, 1)).sum(1)
             P = torch.sqrt(P)
-        else:
-            raise NotImplementedError
         return h_ud, P
 
     def calculate_two_site(
@@ -869,7 +898,12 @@ class Graph_MPS_RNN(nn.Module):
             _M_cat = []
             _h_cat = []
             for j, _pos in enumerate(pos):
-                h_j = h[int(_pos), ...]  # (dcut, nbatch)
+                if self.use_h_min:
+                    # logger.info(f"pos: {self.h_map[int(_pos)]}")
+                    h_j = h[self.h_map[int(_pos)], ...]
+                else:
+                    h_j = h[int(_pos), ...]
+                # h_j = h[int(_pos), ...]  # (dcut, nbatch)
                 M_j = M[j, ...]  # (4, dcut, dcut)
                 _M_cat.append(M_j)
                 _h_cat.append(h_j)
@@ -947,6 +981,7 @@ class Graph_MPS_RNN(nn.Module):
         return h_ud, P, w, c
 
     def forward(self, x: Tensor) -> Tensor:
+        self.use_h_min = True
         #  x: (+1/-1)
         target = (x + 1) / 2
         # This order should be replaced by the sample order(the order of sample space is become natural,
@@ -959,12 +994,6 @@ class Graph_MPS_RNN(nn.Module):
         # remove duplicate onstate, dose not support auto-backward
         # torch.unique/torch_lexsort maybe is time consuming
         use_unique = self.use_unique and (not x.requires_grad) and n_batch > 1024
-        global USE_EXPAND
-        if x.requires_grad:
-            USE_EXPAND = True
-        else:
-            USE_EXPAND = True
-        # use_unique = True
         if use_unique:
             # avoid sorted much orbital, unique_nqubits >= 2
             unique_nqubits = min(int(torch.tensor(n_batch / 1024 + 1).log2().ceil()), self.nqubits // 4)
@@ -975,13 +1004,26 @@ class Graph_MPS_RNN(nn.Module):
             original_idx = torch.argsort(sorted_idx, stable=True)
             target = target[sorted_idx]
 
-        # List[Tensor] (dcut, n_batch) * nqubits//2
-        h = HiddenStates(self.nqubits // 2, self.h_boundary.unsqueeze(-1), self.device, use_list=True)
-        if not use_unique:
+        # List[Tensor] (nqubits//2, 1, nbatch) or (h_min, 1, nbatch)
+        if not x.requires_grad:
+            # forwards
+            _nbatch = 1 if use_unique else n_batch
+            h = HiddenStates(self.h_min,
+                             self.h_boundary.unsqueeze(-1).repeat(self.h_min, 1, _nbatch),
+                             self.device,
+                             use_list=False,
+                             )
+        else:
+            # backwards
+            h = HiddenStates(self.h_min,
+                             self.h_boundary.unsqueeze(-1),
+                             self.device,
+                             use_list=True,
+                             )
             h.repeat(1, n_batch)
-        # breakpoint()
-        phi = torch.zeros(n_batch, device=self.device)  # (n_batch,)
-        amp = torch.ones(n_batch, device=self.device)  # (n_batch,)
+        dtype = dtype_config.default_dtype
+        phi = torch.zeros(n_batch, device=self.device, dtype=dtype)  # (n_batch,)
+        amp = torch.ones(n_batch, device=self.device, dtype=dtype)  # (n_batch,)
         num_up = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
         num_down = torch.zeros(n_batch, device=self.device, dtype=torch.int64)
 
@@ -1006,6 +1048,8 @@ class Graph_MPS_RNN(nn.Module):
                         h = h.index_select(inverse_before[index_i])
                         # update hidden state
                         _i_pos = self.graph_nodes[i-1]
+                        if self.use_h_min:
+                            _i_pos = self.h_map[_i_pos]
                         h[_i_pos] = h_i[..., index_i].reshape(self.dcut, -1)
                     inverse_before = inverse_i
                 else:
@@ -1014,6 +1058,8 @@ class Graph_MPS_RNN(nn.Module):
                 if i == unique_nqubits // 2 + 1:
                     h = h.index_select(inverse_i)
                     _i_pos = self.graph_nodes[i-1]
+                    if self.use_h_min:
+                        _i_pos = self.h_map[_i_pos]
                     h[_i_pos] = h_i
                 # if i > 0:
                 #     logger.debug(f"i: {i} h: {h.shape}, _target: {_target.shape}, _nbatch: {_nbatch}")
@@ -1022,7 +1068,7 @@ class Graph_MPS_RNN(nn.Module):
                     P = P[..., inverse_i]
                     h_ud = h_ud[..., inverse_i]
                     rate = _nbatch / n_batch * 100
-                    # logger.debug(f"Reduce {i}-th qubits : {n_batch} -> {_nbatch}, rate: {rate:.4f}%")
+                    logger.debug(f"Reduce {i}-th qubits : {n_batch} -> {_nbatch}, rate: {rate:.4f}%")
             else:
                 # h: (sorb//2, dcut, nbatch), target: (nbatch, sorb)
                 # h_ud: (4, dcut, nbatch), w: (dcut), c: scalar
@@ -1032,7 +1078,7 @@ class Graph_MPS_RNN(nn.Module):
 
             # symmetry
             with profiler.record_function("symmetry"):
-                psi_mask = self.symmetry_mask(2 * i, num_up, num_down)
+                psi_mask = self.symmetry_mask(2 * i, num_up, num_down).long().bool()
                 psi_orth_mask = self.orth_mask(target[..., : 2 * i], 2 * i, num_up, num_down)
                 psi_mask = psi_mask * psi_orth_mask
                 P = P * psi_mask.T
@@ -1049,10 +1095,11 @@ class Graph_MPS_RNN(nn.Module):
                 # (dcut) (dcut, n_batch) -> (n_batch)
                 index_phi = index.unsqueeze(0).expand(1, self.dcut, n_batch)
                 h_i = h_ud.gather(0, index_phi).reshape(self.dcut, n_batch)
-                if self.param_dtype == torch.complex128:
-                    phi_i = w @ h_i.to(torch.complex128) + c
+                if self.use_complex:
+                    # phi_i = w @ h_i.to(self.param_dtype) + c
+                    phi_i = torch.addmm(c, w.reshape(1, -1), h_i).reshape(-1)
                 else:
-                    phi_i = torch.empty(h_i.size(1) * 2, device=self.device, dtype=torch.double)
+                    phi_i = torch.empty(h_i.size(1) * 2, device=self.device, dtype=self.param_dtype)
                     phi_i[0::2] = torch.matmul(w.real, h_i) + c.real  # Real-part
                     phi_i[1::2] = torch.matmul(w.imag, h_i) + c.imag  # Imag-part
                     phi_i = torch.view_as_complex(phi_i.view(-1, 2))
@@ -1065,11 +1112,15 @@ class Graph_MPS_RNN(nn.Module):
             # update hidden states
             i_pos = self.graph_nodes[i]
             if not use_unique:
+                if self.use_h_min:
+                    i_pos = self.h_map[i_pos]
                 h[i_pos] = h_i
             else:
                 if i <= unique_nqubits // 2:
                     ... # before the 'self.calculate_two_site'
                 else:
+                    if self.use_h_min:
+                        i_pos = self.h_map[i_pos]
                     h[i_pos] = h_i
 
         psi_amp = amp
@@ -1081,7 +1132,7 @@ class Graph_MPS_RNN(nn.Module):
         if self.det_lut is not None:
             psi = torch.where(psi.isnan(), torch.full_like(psi, 0), psi)
         # sample-phase
-        extra_phase = permute_sgn(self.exchange_order, target.long(), self.nqubits)
+        extra_phase = permute_sgn(self.exchange_order, target.long(), self.nqubits).to(dtype)
         psi = psi * extra_phase
         # breakpoint()
         # torch.save(extra_phase,"extra_phase.pth")
@@ -1123,11 +1174,12 @@ class Graph_MPS_RNN(nn.Module):
                 with profiler.record_function("Update amp"):
                     # psi_amp_k, h, h_ud, w, c = self.calculate_two_site(h, x0, n_batch, i)
                     h_ud, psi_amp_k, w, c = self.calculate_two_site(h, x0, n_batch, i)
+                    # logger.info(psi_amp_k.dtype)
             else:
                 raise NotImplementedError(f"Please use the 2-sites mode")
 
             # logger.info(f"psi_amp_K: {psi_amp_k.shape}, h :{h.shape}, h_ud: {h_ud.shape}")
-            psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down)
+            psi_mask = self.symmetry_mask(k=2 * i, num_up=num_up, num_down=num_down).long().to(torch.bool)
             psi_orth_mask = self.orth_mask(states=x0, k=2 * i, num_up=num_up, num_down=num_down)
             psi_mask *= psi_orth_mask
             psi_amp_k = psi_amp_k.T * psi_mask
@@ -1139,7 +1191,8 @@ class Graph_MPS_RNN(nn.Module):
             with profiler.record_function("updating unique sample"):
                 prob = psi_amp_k.pow(2)
                 # prob = prob.masked_fill(prob <= 1.0e-10, 0.0)
-                counts_i = multinomial_tensor(sample_counts, probs=prob)  # (unique, 4)
+                # TODO: prob using double?
+                counts_i = multinomial_tensor(sample_counts, probs=prob.double())  # (unique, 4)
                 mask_count = counts_i > 0
                 # if sample_counts.sum() >= 1.0e6:
                 #     # drop n-samples < 5 and avoid too-many unique-sample
@@ -1160,19 +1213,22 @@ class Graph_MPS_RNN(nn.Module):
                 index = index.view(1, 1, -1).expand(1, self.dcut, index.size(1))
                 h_ud = h_ud.repeat_interleave(repeat_nums, dim=-1)
                 h_i = h_ud.gather(0, index).view(self.dcut, -1)
-                if self.param_dtype == torch.complex128:
-                    phi_i = w @ h_i.to(torch.complex128) + c
+                if self.use_complex:
+                    phi_i = w @ h_i.to(self.param_dtype) + c
                 else:
-                    phi_i = torch.empty(h_i.size(1) * 2, device=self.device, dtype=torch.double)
+                    phi_i = torch.empty(h_i.size(1) * 2, device=self.device, dtype=self.param_dtype)
                     phi_i[0::2] = torch.matmul(w.real, h_i) + c.real  # Real-part
                     phi_i[1::2] = torch.matmul(w.imag, h_i) + c.imag  # Imag-part
                     phi_i = torch.view_as_complex(phi_i.view(-1, 2))
                 phi = phi.repeat_interleave(repeat_nums, dim=-1)
                 phi = phi + torch.angle(phi_i)
 
+            # logger.info(f"{w.dtype} {h_i.dtype} {c.dtype} {phi.dtype} {amps_value.dtype}")
             # update hidden states
             i_pos = self.graph_nodes[i]
             h.repeat_interleave(repeat_nums, -1)
+            if self.use_h_min:
+                i_pos = self.h_map[i_pos]
             h[i_pos] = h_i
 
             l += interval
@@ -1261,16 +1317,19 @@ class Graph_MPS_RNN(nn.Module):
     ) -> Tuple[Tensor, Tensor, Tensor]:
         sample_counts = torch.tensor([n_sample], device=self.device, dtype=torch.int64)
         sample_unique = torch.ones(1, 0, device=self.device, dtype=torch.int64)
-        psi_amp = torch.ones(1, **self.factory_kwargs)
-        # h = self.h_boundary
+
+        dtype = dtype_config.default_dtype
+        psi_amp = torch.ones(1, device=self.device, dtype=dtype)
+        self.use_h_min = True
+        # self.use_h_min = False
         h = HiddenStates(
-            self.nqubits // 2,
-            self.h_boundary.unsqueeze(-1).repeat(self.nqubits // 2, 1, 1),
+            self.h_min,
+            self.h_boundary.unsqueeze(-1).repeat(self.h_min, 1, 1),
             self.device,
             use_list=False,
         )
         # breakpoint()
-        phi = torch.zeros(1, device=self.device)  # (n_batch,)
+        phi = torch.zeros(1, device=self.device, dtype=dtype)  # (n_batch,)
 
         # sample_counts *= self.world_size
         self.min_batch = min_batch if min_batch > 0 else float("inf")
@@ -1338,13 +1397,13 @@ class Graph_MPS_RNN(nn.Module):
         psi = psi_amp * psi_phase
         # sample-phase
         # the extra phase is the order of change the sample order to natural order(i.e. 0,1,2,...)
-        extra_phase = permute_sgn(self.exchange_order, sample_unique.long(), self.nqubits)
+        extra_phase = permute_sgn(self.exchange_order, sample_unique.long(), self.nqubits).to(dtype)
         psi = psi * extra_phase
         # for cal. the s,d excited
         sample_unique = sample_unique[:, self.exchange_order]
 
         if self.J_W_phase:
-            phase_b = torch.zeros(sample_unique.shape[0])
+            phase_b = torch.zeros(sample_unique.shape[0], device=device)
             for i in range(2, sample_unique.shape[1], 2):
                 onv_bool = sample_unique[:, i]  # bool array, 0/1
                 phase_b += torch.sum(sample_unique[:, 1:i:2], dim=-1) % 2 * onv_bool
@@ -1548,7 +1607,7 @@ if __name__ == "__main__":
     # breakpoint()
     model = Graph_MPS_RNN(
         use_symmetry=True,
-        param_dtype=torch.complex128,
+        param_dtype=torch.complex64,
         hilbert_local=4,
         nqubits=sorb,
         nele=nele,
@@ -1562,16 +1621,17 @@ if __name__ == "__main__":
     # breakpoint()
     # assert torch.allclose(x1, wf)
     # exit()
-    model.gumbels_sample(10000)
+    # model.gumbels_sample(10000)
     sample, counts, wf = model.ar_sampling(
         n_sample=int(1e5),
         min_tree_height=5,
         use_dfs_sample=True,
         min_batch=50000,
     )
-    x = sample = (sample * 2 - 1).double()
-    wf = model(fci_space[:10000])
+    x = sample = (sample * 2 - 1)
+    # wf = model(fci_space[:10000])
     wf1 = model(x)
+    breakpoint()
     assert torch.allclose(wf, wf1)
     # # torch.save()
     breakpoint()

@@ -25,6 +25,7 @@ from utils.distributed import (
 )
 from utils import ElectronInfo, Dtype
 from utils.tools import sys_info
+from utils.config import dtype_config
 
 TORCH_VERSION: str = torch.__version__
 if TORCH_VERSION >= "2.0.0":
@@ -117,9 +118,18 @@ class BaseVMCOptimizer(ABC):
         spin_raising_scheduler: Optional[Callable[[int], float]] = None,
     ) -> None:
         if dtype is None:
-            dtype = Dtype()
-        self.dtype = dtype.dtype
-        self.device = dtype.device
+            if dtype_config.use_complex:
+                dtype = dtype_config.complex_dtype
+            else:
+                dtype = dtype_config.default_dtype
+            self.device = dtype_config.device
+        else:
+            self.dtype = dtype.dtype
+            self.device = dtype.device
+            assert self.dtype.to_real() == dtype_config.default_dtype
+            assert self.device == dtype_config.device
+            if self.dtype.is_complex:
+                assert self.dtype == dtype_config.complex_dtype
         self.rank = get_rank()
         self.world_size = get_world_size()
         self.external_model = external_model

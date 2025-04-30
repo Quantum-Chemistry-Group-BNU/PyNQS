@@ -935,15 +935,15 @@ def ansatz_batch(
         assert x.size(1) == sorb
         convert = lambda x: x
 
-    if batch == -1 or x.size(0) == 0:
-        return func(convert(x))
+    if batch == -1 or x.size(0) == 0 or batch >= x.size(0):
+        return func(convert(x)).to(dtype)
     else:
         idx_lst = [0] + split_batch_idx(x.size(0), batch)
         # TODO: using list[Tensor] maybe better
         result = torch.empty(x.size(0), device=device, dtype=dtype)
         for i in range(len(idx_lst) - 1):
             start, end = idx_lst[i], idx_lst[i + 1]
-            result[start:end] = func(convert(x[start:end])).view(-1)
+            result[start:end] = func(convert(x[start:end])).to(dtype).view(-1)
         return result
 
 
