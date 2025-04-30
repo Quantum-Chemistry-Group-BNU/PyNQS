@@ -24,17 +24,19 @@ __host__ void get_merged_cuda(const unsigned long *bra, int *merged,
 
 // <i|H|j> i: 2D(nbatch, onv), j: 3D(nbatch, ncomb, onv)
 // local energy -> (nbatch, ncomb)
-__host__ void get_Hij_3D_cuda(double *Hmat, const unsigned long *bra,
-                              const unsigned long *ket, const double *h1e,
-                              const double *h2e, const int sorb, const int nele,
+template <typename T>
+__host__ void get_Hij_3D_cuda(T *Hmat, const unsigned long *bra,
+                              const unsigned long *ket, const T *h1e,
+                              const T *h2e, const int sorb, const int nele,
                               const int bra_len, const int nbatch,
                               const int ncomb);
 
 // <i|H|j> matrix, i,j: 2D (n, onv), (m, onv)
 // construct Hij matrix -> (n, m)
-__host__ void get_Hij_2D_cuda(double *Hmat, const unsigned long *bra,
-                              const unsigned long *ket, const double *h1e,
-                              const double *h2e, const int sorb, const int nele,
+template <typename T>
+__host__ void get_Hij_2D_cuda(T *Hmat, const unsigned long *bra,
+                              const unsigned long *ket, const T *h1e,
+                              const T *h2e, const int sorb, const int nele,
                               const int bra_len, const int n, const int m);
 
 // comb_bit: (nbatch, ncomb, sorb)
@@ -49,9 +51,10 @@ __host__ void get_comb_cuda(unsigned long *comb, const int *merged_ovlst,
                             const int sorb, const int bra_len, const int noA,
                             const int noB, const int nbatch, const int ncomb);
 
+template <typename T>
 __host__ void get_comb_fused_cuda(unsigned long *bra, unsigned long *comb,
-                                  const int *merged, const double *h1e,
-                                  const double *h2e, double *Hmat,
+                                  const int *merged, const T *h1e,
+                                  const T *h2e, T *Hmat,
                                   const int sorb, const int len, const int noA,
                                   const int noB, const int nbatch,
                                   const int ncomb);

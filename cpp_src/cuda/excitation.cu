@@ -126,8 +126,9 @@ __device__ void get_comb_SD_cuda(unsigned long *comb, double *lst,
   }
 }
 
-__device__ double get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
-                                         const double *h1e, const double *h2e,
+template <typename T>
+__device__ T get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
+                                         const T *h1e, const T *h2e,
                                          unsigned long *bra, const int r0,
                                          const int sorb, const int len,
                                          const int noA, const int noB) {
@@ -146,7 +147,7 @@ __device__ double get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
     BIT_FLIP(ket[idx / 64], idx % 64); // in-place
   }
 
-  double Hij = 0.00;
+  T Hij = 0.00;
   if (idx_lst[4] == 0) {
     // Single
     p[0] = orbital_lst[0];
@@ -162,7 +163,7 @@ __device__ double get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
       }
     }
     int sgn = parity_cuda(bra, p[0]) * parity_cuda(ket, q[0]);
-    Hij *= static_cast<double>(sgn);
+    Hij *= static_cast<T>(sgn);
   } else {
     // double
     p[0] = max(orbital_lst[0], orbital_lst[2]);
@@ -172,7 +173,7 @@ __device__ double get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
     int sgn = parity_cuda(bra, p[0]) * parity_cuda(bra, p[1]) *
               parity_cuda(ket, q[0]) * parity_cuda(ket, q[1]);
     Hij = h2e_get_cuda(h2e, p[0], p[1], q[0], q[1]);
-    Hij *= static_cast<double>(sgn);
+    Hij *= static_cast<T>(sgn);
     // printf("hij: %.4e\n", Hij);
   }
   for(int i = 0; i < MAX_SORB_LEN; i++){
@@ -180,6 +181,18 @@ __device__ double get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
   }
   return Hij;
 }
+
+template __device__ double
+get_comb_SD_fused_cuda<double>(unsigned long *comb, const int *merged,
+                               const double *h1e, const double *h2e,
+                               unsigned long *bra, const int r0, const int sorb,
+                               const int len, const int noA, const int noB);
+
+template __device__ float
+get_comb_SD_fused_cuda<float>(unsigned long *comb, const int *merged,
+                              const float *h1e, const float *h2e,
+                              unsigned long *bra, const int r0, const int sorb,
+                              const int len, const int noA, const int noB);
 
 __device__ void get_comb_SD_cuda(unsigned long *comb, const int *merged,
                                  const int r0, const int sorb, const int noA,

@@ -82,21 +82,26 @@ Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
   }
   // torch::empty is faster than 'torch::zeros'
   Tensor Hmat = torch::empty({n, m}, h1e_tensor.options());
-
-  const double *h1e_ptr = h1e_tensor.data_ptr<double>();
-  const double *h2e_ptr = h2e_tensor.data_ptr<double>();
   const unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
   const unsigned long *ket_ptr =
       reinterpret_cast<unsigned long *>(ket_tensor.data_ptr<uint8_t>());
-  double *Hmat_ptr = Hmat.data_ptr<double>();
-  if (flag_eloc) {
-    squant::get_Hij_3D_cuda(Hmat_ptr, bra_ptr, ket_ptr, h1e_ptr, h2e_ptr, sorb,
-                            nele, bra_len, n, m);
-  } else {
-    squant::get_Hij_2D_cuda(Hmat_ptr, bra_ptr, ket_ptr, h1e_ptr, h2e_ptr, sorb,
-                            nele, bra_len, n, m);
-  }
+
+  AT_DISPATCH_FLOATING_TYPES(
+      h1e_tensor.scalar_type(), "get_Hij_tensor_cuda", [&] {
+        using T = scalar_t;
+        T *Hmat_ptr = Hmat.data_ptr<T>();
+        const T *h1e_ptr = h1e_tensor.data_ptr<T>();
+        const T *h2e_ptr = h2e_tensor.data_ptr<T>();
+        if (flag_eloc) {
+          squant::get_Hij_3D_cuda<scalar_t>(Hmat_ptr, bra_ptr, ket_ptr, h1e_ptr,
+                                            h2e_ptr, sorb, nele, bra_len, n, m);
+        } else {
+          squant::get_Hij_2D_cuda<scalar_t>(Hmat_ptr, bra_ptr, ket_ptr, h1e_ptr,
+                                            h2e_ptr, sorb, nele, bra_len, n, m);
+        }
+      });
+
   return Hmat;
 }
 
@@ -118,6 +123,7 @@ Tensor get_merged_tensor_cuda(const Tensor bra, const int nele, const int sorb,
   return merged;
 }
 
+
 tuple_tensor_2d get_comb_tensor_fused_cuda(const Tensor &bra_tensor,
                                            const int sorb, const int nele,
                                            const int noA, const int noB,
@@ -137,7 +143,7 @@ tuple_tensor_2d get_comb_tensor_fused_cuda(const Tensor &bra_tensor,
         torch::TensorOptions().dtype(torch::kUInt8).device(device));
     Hmat = torch::empty(
         {0, ncomb},
-        torch::TensorOptions().dtype(torch::kDouble).device(device));
+        torch::TensorOptions().dtype(h1e.dtype()).device(device));
     return std::make_tuple(comb, Hmat);
   }
 
@@ -147,9 +153,6 @@ tuple_tensor_2d get_comb_tensor_fused_cuda(const Tensor &bra_tensor,
   unsigned long *comb_ptr =
       reinterpret_cast<unsigned long *>(comb.data_ptr<uint8_t>());
   auto *bra_ptr = reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
-  double *Hmat_ptr = Hmat.data_ptr<double>();
-  double *h1e_ptr = h1e.data_ptr<double>();
-  double *h2e_ptr = h2e.data_ptr<double>();
 
   // run cuda, merged: (nbatch, ncomb)
   // torch::cuda::synchronize();
@@ -158,8 +161,17 @@ tuple_tensor_2d get_comb_tensor_fused_cuda(const Tensor &bra_tensor,
   // torch::cuda::synchronize();
   // auto t1 = tools::get_time();
   int *merged_ptr = merged.data_ptr<int32_t>();
-  squant::get_comb_fused_cuda(bra_ptr, comb_ptr, merged_ptr, h1e_ptr, h2e_ptr,
-                              Hmat_ptr, sorb, bra_len, noA, noB, nbatch, ncomb);
+  AT_DISPATCH_FLOATING_TYPES(h1e.scalar_type(), "get_comb_tensor_fused_cuda", ([&] {
+    using T = scalar_t;
+    T* Hmat_ptr = Hmat.data_ptr<T>();
+    const T* h1e_ptr = h1e.data_ptr<T>();
+    const T* h2e_ptr = h2e.data_ptr<T>();
+
+    squant::get_comb_fused_cuda<T>(bra_ptr, comb_ptr, merged_ptr,
+                                   h1e_ptr, h2e_ptr, Hmat_ptr,
+                                   sorb, bra_len, noA, noB, nbatch, ncomb);
+  }));
+
   // torch::cuda::synchronize();
   // auto t2 = tools::get_time();
   // std::cout << std::setprecision(6) << "merged, fused: " << tools::get_duration_nano(t1-t0)/1.0e06 << " "
