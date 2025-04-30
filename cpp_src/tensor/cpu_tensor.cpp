@@ -215,11 +215,7 @@ tuple_tensor_2d get_comb_tensor_fused_cpu(const Tensor &bra_tensor,
   const int bra_len = (sorb - 1) / 64 + 1;
   const int ncomb = squant::get_Num_SinglesDoubles(sorb, noA, noB) + 1;
   const int nbatch = bra_tensor.size(0);
-  Tensor Hmat = torch::empty({nbatch, ncomb}, h1e.options());
-  double *h1e_ptr = h1e.data_ptr<double>();
-  double *h2e_ptr = h2e.data_ptr<double>();
-  double *Hmat_ptr = Hmat.data_ptr<double>();
-  Tensor comb, comb_bit;
+  Tensor comb, Hmat;
 
   // bra is empty
   if (bra_tensor.numel() == 0) {
@@ -227,6 +223,7 @@ tuple_tensor_2d get_comb_tensor_fused_cpu(const Tensor &bra_tensor,
     comb = torch::empty(
         {0, ncomb, bra_len * 8},
         torch::TensorOptions().dtype(torch::kUInt8).device(device));
+    Hmat = torch::empty({0, ncomb}, h1e.options());
     return std::make_tuple(comb, Hmat);
   }
 
@@ -238,28 +235,42 @@ tuple_tensor_2d get_comb_tensor_fused_cpu(const Tensor &bra_tensor,
   // merged: (nbatch, ncomb)
   Tensor merged = get_merged_tensor_cpu(bra_tensor, nele, sorb, noA, noB);
   int *merged_ptr = merged.data_ptr<int32_t>();
-  at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
-    for (const auto i : c10::irange(begin, end)) {
-      auto n0 = &comb_ptr[i * ncomb * bra_len];
-      Hmat_ptr[i * ncomb] =
-          squant::get_Hii_cpu(n0, n0, h1e_ptr, h2e_ptr, sorb, nele, bra_len);
-      for (int j = 1; j < ncomb; j++) {
-        Hmat_ptr[i * ncomb + j] = squant::get_comb_SD_fused(
-            &comb_ptr[i * ncomb * bra_len + j * bra_len], &merged_ptr[i * sorb],
-            h1e_ptr, h2e_ptr, n0, j - 1, sorb, bra_len, noA, noB);
-      }
-    }
-  });
+
+  // dispatch by dtype
+  AT_DISPATCH_FLOATING_TYPES(
+      h1e.scalar_type(), "get_comb_tensor_fused_cpu", ([&] {
+        using T = scalar_t;
+        const T *h1e_ptr = h1e.data_ptr<T>();
+        const T *h2e_ptr = h2e.data_ptr<T>();
+        Hmat = torch::empty({nbatch, ncomb}, h1e.options());
+        T *Hmat_ptr = Hmat.data_ptr<T>();
+
+        at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+          for (int64_t i = begin; i < end; ++i) {
+            auto n0 = &comb_ptr[i * ncomb * bra_len];
+            Hmat_ptr[i * ncomb] = squant::get_Hii_cpu<T>(
+                n0, n0, h1e_ptr, h2e_ptr, sorb, nele, bra_len);
+            for (int j = 1; j < ncomb; ++j) {
+              Hmat_ptr[i * ncomb + j] = squant::get_comb_SD_fused<T>(
+                  &comb_ptr[i * ncomb * bra_len + j * bra_len],
+                  &merged_ptr[i * sorb], h1e_ptr, h2e_ptr, n0, j - 1, sorb,
+                  bra_len, noA, noB);
+            }
+          }
+        });
+      }));
   return std::make_tuple(comb, Hmat);
 }
 
 Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
-                          const Tensor &h1e_tensor, const Tensor &h2e_tensor,
+                          const Tensor &h1e, const Tensor &h2e,
                           const int sorb, const int nele) {
   int n, m;
   auto ket_dim = ket_tensor.dim();
   assert(ket_dim == 2 or ket_dim == 3);
   bool flag_eloc = false;
+
+  Tensor Hmat;
   const int bra_len = (sorb - 1) / 64 + 1;
   if (ket_dim == 3) {
     flag_eloc = true;
@@ -273,18 +284,19 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
 
   // bra or ket is empty
   if (bra_tensor.numel() == 0 || bra_tensor.numel() == 0) {
-    return torch::empty({n, m}, h1e_tensor.options());
+    return torch::empty({n, m}, h1e.options());
   }
+  AT_DISPATCH_FLOATING_TYPES(h1e.scalar_type(), "get_Hij_tensor_cpu", ([&]{
   // torch::empty is faster than 'torch::zeros'
-  Tensor Hmat = torch::empty({n, m}, h1e_tensor.options());
-
-  double *h1e_ptr = h1e_tensor.data_ptr<double>();
-  double *h2e_ptr = h2e_tensor.data_ptr<double>();
+  Hmat = torch::empty({n, m}, h1e.options());
+  using T = scalar_t;
+  const T *h1e_ptr = h1e.data_ptr<T>();
+  const T *h2e_ptr = h2e.data_ptr<T>();
+  T *Hmat_ptr = Hmat.data_ptr<T>();
   unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
   unsigned long *ket_ptr =
       reinterpret_cast<unsigned long *>(ket_tensor.data_ptr<uint8_t>());
-  double *Hmat_ptr = Hmat.data_ptr<double>();
 
   at::parallel_for(0, n, 0, [&](int64_t begin, int64_t end) {
     for (const auto i : c10::irange(begin, end)) {
@@ -293,11 +305,12 @@ Tensor get_Hij_tensor_cpu(const Tensor &bra_tensor, const Tensor &ket_tensor,
         // Hmat[i, j] = get_Hij_cpu(bra[i], ket[i, j]), flag-eloc == True
         // Hmat[i, j] = get_Hij_cpu(bra[i], ket[j])
         Hmat_ptr[i * m + j] =
-            squant::get_Hij_cpu(&bra_ptr[i * bra_len], &ket_ptr[offset],
+            squant::get_Hij_cpu<T>(&bra_ptr[i * bra_len], &ket_ptr[offset],
                                 h1e_ptr, h2e_ptr, sorb, nele, bra_len);
       }
     }
   });
+}));
   return Hmat;
 }
 

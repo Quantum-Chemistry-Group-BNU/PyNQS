@@ -121,10 +121,11 @@ void get_comb_SD(unsigned long *comb, const int *merged, const int r0,
   }
 }
 
-double get_comb_SD_fused(unsigned long *comb, const int *merged, double *h1e,
-                         double *h2e, unsigned long *bra, const int r0,
-                         const int sorb, const int len, const int noA,
-                         const int noB) {
+template <typename T>
+T get_comb_SD_fused(unsigned long *comb, const int *merged, const T *h1e,
+                    const T *h2e, unsigned long *bra, const int r0,
+                    const int sorb, const int len, const int noA,
+                    const int noB) {
   int idx_lst[5] = {0};
   int orbital_lst[4] = {0};
   int p[2], q[2];
@@ -136,7 +137,7 @@ double get_comb_SD_fused(unsigned long *comb, const int *merged, double *h1e,
     BIT_FLIP(comb[idx / 64], idx % 64);  // in-place
   }
 
-  double Hij = 0.00;
+  T Hij = 0.00;
   if (idx_lst[4] == 0) {
     // Single
     p[0] = orbital_lst[0];
@@ -152,17 +153,17 @@ double get_comb_SD_fused(unsigned long *comb, const int *merged, double *h1e,
       }
     }
     int sgn = parity_cpu(bra, p[0]) * parity_cpu(comb, q[0]);
-    Hij *= static_cast<double>(sgn);
+    Hij *= static_cast<T>(sgn);
   } else {
     assert(idx_lst[4] == 1);
-    // double
+    // T
     std::tie(p[1], p[0]) = std::minmax(orbital_lst[0], orbital_lst[2]);
     std::tie(q[1], q[0]) = std::minmax(orbital_lst[1], orbital_lst[3]);
     int sgn = parity_cpu(bra, p[0]) * parity_cpu(bra, p[1]) *
               parity_cpu(comb, q[0]) * parity_cpu(comb, q[1]);
     Hij = h2e_get_cpu(h2e, p[0], p[1], q[0], q[1]);
 
-    Hij *= static_cast<double>(sgn);
+    Hij *= static_cast<T>(sgn);
   }
   return Hij;
 }
@@ -178,5 +179,18 @@ void get_comb_SD(unsigned long *comb, double *lst, const int *merged,
     lst[idx] *= -1.0f;
   }
 }
+
+template float get_comb_SD_fused<float>(unsigned long *comb, const int *merged,
+                                        const float *h1e, const float *h2e,
+                                        unsigned long *bra, const int r0,
+                                        const int sorb, const int len,
+                                        const int noA, const int noB);
+
+template double get_comb_SD_fused<double>(unsigned long *comb,
+                                          const int *merged, const double *h1e,
+                                          const double *h2e, unsigned long *bra,
+                                          const int r0, const int sorb,
+                                          const int len, const int noA,
+                                          const int noB);
 
 }  // namespace squant

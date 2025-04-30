@@ -4,20 +4,22 @@
 
 namespace squant {
 
-double h1e_get_cpu(const double *h1e, const size_t i, const size_t j,
+template<typename T>
+T h1e_get_cpu(const T *h1e, const size_t i, const size_t j,
                    const size_t sorb) {
   return h1e[j * sorb + i];
 }
 
-double h2e_get_cpu(const double *h2e, const size_t i, const size_t j,
+template<typename T>
+T h2e_get_cpu(const T *h2e, const size_t i, const size_t j,
                    const size_t k, const size_t l) {
   if ((i == j) || (k == l)) return 0.00;
   size_t ij = i > j ? i * (i - 1) / 2 + j : j * (j - 1) / 2 + i;
   size_t kl = k > l ? k * (k - 1) / 2 + l : l * (l - 1) / 2 + k;
-  double sgn = 1;
+  T sgn = 1;
   sgn = i > j ? sgn : -sgn;
   sgn = k > l ? sgn : -sgn;
-  double val;
+  T val;
   if (ij >= kl) {
     size_t ijkl = ij * (ij + 1) / 2 + kl;
     val = sgn * h2e[ijkl];
@@ -28,10 +30,11 @@ double h2e_get_cpu(const double *h2e, const size_t i, const size_t j,
   return val;
 }
 
-double get_Hii_cpu(const unsigned long *bra, const unsigned long *ket,
-                   const double *h1e, const double *h2e, const int sorb,
+template<typename T>
+T get_Hii_cpu(const unsigned long *bra, const unsigned long *ket,
+                   const T *h1e, const T *h2e, const int sorb,
                    const int nele, const int bra_len) {
-  double Hii = 0.00;
+  T Hii = 0.00;
   int olst[MAX_NELE] = {0};
   get_olst_cpu(bra, olst, bra_len);
 
@@ -46,10 +49,11 @@ double get_Hii_cpu(const unsigned long *bra, const unsigned long *ket,
   return Hii;
 }
 
-double get_HijS_cpu(const unsigned long *bra, const unsigned long *ket,
-                    const double *h1e, const double *h2e, const size_t sorb,
+template<typename T>
+T get_HijS_cpu(const unsigned long *bra, const unsigned long *ket,
+                    const T *h1e, const T *h2e, const size_t sorb,
                     const int bra_len) {
-  double Hij = 0.00;
+  T Hij = 0.00;
   int p[1], q[1];
   diff_orb_cpu(bra, ket, bra_len, p, q);
   Hij += h1e_get_cpu(h1e, p[0], q[0], sorb);  // hpq
@@ -63,26 +67,28 @@ double get_HijS_cpu(const unsigned long *bra, const unsigned long *ket,
     }
   }
   int sgn = parity_cpu(bra, p[0]) * parity_cpu(ket, q[0]);
-  Hij *= static_cast<double>(sgn);
+  Hij *= static_cast<T>(sgn);
   return Hij;
 }
 
-double get_HijD_cpu(const unsigned long *bra, const unsigned long *ket,
-                    const double *h1e, const double *h2e, const size_t sorb,
+template<typename T>
+T get_HijD_cpu(const unsigned long *bra, const unsigned long *ket,
+                    const T *h1e, const T *h2e, const size_t sorb,
                     const int bra_len) {
   int p[2], q[2];
   diff_orb_cpu(bra, ket, bra_len, p, q);
   int sgn = parity_cpu(bra, p[0]) * parity_cpu(bra, p[1]) *
             parity_cpu(ket, q[0]) * parity_cpu(ket, q[1]);
-  double Hij = h2e_get_cpu(h2e, p[0], p[1], q[0], q[1]);
-  Hij *= static_cast<double>(sgn);
+  T Hij = h2e_get_cpu(h2e, p[0], p[1], q[0], q[1]);
+  Hij *= static_cast<T>(sgn);
   return Hij;
 }
 
-double get_Hij_cpu(const unsigned long *bra, const unsigned long *ket,
-                   const double *h1e, const double *h2e, const size_t sorb,
+template<typename T>
+T get_Hij_cpu(const unsigned long *bra, const unsigned long *ket,
+                   const T *h1e, const T *h2e, const size_t sorb,
                    const int nele, const int bra_len) {
-  double Hij = 0.00;
+  T Hij = 0.00;
   int type[2] = {0};
   diff_type_cpu(bra, ket, type, bra_len);
   if (type[0] == 0 && type[1] == 0) {
@@ -94,5 +100,38 @@ double get_Hij_cpu(const unsigned long *bra, const unsigned long *ket,
   }
   return Hij;
 }
+
+template float h1e_get_cpu<float>(const float *, size_t, size_t, size_t);
+template double h1e_get_cpu<double>(const double *, size_t, size_t, size_t);
+
+template float h2e_get_cpu<float>(const float *, size_t, size_t, size_t,
+                                  size_t);
+template double h2e_get_cpu<double>(const double *, size_t, size_t, size_t,
+                                    size_t);
+
+template float get_Hii_cpu<float>(const unsigned long *, const unsigned long *,
+                                  const float *, const float *, int, int, int);
+template double get_Hii_cpu<double>(const unsigned long *,
+                                    const unsigned long *, const double *,
+                                    const double *, int, int, int);
+
+template float get_HijS_cpu<float>(const unsigned long *, const unsigned long *,
+                                   const float *, const float *, size_t, int);
+template double get_HijS_cpu<double>(const unsigned long *,
+                                     const unsigned long *, const double *,
+                                     const double *, size_t, int);
+
+template float get_HijD_cpu<float>(const unsigned long *, const unsigned long *,
+                                   const float *, const float *, size_t, int);
+template double get_HijD_cpu<double>(const unsigned long *,
+                                     const unsigned long *, const double *,
+                                     const double *, size_t, int);
+
+template float get_Hij_cpu<float>(const unsigned long *, const unsigned long *,
+                                  const float *, const float *, size_t, int,
+                                  int);
+template double get_Hij_cpu<double>(const unsigned long *,
+                                    const unsigned long *, const double *,
+                                    const double *, size_t, int, int);
 
 }  // namespace squant

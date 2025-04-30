@@ -4,8 +4,8 @@ import torch
 from loguru import logger
 from C_extension_MAX_SORB_64 import get_comb_hij_fused, get_hij_torch, get_comb_tensor
 
-device = "cuda"
-# device = "cpu"
+# device = "cuda"
+device = "cpu"
 e = torch.load("../molecule/fe2s2-OO.pth", weights_only=False)
 h1e = e["h1e"].to(device)
 h2e = e["h2e"].to(device)
@@ -33,7 +33,7 @@ hij_4 = get_hij_torch(x, comb.squeeze(0), h1e.double(), h2e.double(), sorb, nele
 assert torch.allclose(hij_3, hij_1)
 assert torch.allclose(hij_4, hij_2)
 
-print((hij_1.double() - hij_2.double()).norm())
+print((hij_1.double() - hij_2.double()).norm().item())
 print(hij_3.dtype)
 print(hij_4.dtype)
 # breakpoint()
