@@ -12,7 +12,9 @@ __device__ inline int get_parity_cuda(const unsigned long x) {
 __device__ inline unsigned long get_ones_cuda(const int n) {
   return n == 64 ? ~0ULL: (1ULL << n) - 1ULL;
 }  // parenthesis must be added due to priority
-__device__ inline double num_parity_cuda(unsigned long x, int i) {
+
+template<typename T = double>
+__device__ inline T num_parity_cuda(unsigned long x, int i) {
   // return 2.0f * static_cast<double>(x >> ( i - 1) & 1) - 1.0f;
   return (x >> (i - 1) & 1) ? 1.00 : -1.00;
 }
@@ -61,8 +63,18 @@ __device__ void get_ovlst_cuda(const unsigned long *bra, int *merged,
                                const int bra_len);
 
 // 0: unoccupied 1: occupied
-__device__ void get_zvec_cuda(const unsigned long *bra, double *lst,
-                              const int sorb, const int bra_len, const int idx);
+// __device__ void get_zvec_cuda(const unsigned long *bra, double *lst,
+//                               const int sorb, const int bra_len, const int idx);
+template<typename T = double>
+__device__ void get_zvec_cuda(const unsigned long *bra, T *lst,
+                              const int sorb, const int bra_len,
+                              const int idx) {
+  constexpr int block = 64;
+  const int idx_bra = idx / block;
+  const int idx_bit = idx % block;
+  lst[idx] = num_parity_cuda<T>(bra[idx_bra], idx_bit + 1);
+}
+
 
 __device__ int64_t permute_sgn_cuda(const int64_t *image2,
                                     const int64_t *onstate, 

@@ -38,9 +38,11 @@ Tensor tensor_to_onv_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
 Tensor onv_to_tensor_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
   const int bra_len = (sorb - 1) / 64 + 1;
   const auto nbatch = bra_tensor.size(0);
-  Tensor comb_bit;
+  TORCH_CHECK(bra_tensor.dim() == 2, "bra_tensor must be 2D");
+
+  const auto dtype = torch::get_default_dtype();
   auto options = torch::TensorOptions()
-                     .dtype(torch::kDouble)
+                     .dtype(dtype)
                      .layout(bra_tensor.layout())
                      .device(bra_tensor.device())
                      .requires_grad(false);
@@ -48,14 +50,24 @@ Tensor onv_to_tensor_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
   if (bra_tensor.numel() == 0) {
     return torch::empty({0, sorb}, options);
   }
-  comb_bit = torch::empty({nbatch, sorb}, options);
+  Tensor comb_bit = torch::empty({nbatch, sorb}, options);
 
   const unsigned long *bra_ptr =
       reinterpret_cast<unsigned long *>(bra_tensor.data_ptr<uint8_t>());
-  double *comb_ptr = comb_bit.data_ptr<double>();
-  squant::onv_to_tensor_cuda(comb_ptr, bra_ptr, sorb, bra_len, nbatch,
-                             comb_bit.numel());
-  // C10_CUDA_KERNEL_LAUNCH_CHECK();
+  // double *comb_ptr = comb_bit.data_ptr<double>();
+  // squant::onv_to_tensor_cuda(comb_ptr, bra_ptr, sorb, bra_len, nbatch,
+  //                            comb_bit.numel());
+
+  AT_DISPATCH_FLOATING_TYPES(
+      comb_bit.scalar_type(), "onv_to_tensor_tensor_cuda", ([&] {
+        auto *comb_ptr = comb_bit.data_ptr<scalar_t>();
+        at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
+          for (const auto i : c10::irange(begin, end)) {
+            squant::onv_to_tensor_cuda<scalar_t>(
+                comb_ptr, bra_ptr, sorb, bra_len, nbatch, comb_bit.numel());
+          }
+        });
+      }));
   return comb_bit;
 }
 

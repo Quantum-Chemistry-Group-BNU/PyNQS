@@ -13,7 +13,8 @@ __host__ void tensor_to_onv_cuda(uint8_t *states, const uint8_t *bra,
                                  const int bra_len, const int tensor_len);
 
 // bra: (nbatch, onv), comb: (nbatch, sorb)
-__host__ void onv_to_tensor_cuda(double *comb, const unsigned long *bra,
+template<typename T = double>
+__host__ void onv_to_tensor_cuda(T *comb, const unsigned long *bra,
                                  const int sorb, const int bra_len,
                                  const int nbatch, const size_t numel);
 

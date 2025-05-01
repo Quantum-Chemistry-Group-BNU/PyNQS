@@ -35,31 +35,38 @@ __host__ void squant::tensor_to_onv_cuda(uint8_t *states, const uint8_t *bra,
       bra, states, sorb, tensor_len, tensor_len * nbatch);
 }
 
-template <const int _len>
-__global__ void onv_to_tensor_kernel(double *comb, const unsigned long *bra,
+template <typename T, const int _len>
+__global__ void onv_to_tensor_kernel(T *comb, const unsigned long *bra,
                                      const int sorb, const size_t m) {
   size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn >= m)
     return;
   size_t idm = idn / sorb;
   // FIXME: the cost of launching thread. thread > 2**31
-  squant::get_zvec_cuda(&bra[idm * _len], &comb[idm * sorb], sorb, _len,
-                        idn % sorb);
+  squant::get_zvec_cuda<T>(&bra[idm * _len], &comb[idm * sorb], sorb, _len,
+                           idn % sorb);
 }
 
 // onv(unsinged long): 0b0011 -> tensor(double): [1.0. 1.0, 0.0, 0.0],
 // 1: occupied, 0: unoccupied
-__host__ void squant::onv_to_tensor_cuda(double *comb, const unsigned long *bra,
+template <typename T>
+__host__ void squant::onv_to_tensor_cuda(T *comb, const unsigned long *bra,
                                          const int sorb, const int bra_len,
                                          const int nbatch, const size_t numel) {
   dim3 blockDim(1024);
   dim3 gridDim((numel + blockDim.x - 1) / blockDim.x);
   // FIXME: numel > 2*
-  onv_to_tensor_kernel<MAX_SORB_LEN>
+  onv_to_tensor_kernel<T, MAX_SORB_LEN>
       <<<gridDim, blockDim>>>(comb, bra, sorb, numel);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
+
+// template __host__ void
+// squant::onv_to_tensor_cuda<double>(T *comb, const unsigned long *bra,
+//                                          const int sorb, const int bra_len,
+//                                          const int nbatch, const size_t
+//                                          numel)
 
 template <const int _len, typename T>
 __global__ void get_Hij_kernel_2D(T *Hmat, const unsigned long *bra,
@@ -107,11 +114,10 @@ __global__ void get_Hij_kernel_3D(T *Hmat, const unsigned long *bra,
 // local energy -> (nbatch, ncomb)
 template <typename T>
 __host__ void squant::get_Hij_3D_cuda(T *Hmat, const unsigned long *bra,
-                                      const unsigned long *ket,
-                                      const T *h1e, const T *h2e,
-                                      const int sorb, const int nele,
-                                      const int bra_len, const int nbatch,
-                                      const int ncomb) {
+                                      const unsigned long *ket, const T *h1e,
+                                      const T *h2e, const int sorb,
+                                      const int nele, const int bra_len,
+                                      const int nbatch, const int ncomb) {
   dim3 blockDim(THREAD, THREAD);
   dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x,
                (ncomb + blockDim.y - 1) / blockDim.y);
@@ -125,11 +131,10 @@ __host__ void squant::get_Hij_3D_cuda(T *Hmat, const unsigned long *bra,
 // construct Hij matrix -> (nbatch1, nbatch2)
 template <typename T>
 __host__ void squant::get_Hij_2D_cuda(T *Hmat, const unsigned long *bra,
-                                      const unsigned long *ket,
-                                      const T *h1e, const T *h2e,
-                                      const int sorb, const int nele,
-                                      const int bra_len, const int n,
-                                      const int m) {
+                                      const unsigned long *ket, const T *h1e,
+                                      const T *h2e, const int sorb,
+                                      const int nele, const int bra_len,
+                                      const int n, const int m) {
   dim3 blockDim(THREAD, THREAD);
   dim3 gridDim((n + blockDim.x - 1) / blockDim.x,
                (m + blockDim.y - 1) / blockDim.y);
@@ -138,8 +143,6 @@ __host__ void squant::get_Hij_2D_cuda(T *Hmat, const unsigned long *bra,
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }
-
-
 
 template <const int _len>
 __global__ void get_merged_ovlst_kernel(const unsigned long *bra, int *merged,
@@ -220,12 +223,11 @@ __global__ void get_comb_SD_kernel(unsigned long *comb, const int *merged,
 }
 
 template <const int _len, typename T>
-__global__ void get_comb_SD_fused_kernel(unsigned long *bra,
-                                         unsigned long *comb, const int *merged,
-                                         const T *h1e, const T *h2e,
-                                         T *Hmat, const int sorb,
-                                         const int noA, const int noB,
-                                         const int nbatch, const int ncomb) {
+__global__ void
+get_comb_SD_fused_kernel(unsigned long *bra, unsigned long *comb,
+                         const int *merged, const T *h1e, const T *h2e, T *Hmat,
+                         const int sorb, const int noA, const int noB,
+                         const int nbatch, const int ncomb) {
   __shared__ int _merged_sh[MAX_SORB_LEN * 64];
   __shared__ unsigned long n0[MAX_SORB_LEN];
   int idn = blockIdx.x * blockDim.x + threadIdx.x;
@@ -263,13 +265,10 @@ __global__ void get_comb_SD_fused_kernel(unsigned long *bra,
   }
 }
 template <typename T>
-__host__ void squant::get_comb_fused_cuda(unsigned long *bra,
-                                          unsigned long *comb,
-                                          const int *merged, const T *h1e,
-                                          const T *h2e, T *Hmat,
-                                          const int sorb, const int len,
-                                          const int noA, const int noB,
-                                          const int nbatch, const int ncomb) {
+__host__ void squant::get_comb_fused_cuda(
+    unsigned long *bra, unsigned long *comb, const int *merged, const T *h1e,
+    const T *h2e, T *Hmat, const int sorb, const int len, const int noA,
+    const int noB, const int nbatch, const int ncomb) {
   dim3 blockDim(256);
   dim3 gridDim(nbatch * ((ncomb - 1) / blockDim.x + 1));
   get_comb_SD_fused_kernel<MAX_SORB_LEN, T><<<gridDim, blockDim>>>(
@@ -359,6 +358,11 @@ squant::get_comb_fused_cuda<double>(unsigned long *, unsigned long *,
                                     double *, int, int, int, int, int, int);
 
 template __host__ void
+squant::onv_to_tensor_cuda<double>(double *comb, const unsigned long *bra,
+                                   const int sorb, const int bra_len,
+                                   const int nbatch, const size_t numel);
+
+template __host__ void
 squant::get_Hij_3D_cuda<float>(float *, const unsigned long *,
                                const unsigned long *, const float *,
                                const float *, int, int, int, int, int);
@@ -371,6 +375,10 @@ squant::get_comb_fused_cuda<float>(unsigned long *, unsigned long *,
                                    const int *, const float *, const float *,
                                    float *, int, int, int, int, int, int);
 
+template __host__ void
+squant::onv_to_tensor_cuda<float>(float *comb, const unsigned long *bra,
+                                  const int sorb, const int bra_len,
+                                  const int nbatch, const size_t numel);
 
 __global__ void array_index_kernel(double *data_ptr, int64_t *index,
                                    int64_t length, int64_t offset,

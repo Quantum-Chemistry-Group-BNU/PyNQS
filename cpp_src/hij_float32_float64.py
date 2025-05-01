@@ -37,7 +37,7 @@ print((hij_1.double() - hij_2.double()).norm().item())
 print(hij_3.dtype)
 print(hij_4.dtype)
 
-x = comb[:10000]
+x = comb.reshape(-1, 8)[:10000]
 torch.set_default_dtype(torch.double)
 x1 = onv_to_tensor(x, sorb)
 print(x1.dtype)
