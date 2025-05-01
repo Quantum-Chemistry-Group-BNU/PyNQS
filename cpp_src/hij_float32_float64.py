@@ -2,7 +2,7 @@ import time
 import torch
 
 from loguru import logger
-from C_extension_MAX_SORB_64 import get_comb_hij_fused, get_hij_torch, get_comb_tensor
+from C_extension_MAX_SORB_64 import get_comb_hij_fused, get_hij_torch, get_comb_tensor, onv_to_tensor
 
 # device = "cuda"
 device = "cpu"
@@ -36,6 +36,15 @@ assert torch.allclose(hij_4, hij_2)
 print((hij_1.double() - hij_2.double()).norm().item())
 print(hij_3.dtype)
 print(hij_4.dtype)
+
+x = comb[:10000]
+torch.set_default_dtype(torch.double)
+x1 = onv_to_tensor(x, sorb)
+print(x1.dtype)
+torch.set_default_dtype(torch.float32)
+x2 = onv_to_tensor(x, sorb)
+print(x2.dtype)
+assert torch.allclose(x1.double(), x2.double())
 # breakpoint()
 # for i in range(4):
 #     t0 = time.time_ns()
