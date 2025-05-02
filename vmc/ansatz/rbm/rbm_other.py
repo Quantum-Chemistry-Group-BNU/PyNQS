@@ -129,7 +129,6 @@ class IsingRBM(nn.Module):
         return (_hidden_bias, _weight_1, _weight_2)
 
     def forward(self, x: Tensor):
-        x = x.to(self.param_dtype)
         # contract with W_1 (nbatch, nqubits), (nqubits, num_hidden) -> (nbatch, num_hidden)
         W_1 = x @ self.params_weight_1
         if self.use_cmpr:

@@ -459,9 +459,14 @@ class ElectronInfo:
      and include 'h1e, h2e, sorb, nele, noa, nob, ecore, nv, onstate'
     """
 
-    def __init__(self, electron_info: dict, device=None) -> None:
+    def __init__(self, electron_info: dict, 
+                 device=None,
+                 use_float64: bool=None) -> None:
         from utils.config import dtype_config
-        dtype = dtype_config.default_dtype
+        if use_float64:
+            dtype = torch.double
+        else:
+            dtype = dtype_config.default_dtype
         self._h1e = electron_info["h1e"].to(dtype=dtype, device=device)
         self._h2e = electron_info["h2e"].to(dtype=dtype, device=device)
         self._sorb = electron_info["sorb"]
