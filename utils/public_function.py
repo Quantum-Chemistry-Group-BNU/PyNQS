@@ -554,7 +554,7 @@ class ElectronInfo:
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}(\n"
-            + f"    use_float64: {self.h1e.dtype == torch.double}"
+            + f"    use_float64: {self.h1e.dtype == torch.double}\n"
             + f"    h1e shape: {self.h1e.shape[0]}\n"
             + f"    h2e shape: {self.h2e.shape[0]}\n"
             + f"    ci shape:{tuple(self.ci_space.shape)}\n"

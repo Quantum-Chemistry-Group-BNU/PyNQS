@@ -87,31 +87,34 @@ class DtypeConfig(Config):
         "use_complex",
         "default_dtype",
         "complex_dtype",
-        "device"
+        "device",
     )
     NON_JSONABLE_FIELDS = (
         "default_dtype",
         "complex_dtype",
     )
 
-    use_float64: bool
-    use_complex: bool
-    default_dtype: torch.dtype
-    complex_dtype: torch.dtype
-
     def __init__(self, *args, **kwargs):
-        self.apply()
+        self._default_dtype = None
+        self._complex_dtype = None
+        self.apply(use_float64=True, use_complex=True, device="cuda")
         super().__init__(*args, **kwargs)
 
-    def apply(self, use_float64: bool = True, use_complex: bool = True, device: str = "cuda"):
+    def apply(self, use_float64: bool, use_complex: bool, device: str) -> None:
         self.use_float64 = use_float64
         self.use_complex = use_complex
-        self.default_dtype = torch.float64 if self.use_float64 else torch.float32
-        self.complex_dtype = torch.complex128 if self.use_float64 else torch.complex64
-        torch.set_default_dtype(self.default_dtype)
-        device = device.lower()
-        assert device in ("cpu", "cuda")
-        self.device = device
+        self._default_dtype = torch.float64 if use_float64 else torch.float32
+        self._complex_dtype = torch.complex128 if use_float64 else torch.complex64
+        torch.set_default_dtype(self._default_dtype)
+        self.device = device.lower()
+        assert self.device in ("cpu", "cuda")
 
+    @property
+    def default_dtype(self) -> torch.dtype:
+        return self._default_dtype
+
+    @property
+    def complex_dtype(self) -> torch.dtype:
+        return self._complex_dtype
 
 dtype_config = DtypeConfig()
