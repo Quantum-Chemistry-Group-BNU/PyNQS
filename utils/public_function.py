@@ -460,12 +460,14 @@ class ElectronInfo:
     """
 
     def __init__(self, electron_info: dict, 
-                 device=None,
-                 use_float64: bool=None) -> None:
+                 device: str = None,
+                 use_float64: bool = None,
+                 ) -> None:
         from utils.config import dtype_config
-        if use_float64:
+        if use_float64 is None:
             dtype = torch.double
         else:
+            assert use_float64 in (True, False)
             dtype = dtype_config.default_dtype
         self._h1e = electron_info["h1e"].to(dtype=dtype, device=device)
         self._h2e = electron_info["h2e"].to(dtype=dtype, device=device)
