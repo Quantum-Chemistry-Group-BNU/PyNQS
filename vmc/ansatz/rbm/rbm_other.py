@@ -4,6 +4,7 @@ from torch import nn, Tensor
 from typing import Optional, Union, Any, Tuple, Union, Callable, List
 
 from utils import get_fock_space
+from utils.config import dtype_config
 from libs.C_extension import onv_to_tensor
 
 class IsingRBM(nn.Module):
@@ -32,7 +33,7 @@ class IsingRBM(nn.Module):
         self.order = 2
         self.activation = activation
         self.use_cmpr = use_cmpr
-        self.param_dtype = torch.double
+        self.param_dtype = dtype_config.default_dtype
         self.params_file = params_file
         self.alpha = alpha
         self.cmpr_order = cmpr_order
@@ -107,10 +108,10 @@ class IsingRBM(nn.Module):
             if not key1.startswith("params_"):
                 key1 = "params_" + key1
             if key1 in KEYS:
-                params_dict[key1] = param
+                params_dict[key1] = param.to(self.param_dtype)
             # support RBM params (num_hidden, nqubits) -> (nqubits, num_hidden)
             if key1 == "params_weights" and "params_weight_1" not in params_dict.keys():
-                params_dict["params_weight_1"] = param.T
+                params_dict["params_weight_1"] = param.T.to(self.param_dtype)
 
         _hidden_bias = params_dict[KEYS[0]].clone().to(self.device)
         _weight_1 = params_dict[KEYS[1]].clone().to(self.device)
@@ -128,7 +129,6 @@ class IsingRBM(nn.Module):
         return (_hidden_bias, _weight_1, _weight_2)
 
     def forward(self, x: Tensor):
-        x = x.to(self.param_dtype)
         # contract with W_1 (nbatch, nqubits), (nqubits, num_hidden) -> (nbatch, num_hidden)
         W_1 = x @ self.params_weight_1
         if self.use_cmpr:
@@ -450,7 +450,8 @@ class Jastrow(nn.Module):
         self.device = device
         self.iscale = iscale
         self.use_complex = use_complex
-        self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
+        self.factory_kwargs_real = {"device": self.device, "dtype": dtype_config.default_dtype}
+        self.factory_kwargs_complex = {"device": self.device, "dtype": dtype_config.complex_dtype}
         self.prod_dim = prod_dim
 
         if self.use_complex:
@@ -464,7 +465,7 @@ class Jastrow(nn.Module):
 
     def forward(self, x):
         if self.use_complex:
-            x = x.to(torch.complex128)
+            x = x.to(**self.factory_kwargs_complex)
         wf = torch.einsum("ijk,ni,nj->nk",self.M, x, x)
         wf = self.control(torch.exp(wf))
         return torch.prod(wf, dim=-1)
@@ -477,7 +478,7 @@ class mlp_linear(nn.Module):
             self.device = device
             self.iscale = iscale
             self.use_complex = use_complex
-            self.factory_kwargs_real = {"device": self.device, "dtype": torch.double}
+            self.factory_kwargs_real = {"device": self.device, "dtype": dtype_config.default_dtype}
             self.hidden_list = hidden_list
             self.params_file = params_file
             self.debug = debug
@@ -561,7 +562,7 @@ class mlp_linear(nn.Module):
                 if not key1.startswith("params_"):
                     key1 = "params_" + key1
                 if key1 in KEYS:
-                    params_dict[key1] = param
+                    params_dict[key1] = param.to(dtype_config.default_dtype)
             M0 = params_dict[KEYS[0]].clone().to(self.device)
             M1 = params_dict[KEYS[1]].clone().to(self.device)
             b0 = params_dict[KEYS[2]].clone().to(self.device)
@@ -573,7 +574,8 @@ class mlp_linear(nn.Module):
             return 0.5*x*(1+torch.tanh(torch.sqrt(torch.tensor(2/torch.pi))*(x+0.044715*x**3)))
 
 
-        def forward(self, x):
+        def forward(self, x: Tensor):
+            x = x.to(dtype_config.default_dtype)
             if self.up:
                 self.f0 = lambda x: self.a[0] * x**2 + self.a[1] * x + self.a[2]
             else:
@@ -581,7 +583,7 @@ class mlp_linear(nn.Module):
             if len(self.hidden_list)>2:
                 self.f1 = self.f0
             if self.use_complex:
-                x = x.to(torch.complex128)
+                x = x.to(dtype_config.complex_dtype)
             hidden_0 = torch.einsum("ik,ni->nk", self.M0, x) + self.b0 # (nbatch, hidden0)
             wf = torch.einsum("ij,ni->nj", self.M1, 2*torch.pi * self.f0(hidden_0)) + self.b1 # (nbatch, hidden1)
             if len(self.hidden_list)>2:

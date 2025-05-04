@@ -6,21 +6,23 @@
 
 namespace squant {
 
-__device__ double h1e_get_cuda(const double *h1e, const size_t i,
-                               const size_t j, const size_t sorb) {
+template <typename T>
+__device__ T h1e_get_cuda(const T *h1e, const size_t i, const size_t j,
+                          const size_t sorb) {
   return h1e[j * sorb + i];
 }
 
-__device__ double h2e_get_cuda(const double *h2e, const size_t i,
-                               const size_t j, const size_t k, const size_t l) {
+template <typename T>
+__device__ T h2e_get_cuda(const T *h2e, const size_t i, const size_t j,
+                          const size_t k, const size_t l) {
   if ((i == j) || (k == l))
     return 0.00;
   size_t ij = i > j ? i * (i - 1) / 2 + j : j * (j - 1) / 2 + i;
   size_t kl = k > l ? k * (k - 1) / 2 + l : l * (l - 1) / 2 + k;
-  double sgn = 1;
+  T sgn = 1;
   sgn = i > j ? sgn : -sgn;
   sgn = k > l ? sgn : -sgn;
-  double val;
+  T val;
   if (ij >= kl) {
     size_t ijkl = ij * (ij + 1) / 2 + kl;
     val = sgn * h2e[ijkl];
@@ -31,11 +33,11 @@ __device__ double h2e_get_cuda(const double *h2e, const size_t i,
   return val;
 }
 
-__device__ double get_Hii_cuda(const unsigned long *bra,
-                               const unsigned long *ket, const double *h1e,
-                               const double *h2e, const size_t sorb,
-                               const int nele, const int bra_len) {
-  double Hii = 0.00;
+template <typename T>
+__device__ T get_Hii_cuda(const unsigned long *bra, const unsigned long *ket,
+                          const T *h1e, const T *h2e, const size_t sorb,
+                          const int nele, const int bra_len) {
+  T Hii = 0.00;
   int olst[MAX_NELE] = {0};
   get_olst_cuda(bra, olst, bra_len);
 
@@ -50,11 +52,11 @@ __device__ double get_Hii_cuda(const unsigned long *bra,
   return Hii;
 }
 
-__device__ double get_HijS_cuda(const unsigned long *bra,
-                                const unsigned long *ket, const double *h1e,
-                                const double *h2e, const size_t sorb,
-                                const int bra_len) {
-  double Hij = 0.00;
+template <typename T>
+__device__ T get_HijS_cuda(const unsigned long *bra, const unsigned long *ket,
+                           const T *h1e, const T *h2e, const size_t sorb,
+                           const int bra_len) {
+  T Hij = 0.00;
   int p[1], q[1];
   diff_orb_cuda(bra, ket, bra_len, p, q);
   Hij += h1e_get_cuda(h1e, p[0], q[0], sorb); // hpq
@@ -68,28 +70,28 @@ __device__ double get_HijS_cuda(const unsigned long *bra,
     }
   }
   int sgn = parity_cuda(bra, p[0]) * parity_cuda(ket, q[0]);
-  Hij *= static_cast<double>(sgn);
+  Hij *= static_cast<T>(sgn);
   return Hij;
 }
 
-__device__ double get_HijD_cuda(const unsigned long *bra,
-                                const unsigned long *ket, const double *h1e,
-                                const double *h2e, const size_t sorb,
-                                const int bra_len) {
+template <typename T>
+__device__ T get_HijD_cuda(const unsigned long *bra, const unsigned long *ket,
+                           const T *h1e, const T *h2e, const size_t sorb,
+                           const int bra_len) {
   int p[2], q[2];
   diff_orb_cuda(bra, ket, bra_len, p, q);
   int sgn = parity_cuda(bra, p[0]) * parity_cuda(bra, p[1]) *
             parity_cuda(ket, q[0]) * parity_cuda(ket, q[1]);
-  double Hij = h2e_get_cuda(h2e, p[0], p[1], q[0], q[1]);
-  Hij *= static_cast<double>(sgn);
+  T Hij = h2e_get_cuda(h2e, p[0], p[1], q[0], q[1]);
+  Hij *= static_cast<T>(sgn);
   return Hij;
 }
 
-__device__ double get_Hij_cuda(const unsigned long *bra,
-                               const unsigned long *ket, const double *h1e,
-                               const double *h2e, const size_t sorb,
-                               const int nele, const int bra_len) {
-  double Hij = 0.00;
+template <typename T>
+__device__ T get_Hij_cuda(const unsigned long *bra, const unsigned long *ket,
+                          const T *h1e, const T *h2e, const size_t sorb,
+                          const int nele, const int bra_len) {
+  T Hij = 0.00;
 
   int type[2] = {0};
   diff_type_cuda(bra, ket, type, bra_len);
@@ -102,5 +104,47 @@ __device__ double get_Hij_cuda(const unsigned long *bra,
   }
   return Hij;
 }
+
+template __device__ float h1e_get_cuda<float>(const float *, size_t, size_t,
+                                              size_t);
+template __device__ float h2e_get_cuda<float>(const float *, size_t, size_t,
+                                              size_t, size_t);
+template __device__ float get_Hii_cuda<float>(const unsigned long *,
+                                              const unsigned long *,
+                                              const float *, const float *,
+                                              size_t, int, int);
+template __device__ float get_HijS_cuda<float>(const unsigned long *,
+                                               const unsigned long *,
+                                               const float *, const float *,
+                                               size_t, int);
+template __device__ float get_HijD_cuda<float>(const unsigned long *,
+                                               const unsigned long *,
+                                               const float *, const float *,
+                                               size_t, int);
+template __device__ float get_Hij_cuda<float>(const unsigned long *,
+                                              const unsigned long *,
+                                              const float *, const float *,
+                                              size_t, int, int);
+
+template __device__ double h1e_get_cuda<double>(const double *, size_t, size_t,
+                                                size_t);
+template __device__ double h2e_get_cuda<double>(const double *, size_t, size_t,
+                                                size_t, size_t);
+template __device__ double get_Hii_cuda<double>(const unsigned long *,
+                                                const unsigned long *,
+                                                const double *, const double *,
+                                                size_t, int, int);
+template __device__ double get_HijS_cuda<double>(const unsigned long *,
+                                                 const unsigned long *,
+                                                 const double *, const double *,
+                                                 size_t, int);
+template __device__ double get_HijD_cuda<double>(const unsigned long *,
+                                                 const unsigned long *,
+                                                 const double *, const double *,
+                                                 size_t, int);
+template __device__ double get_Hij_cuda<double>(const unsigned long *,
+                                                const unsigned long *,
+                                                const double *, const double *,
+                                                size_t, int, int);
 
 } // namespace squant

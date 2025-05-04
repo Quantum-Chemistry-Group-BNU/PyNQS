@@ -19,7 +19,8 @@ for file in $@;do
     continue
   fi
   echo -n ${file}: " " ;
-  grep "^Total energy" $file | tail -n 50 | awk -v E="$eref" '{sum+=$3} END {printf "%.4f" " " "'$m'" "-iters.\n", ((sum/NR - E) * 1000)}'
+  core=$(grep "ecore:" -m1 $file | awk '{print $(NF)}')
+  grep "^<E>" $file | tail -n 50 | awk -v E="$eref" -v core="$core" '{sum+=$3} END {printf "%.4f" " " "'$m'" "-iters.\n", ((sum/NR -E+core) * 1000)}'
   # grep "^Total energy" $file | tail -n 50 | awk -v E="$eref" '{sum+=$3} END {printf "%.6f\n", ((sum/NR - E) * 1000)}'
   # grep "<E>" $file | tail -n 50 | awk '{print $3}' | sed ':a;N;$!ba;s/\n/, /g'
   # grep "reduce rate" $file |  awk '{sum+=$(NF-1)} END {printf "%.6f\n", ((sum/NR - E))}'

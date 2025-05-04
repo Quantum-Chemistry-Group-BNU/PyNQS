@@ -133,8 +133,10 @@ def _simple_flip(
 
         f_psi = (psi_x1 + eta * eta_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
 
+    comb_hij = comb_hij.to(dtype.to_real())
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
     if use_spin_raising:
+        hij_spin = hij_spin.to(comb_hij.dtype)
         sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
     else:
         sloc = torch.zeros_like(eloc)
@@ -296,8 +298,10 @@ def _reduce_psi_flip(
         # [batch, nSD]
         f_psi = (psi_x1 + eat * eta_m * psi_x1_flip) / extra_norm**2
 
+    comb_hij = comb_hij.to(dtype.to_real())
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
     if use_spin_raising:
+        hij_spin = hij_spin.to(comb_hij.dtype)
         sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
     else:
         sloc = torch.zeros_like(eloc)
@@ -394,11 +398,13 @@ def _only_sample_space_flip(
     else:
         f_psi = (psi_x1 + eta * eta_m * psi_x1_flip) / extra_norm**2  # [batch, nSD]
 
+    comb_hij = comb_hij.to(dtype.to_real())
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
 
     if not use_spin_raising:
         sloc = torch.zeros_like(eloc)
     else:
+        hij_spin = hij_spin.to(comb_hij.dtype)
         sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
     t3 = time.time_ns()
 
@@ -409,5 +415,4 @@ def _only_sample_space_flip(
         f"comb_x/uint8_to_bit time: {delta0:.3E} ms, <i|H|j> time: {delta1:.3E} ms, "
         + f"nqs time: {delta2:.3E} ms"
     )
-
     return eloc.to(dtype), sloc.to(dtype), psi_x1[..., 0].to(dtype), (delta0, delta1, delta2)

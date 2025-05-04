@@ -19,6 +19,7 @@ from .nxutils import (
     check_tesnor,
     scan_matrix,
     scan_eta,
+    allocate_registers,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "scan_tensor",
     "scan_matrix",
     "scan_eta",
+    "allocate_registers",
 ]

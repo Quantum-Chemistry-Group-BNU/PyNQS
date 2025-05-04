@@ -188,16 +188,6 @@ __device__ void get_ovlst_cuda(const unsigned long *bra, int *merged,
   }
 }
 
-__device__ void get_zvec_cuda(const unsigned long *bra, double *lst,
-                              const int sorb, const int bra_len,
-                              const int idx) {
-  constexpr int block = 64;
-  const int idx_bra = idx / block;
-  const int idx_bit = idx % block;
-  lst[idx] = num_parity_cuda(bra[idx_bra], idx_bit + 1);
-  ///
-}
-
 __device__ int64_t permute_sgn_cuda(const int64_t *image2,
                                     const int64_t *onstate, int64_t *index,
                                     const int size) {

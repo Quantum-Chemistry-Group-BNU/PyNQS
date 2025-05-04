@@ -182,8 +182,10 @@ def _simple(
     else:
         f_psi = psi_x1
 
+    comb_hij = comb_hij.to(dtype.to_real())
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
     if use_spin_raising:
+        hij_spin = hij_spin.to(dtype.to_real())
         sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
     else:
         sloc = torch.zeros_like(eloc)
@@ -301,8 +303,10 @@ def _reduce_psi(
     else:
         f_psi = psi_x1
 
+    comb_hij = comb_hij.to(dtype.to_real())
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
     if use_spin_raising:
+        hij_spin = hij_spin.to(dtype.to_real())
         sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
     else:
         sloc = torch.zeros_like(eloc)
@@ -389,8 +393,10 @@ def _only_sample_space(
         # <x|H|x'>psi(x')/psi(x)
         f_psi = psi_x1
 
+    comb_hij = comb_hij.to(dtype.to_real())
     eloc = ((f_psi.T / psi_x1[..., 0]).T * comb_hij).sum(-1)
     if use_spin_raising:
+        hij_spin = hij_spin.to(dtype.to_real())
         sloc = ((f_psi.T / psi_x1[..., 0]).T * hij_spin).sum(-1)
     else:
         sloc = torch.zeros_like(eloc)

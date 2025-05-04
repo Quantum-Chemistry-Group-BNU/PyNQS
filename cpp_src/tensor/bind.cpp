@@ -303,7 +303,7 @@ void check_sorb(const int sorb, const int nele) {
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
-        "Calculate the matrix <x|H|x'> using CPU or GPU");
+        "Calculate the matrix <x|H|x'> using CPU or GPU , support Float32 and Double");
   m.def("MCMC_sample", &MCMC_sample, "MCMC sample using CPU");
   m.def("get_comb_tensor", &get_comb, py::arg("bra"), py::arg("sorb"),
         py::arg("nele"), py::arg("noA"), py::arg("noB"),
@@ -313,10 +313,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_comb_hij_fused", &get_comb_hij_fused, py::arg("bra"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
         py::arg("noA"), py::arg("noB"),
-        "Fused get_comb_tensor and get_hij_torch");
+        "Fused get_comb_tensor and get_hij_torch, support Float32 and Double");
   m.def("onv_to_tensor", &onv_to_tensor, py::arg("bra"), py::arg("sorb"),
         "convert onv to bit (-1:unoccupied, 1: occupied) for given onv(1D, 2D) "
-        "using CPU or GPU");
+        "using CPU or GPU, support Float32 and Double using torch.get_default_dtype()");
   m.def("spin_flip_rand", &spin_flip_rand,
         "Flip the spin randomly in MCMC using CPU", py::arg("bra"),
         py::arg("sorb"), py::arg("nele"), py::arg("noA"), py::arg("noB"),

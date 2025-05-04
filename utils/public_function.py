@@ -459,9 +459,18 @@ class ElectronInfo:
      and include 'h1e, h2e, sorb, nele, noa, nob, ecore, nv, onstate'
     """
 
-    def __init__(self, electron_info: dict, device=None) -> None:
-        self._h1e = electron_info["h1e"].to(device)
-        self._h2e = electron_info["h2e"].to(device)
+    def __init__(self, electron_info: dict, 
+                 device: str = None,
+                 use_float64: bool = None,
+                 ) -> None:
+        from utils.config import dtype_config
+        if use_float64 is None:
+            dtype = torch.double
+        else:
+            assert use_float64 in (True, False)
+            dtype = dtype_config.default_dtype
+        self._h1e = electron_info["h1e"].to(dtype=dtype, device=device)
+        self._h2e = electron_info["h2e"].to(dtype=dtype, device=device)
         self._sorb = electron_info["sorb"]
         self._nele = electron_info["nele"]
         self._ecore = electron_info["ecore"]
@@ -469,7 +478,10 @@ class ElectronInfo:
         self._noa = electron_info.get("noa", self._nele // 2)
         self._nva = electron_info.get("nva", self.nv // 2)
 
-        self._memory = (self._h1e.numel() + self._h2e.numel()) * 8 / 2**30  # GiB Double
+        if dtype == torch.double:
+            self._memory = (self._h1e.numel() + self._h2e.numel()) * 8 / 2**30  # GiB Double
+        else:
+            self._memory = (self._h1e.numel() + self._h2e.numel()) * 4 / 2**30  # GiB Double
         self._memory += (self.ci_space.numel()) / 2**30  # Uint8
 
     @property
@@ -544,6 +556,7 @@ class ElectronInfo:
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}(\n"
+            + f"    use_float64: {self.h1e.dtype == torch.double}\n"
             + f"    h1e shape: {self.h1e.shape[0]}\n"
             + f"    h2e shape: {self.h2e.shape[0]}\n"
             + f"    ci shape:{tuple(self.ci_space.shape)}\n"
@@ -935,15 +948,15 @@ def ansatz_batch(
         assert x.size(1) == sorb
         convert = lambda x: x
 
-    if batch == -1 or x.size(0) == 0:
-        return func(convert(x))
+    if batch == -1 or x.size(0) == 0 or batch >= x.size(0):
+        return func(convert(x)).to(dtype)
     else:
         idx_lst = [0] + split_batch_idx(x.size(0), batch)
         # TODO: using list[Tensor] maybe better
         result = torch.empty(x.size(0), device=device, dtype=dtype)
         for i in range(len(idx_lst) - 1):
             start, end = idx_lst[i], idx_lst[i + 1]
-            result[start:end] = func(convert(x[start:end])).view(-1)
+            result[start:end] = func(convert(x[start:end])).to(dtype).view(-1)
         return result
 
 

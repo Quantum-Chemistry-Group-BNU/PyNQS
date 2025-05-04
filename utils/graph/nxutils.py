@@ -280,12 +280,12 @@ def calculate_min_hidden_states(
     }
 
     # scanning line
-    events: List[Tuple[float,int]] = []
+    events: List[Tuple[int,int]] = []
     for u in topo:
         l, r = start[u], end[u]
         events.append((l, +1))
-        events.append((r + 0.1, -1))  # +ε release
-    events.sort(key=lambda x: (x[0], -x[1]))
+        events.append((r, -1))  # +ε release
+    events.sort(key=lambda x: (x[0], x[1]))
 
     active = max_active = 0
     for _, delta in events:
@@ -299,17 +299,21 @@ def allocate_registers(
     graph: nx.DiGraph,
 ) -> Tuple[Dict[int,int], Dict[int,int], int, Dict[int,int]]:
     # interval graph coloring / register allocation
-    regs_max, start, end = calculate_min_hidden_states(graph)
+    max_regs, start, end = calculate_min_hidden_states(graph)
+
+    print(f"start {start}")
+    print(f"end {end}")
+    print(f"max-regs: {max_regs}")
 
     topo = list(map(int, graph.adj))
-    free_regs = list(range(regs_max))
+    free_regs = list(range(max_regs))
     heapify(free_regs)
     heap_active: List[Tuple[int,int,int]] = []  # (release_time, node, reg_id)
     regs_map: Dict[int,int] = {}
 
     for u in topo:
         now = start[u]
-        while heap_active and heap_active[0][0] < now:
+        while heap_active and heap_active[0][0] <= now:
             _, expired_u, reg = heappop(heap_active)
             free_regs.append(reg)
 
@@ -318,4 +322,4 @@ def allocate_registers(
         regs_map[u] = reg_u
         heappush(heap_active, (end[u], u, reg_u))
 
-    return start, end, regs_max, regs_map
+    return start, end, max_regs, regs_map

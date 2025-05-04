@@ -701,7 +701,7 @@ class Sampler:
         # Scatter unique, counts
         unique_rank = scatter_tensor(merge_unique, self.device, torch.uint8, self.world_size)
         # counts_rank = scatter_tensor(merge_counts, self.device, torch.int64, self.world_size)
-        prob_rank = scatter_tensor(merge_prob, self.device, torch.double, self.world_size)
+        prob_rank = scatter_tensor(merge_prob, self.device, self.dtype.to_real(), self.world_size)
 
         t3 = time.time_ns()
         if self.use_LUT:
