@@ -465,10 +465,10 @@ class ElectronInfo:
                  ) -> None:
         from utils.config import dtype_config
         if use_float64 is None:
-            dtype = torch.double
+            dtype = dtype_config.default_dtype
         else:
             assert use_float64 in (True, False)
-            dtype = dtype_config.default_dtype
+            dtype = torch.double if use_float64 else torch.float32
         self._h1e = electron_info["h1e"].to(dtype=dtype, device=device)
         self._h2e = electron_info["h2e"].to(dtype=dtype, device=device)
         self._sorb = electron_info["sorb"]
@@ -479,7 +479,7 @@ class ElectronInfo:
         self._nva = electron_info.get("nva", self.nv // 2)
 
         if dtype == torch.double:
-            self._memory = (self._h1e.numel() + self._h2e.numel()) * 8 / 2**30  # GiB Double
+            self._memory = (self._h1e.numel() + self._h2e.numel()) * 8 / 2**30  # GiB Float32
         else:
             self._memory = (self._h1e.numel() + self._h2e.numel()) * 4 / 2**30  # GiB Double
         self._memory += (self.ci_space.numel()) / 2**30  # Uint8
