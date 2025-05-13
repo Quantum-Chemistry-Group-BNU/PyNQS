@@ -98,7 +98,7 @@ auto MCMC_sample(const std::string model_file, Tensor &initial_state,
   static std::uniform_real_distribution<double> u0(0, 1);
   for (int i = 0; i < n_sweep; i++) {
     auto [psi, next_state] =
-        spin_flip_rand(current_state, sorb, nele, noA, noB, seed);
+        spin_flip_rand_cpu(current_state, sorb, nele, noA, noB, seed);
     std::vector<torch::jit::IValue> inputs = {psi};
     // auto t1 = get_time();
     Tensor psi_next = nqs.forward(inputs).toTensor();
@@ -300,6 +300,20 @@ void check_sorb(const int sorb, const int nele) {
   }
 }
 
+tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
+                               const int nele, const int noA, const int noB,
+                               const int seed, const bool in_place){
+  CHECK_CONTIGUOUS(bra_tensor);
+  if (bra_tensor.is_cpu()){
+    return spin_flip_rand_cpu(bra_tensor, sorb, nele, noA, noB, seed, in_place);
+#ifdef GPU
+  }else{
+    return spin_flip_rand_cuda(bra_tensor, sorb, nele, noA, noB, seed, in_place);
+#endif
+  }
+}
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_hij_torch", &get_Hij, py::arg("bra"), py::arg("ket"),
         py::arg("h1e"), py::arg("h2e"), py::arg("sorb"), py::arg("nele"),
@@ -318,7 +332,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "convert onv to bit (-1:unoccupied, 1: occupied) for given onv(1D, 2D) "
         "using CPU or GPU, support Float32 and Double using torch.get_default_dtype()");
   m.def("spin_flip_rand", &spin_flip_rand,
-        "Flip the spin randomly in MCMC using CPU", py::arg("bra"),
+        "Flip the spin randomly in MCMC using CPU or CUDA", py::arg("bra"),
         py::arg("sorb"), py::arg("nele"), py::arg("noA"), py::arg("noB"),
         py::arg("seed"), py::arg("in_place") = false);
   m.def("tensor_to_onv", &tensor_to_onv, py::arg("bra"), py::arg("sorb"),

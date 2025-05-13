@@ -85,7 +85,7 @@ torch::Tensor onv_to_tensor_tensor_cpu(const torch::Tensor &bra_tensor,
   return comb_bit;
 }
 
-tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
+tuple_tensor_2d spin_flip_rand_cpu(const Tensor &bra_tensor, const int sorb,
                                const int nele, const int noA, const int noB,
                                const int seed, const bool in_place) {
   // bra: (nbatch, bra_len)
@@ -102,31 +102,33 @@ tuple_tensor_2d spin_flip_rand(const Tensor &bra_tensor, const int sorb,
   auto *merged_ptr = reinterpret_cast<int32_t *>(merged.data_ptr<int32_t>());
   // squant::get_olst_vlst_ab_cpu(bra_ptr, merged, sorb, bra_len);
 
-  auto nbatch = bra.size(0);
   const int64_t ncomb = squant::get_Num_SinglesDoubles(sorb, noA, noB);
   if (bra.dim() == 1) {
-    nbatch = 1;
+    bra = bra.reshape({1, -1});
   }
+  auto nbatch = bra.size(0);
   at::parallel_for(0, nbatch, 0, [&](int64_t begin, int64_t end) {
     auto seed_thread = seed + at::get_thread_num();
     // std::cout << "thread: " << at::get_thread_num() << "seed :" <<
     // seed_thread << std::endl;
     for (const auto i : c10::irange(begin, end)) {
       static std::mt19937 rng(seed_thread);
-      static std::uniform_int_distribution<int> u0(0, ncomb - 1);
+      static std::uniform_int_distribution<int> u0(0, ncomb); // [0, ncomb]
       int r0 = u0(rng);
       // std::cout << "r0: " << r0 << std::endl;
-      int idx_lst[4] = {0};
-      squant::unpack_SinglesDoubles(sorb, noA, noB, r0, idx_lst);
-      auto offset0 = i * sorb;
-      auto offset1 = i * bra_len;
-      for (int j = 0; j < 4; j++) {
-        auto idx = merged_ptr[offset0 + idx_lst[j]];
-        BIT_FLIP(bra_ptr[offset1 + idx / 64], idx % 64);
-        // int idx = merged[idx_lst[i]];  // merged[olst, vlst]
-        // BIT_FLIP(bra_ptr[idx / 64], idx % 64);
+      if (r0 >= 1){
+        int idx_lst[4] = {0};
+        squant::unpack_SinglesDoubles(sorb, noA, noB, r0-1, idx_lst);
+        auto offset0 = i * sorb;
+        auto offset1 = i * bra_len;
+        for (int j = 0; j < 4; j++) {
+          auto idx = merged_ptr[offset0 + idx_lst[j]];
+          BIT_FLIP(bra_ptr[offset1 + idx / 64], idx % 64);
+          // int idx = merged[idx_lst[i]];  // merged[olst, vlst]
+          // BIT_FLIP(bra_ptr[idx / 64], idx % 64);
       }
     }
+      }
   });
   return std::make_tuple(
       onv_to_tensor_tensor_cpu(bra.reshape({nbatch, -1}), sorb), bra);

@@ -2,9 +2,7 @@
 
 #pragma once
 
-#include "../cuda/kernel.h"
-#include "../cuda/hashTable_cuda.h"
-#include "../cuda/excitation_cuda.h"
+#include "cuda/hashTable_cuda.h"
 #include "utils_tensor.h"
 
 #ifdef MAGMA
@@ -63,4 +61,9 @@ tuple_tensor_2d wavefunction_lut_cuda(const Tensor &bra_key, const Tensor &onv,
 myHashTable test_hash_tensor(const Tensor &bra_key, const int sorb);
 
 tuple_tensor_2d hash_lut_tensor(const myHashTable ht, const Tensor onv);
+
+tuple_tensor_2d spin_flip_rand_cuda(const Tensor &bra_tensor, const int sorb,
+                                    const int nele, const int noA,
+                                    const int noB, const int seed,
+                                    const bool in_place);
 #endif // GPU

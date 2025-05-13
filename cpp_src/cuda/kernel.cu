@@ -2,11 +2,12 @@
 #include <cstdint>
 #include <cstdio>
 
+#include <curand_kernel.h>
 #include "cuda_handle_error.h" // gcc 13 error, compile using gcc 11
 #include "excitation_cuda.h"
 #include "hamiltonian_cuda.h"
-#include "kernel.h"
 #include "onstate_cuda.h"
+#include "kernel.h"
 
 #include "../common/default.h"
 
@@ -75,7 +76,6 @@ __global__ void get_Hij_kernel_2D(T *Hmat, const unsigned long *bra,
                                   const size_t nele, const int n, const int m) {
   int idn = blockIdx.x * blockDim.x + threadIdx.x;
   int idm = blockIdx.y * blockDim.y + threadIdx.y;
-
   // // XXX: error when _len >= 2, why?
   // __shared__ unsigned long _bra_sh[_len * THREAD];
   // __shared__ unsigned long _ket_sh[_len * THREAD];
@@ -183,7 +183,6 @@ __global__ void get_comb_SD_kernel(unsigned long *comb, double *comb_bit,
     _merged_sh[threadIdx.x] = merged[idx * sorb + threadIdx.x];
   }
   __syncthreads();
-
   int idy = idn - idx * (_comb_thread * blockDim.x);
   if (idy >= ncomb || idy == 0)
     return;
@@ -676,6 +675,55 @@ __host__ void binary_search_BigInteger_cuda(
   BigInteger_kernel<MAX_SORB_LEN>
       <<<gridDim, blockDim>>>(arr, target, result, mask, nbatch, arr_length,
                               target_length, little_endian);
+  cudaError_t cudaStatus = cudaGetLastError();
+  HANDLE_ERROR(cudaStatus);
+}
+
+__device__ int uniform_int(curandState* state, int ncomb) {
+    unsigned int threshold = -ncomb % ncomb;
+    unsigned int r;
+    do {
+        r = curand(state);
+    } while (r < threshold);
+    return r % ncomb;
+}
+
+template <int _len>
+__global__ void spin_flip_rand_kernel(unsigned long *bra, const int32_t *merged,
+                                      const int sorb, const int nele,
+                                      const int noA, const int noB,
+                                      const int64_t nbatch, const int ncomb,
+                                      const int seed) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= nbatch) {
+    return;
+  }
+  curandStateXORWOW state;
+  curand_init(seed, idx, 0, &state);
+  int r0 = uniform_int(&state, ncomb + 1); // [0, ncomb]
+  int idx_lst[4] = {0};
+  auto offset0 = idx * sorb;
+  auto offset1 = idx * _len;
+  // printf("idx: %d seed: %d\n", idx, r0);
+  if (r0 == 0){
+    return;
+  }
+  squant::unpack_SinglesDoubles_cuda(sorb, noA, noB, r0-1, idx_lst);
+  for (int j = 0; j < 4; j++) {
+    auto idy = merged[offset0 + idx_lst[j]];
+    BIT_FLIP(bra[offset1 + idy / 64], idy % 64);
+  }
+}
+
+__host__ void
+squant::spin_flip_rand_cuda_impl(unsigned long *bra, const int32_t *merged,
+                                 const int sorb, const int nele, const int noA,
+                                 const int noB, const int64_t nbatch,
+                                 const int ncomb, const int seed) {
+  dim3 blockDim(256);
+  dim3 gridDim((nbatch + blockDim.x - 1) / blockDim.x);
+  spin_flip_rand_kernel<MAX_SORB_LEN><<<gridDim, blockDim>>>(
+      bra, merged, sorb, nele, noA, noB, nbatch, ncomb, seed);
   cudaError_t cudaStatus = cudaGetLastError();
   HANDLE_ERROR(cudaStatus);
 }

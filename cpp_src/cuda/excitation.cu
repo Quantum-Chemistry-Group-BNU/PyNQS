@@ -18,7 +18,7 @@ get_Num_SinglesDoubles_cuda(const int sorb, const int noA, const int noB) {
   return nSa + nSb + nDaa + nDbb + nDab;
 }
 
-__device__ void unpack_Singles_Doubles_cuda(const int sorb, const int noA,
+__device__ void unpack_SinglesDoubles_cuda(const int sorb, const int noA,
                                             const int noB, const int idx,
                                             int *idx_lst) {
   int k = sorb / 2;
@@ -117,7 +117,7 @@ __device__ void get_comb_SD_cuda(unsigned long *comb, double *lst,
                                  const int *merged, const int r0,
                                  const int sorb, const int noA, const int noB) {
   int idx_lst[5] = {0};
-  unpack_Singles_Doubles_cuda(sorb, noA, noB, r0, idx_lst);
+  unpack_SinglesDoubles_cuda(sorb, noA, noB, r0, idx_lst);
 #pragma unroll
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
@@ -140,7 +140,7 @@ __device__ T get_comb_SD_fused_cuda(unsigned long *comb, const int *merged,
     ket[i] = bra[i];
   }
 
-  unpack_Singles_Doubles_cuda(sorb, noA, noB, r0, idx_lst);
+  unpack_SinglesDoubles_cuda(sorb, noA, noB, r0, idx_lst);
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];
     orbital_lst[i] = idx;
@@ -198,7 +198,7 @@ __device__ void get_comb_SD_cuda(unsigned long *comb, const int *merged,
                                  const int r0, const int sorb, const int noA,
                                  const int noB) {
   int idx_lst[5] = {0};
-  unpack_Singles_Doubles_cuda(sorb, noA, noB, r0, idx_lst);
+  unpack_SinglesDoubles_cuda(sorb, noA, noB, r0, idx_lst);
 #pragma unroll
   for (int i = 0; i < 4; i++) {
     int idx = merged[idx_lst[i]];

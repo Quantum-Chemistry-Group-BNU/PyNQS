@@ -65,6 +65,11 @@ __host__ void permute_sng_batch_cuda(const int64_t *image2,
                                      int64_t *sgn, const int size,
                                      const int64_t nbatch);
 
+__host__ void spin_flip_rand_cuda_impl(unsigned long *bra,
+                                       const int32_t *merged, const int sorb,
+                                       const int nele, const int noA,
+                                       const int noB, const int64_t nbatch,
+                                       const int ncomb, const int seed);
 }  // namespace squant
 
 __host__ void convert_sites_cuda(const int64_t *onstate, const int nphysical,

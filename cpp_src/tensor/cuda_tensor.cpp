@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "common/utils.h"
+#include "cuda/excitation_cuda.h"
 #include "cuda/kernel.h"
 #include "interface_magma.h"
 #include "torch/types.h"
@@ -65,6 +66,32 @@ Tensor onv_to_tensor_tensor_cuda(const Tensor &bra_tensor, const int sorb) {
                 comb_ptr, bra_ptr, sorb, bra_len, nbatch, comb_bit.numel());
           }));
   return comb_bit;
+}
+
+tuple_tensor_2d spin_flip_rand_cuda(const Tensor &bra_tensor, const int sorb,
+                                    const int nele, const int noA,
+                                    const int noB, const int seed,
+                                    const bool in_place) {
+  const int bra_len = (sorb - 1) / 64 + 1;
+  // int merged[MAX_NO + MAX_NV] = {0};
+  auto bra = bra_tensor;
+  if (not in_place) {
+    bra = bra_tensor.clone();
+  }
+  unsigned long *bra_ptr =
+      reinterpret_cast<unsigned long *>(bra.data_ptr<uint8_t>());
+
+  Tensor merged = get_merged_tensor_cuda(bra, nele, sorb, noA, noB);
+  auto *merged_ptr = reinterpret_cast<int32_t *>(merged.data_ptr<int32_t>());
+  auto ncomb = squant::get_Num_SinglesDoubles_cuda(sorb, noA, noB);
+  if (bra.dim() == 1) {
+    bra = bra.reshape({1, -1});
+  }
+  auto nbatch = bra.size(0);
+  squant::spin_flip_rand_cuda_impl(bra_ptr, merged_ptr, sorb, nele, noA, noB, nbatch,
+                           ncomb, seed);
+  return std::make_tuple(
+      onv_to_tensor_tensor_cuda(bra.reshape({nbatch, -1}), sorb), bra);
 }
 
 Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
