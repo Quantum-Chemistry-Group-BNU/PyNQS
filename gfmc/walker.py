@@ -30,6 +30,7 @@ from utils.enums import ElocMethod
 
 from vmc.sample import ElocParams, Sampler
 from vmc.energy.flip import Func
+from vmc.stats import operator_statistics
 
 
 class GFMC:
@@ -43,6 +44,7 @@ class GFMC:
         n_sample: int,
         branch_interval: int,
         vmc_sample_params: dict,
+        p_step: int = 100,
         prefix: str = "GFMC",
     ) -> None:
 
@@ -76,6 +78,7 @@ class GFMC:
         self.max_iter = max_iter
         self.n_sample = n_sample
         self.branch_interval = branch_interval
+        self.p_step = p_step
         self.prefix = prefix
 
         self.vmc_sampler = Sampler(
@@ -211,7 +214,7 @@ class GFMC:
 
         # update sample weight
         x_new = comb_x[torch.arange(beta.size(0)), index]
-        weight_new = weight[index] * beta.squeeze()
+        weight_new = weight * beta.squeeze()
 
         return x_new, weight_new, beta
 
@@ -228,13 +231,10 @@ class GFMC:
         index = torch.searchsorted(cum_prob, rand_prob, right=False).reshape(-1)
 
         x_new = x[index]
-        # TODO: 更新weight 可能有点问题
-        # weight_new = torch.ones_like(weight)
-        # return x_new, weight_new
         return x_new
 
     @torch.no_grad()
-    def run(self):
+    def run(self) -> None:
 
         if self.rank == 0:
             logger.info(f"Begin GFMC iteration: {time.ctime()}", master=True)
@@ -268,9 +268,11 @@ class GFMC:
 
         e_lst = []
         e_lst_1 = []
-        p_step = 30
+        # p_step = self.p_step
+        p_step = 50
         cumprod_beta = torch.ones(self.sample.size(0), p_step, device=self.device)
         # TODO: 增加热浴时间
+        prob = torch.ones(self.sample.size(0), device=self.device) / self.sample.size(0)
         for epoch in range(self.max_iter):
             t0 = time.time_ns()
 
@@ -278,9 +280,11 @@ class GFMC:
 
             eloc_mean = (self.weight * eloc).sum() / (self.weight.sum())
             e_total = eloc_mean.real.item() + self.ecore
-            e_lst.append(e_total)
-            eloc_mean = (cumprod_beta.prod(-1) * eloc).sum() / cumprod_beta.prod(-1).sum()
+
+            beta_prod = cumprod_beta.prod(-1)
+            eloc_mean = (beta_prod * eloc).sum() / beta_prod.sum()
             cumprod_e = eloc_mean.item() + self.ecore
+            e_lst.append(e_total)
             e_lst_1.append(cumprod_e)
             if self.rank == 0:
                 s = f"{epoch} iteration weight_e/cumprod_e {e_total:.9f} {cumprod_e:.9f}"
@@ -299,7 +303,14 @@ class GFMC:
             weight_new /= weight_new.max()
             self.sample, self.weight = sample_new, weight_new
 
-            if (epoch % 50 == 0):
+            weight_stats = operator_statistics(self.weight, prob, self.sample.size(0), "ω")
+            beta_stats = operator_statistics(beta_prod, prob, self.sample.size(0), "β-prod")
+            if self.rank == 0:
+                s = str(weight_stats) + "\n"
+                s += str(beta_stats)
+                logger.info(s, master=True)
+
+            if epoch % 50 == 0:
                 logger.info(f"weight: min {self.weight.min()}")
             cumprod_beta[..., epoch % p_step] = beta.squeeze() / beta.max(0, keepdim=True)[0]
 
@@ -312,7 +323,7 @@ class GFMC:
                 cumprod_beta[..., epoch % p_step] = green_kernel.sum(-1)
                 eloc_mean = (cumprod_beta.prod(-1) * eloc).sum() / cumprod_beta.prod(-1).sum()
                 cumprod_e = eloc_mean.item() + self.ecore
-    
+
                 if self.rank == 0:
                     s = f"{epoch//self.branch_interval} branching total energy {e_total:.9f} {cumprod_e:.9f}"
                     logger.info(s, master=True)
@@ -332,7 +343,15 @@ class GFMC:
                 cumprod_e = eloc_mean.item() + self.ecore
 
                 if self.rank == 0:
-                    logger.info(f"{epoch//self.branch_interval} branching total energy {e_total:.9f} {cumprod_e:.9f}", master=True)
+                    logger.info(
+                        f"{epoch//self.branch_interval} branching total energy {e_total:.9f} {cumprod_e:.9f}",
+                        master=True,
+                    )
+
+            s = f"{epoch} iteration end {time.ctime()}\n"
+            s += "=" * 100
+            if self.rank == 0:
+                logger.info(s, master=True)
 
         e_mean0 = np.mean(np.array(e_lst)[-50:])
         e_mean1 = np.mean(np.array(e_lst_1)[-50:])
