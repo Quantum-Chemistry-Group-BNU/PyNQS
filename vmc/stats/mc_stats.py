@@ -2,31 +2,26 @@ from __future__ import annotations
 
 import torch
 
-from typing import Optional
+from typing import Optional, TypedDict
 from dataclasses import dataclass
-from collections import defaultdict
 from torch import Tensor
-from loguru import logger
 
 from utils.distributed import get_world_size
-from .dist_stats import dist_stats
+from vmc.stats.dist_stats import dist_stats
+
+
+class StatsDict(TypedDict):
+    mean: Tensor
+    var: Tensor
+    sd: Tensor
+    se: Tensor
 
 
 @dataclass
 class operator_statistics:
-    """
-    operator(Ȏ): 'mean', 'var', 'sd', 'se'
-    """
-
-    operator = "Ȏ"
-    stats_dict = defaultdict(str, torch.zeros(0))
-    """
-    defaultdict, 'mean', 'var', 'sd', 'se'
-    """
-    world_size: int
-    """
-    All Rank
-    """
+    operator: str = "Ȏ"
+    world_size: int = 1
+    stats_dict: StatsDict = None
 
     def __init__(
         self,
@@ -37,10 +32,13 @@ class operator_statistics:
     ) -> None:
         self.world_size = get_world_size()
         mean, var, sd, se = dist_stats(x, prob, counts, self.world_size)
-        self.stats_dict["mean"] = mean
-        self.stats_dict["var"] = var
-        self.stats_dict["sd"] = sd
-        self.stats_dict["se"] = se
+
+        self.stats_dict = {
+            "mean": mean,
+            "var": var,
+            "sd": sd,
+            "se": se,
+        }
 
         if operator is not None:
             self.operator = operator
@@ -48,12 +46,11 @@ class operator_statistics:
     def __getitem__(self, key: str) -> Tensor:
         return self.stats_dict[key]
 
-    def to_dict(self) -> defaultdict[str, Tensor]:
+    def to_dict(self) -> StatsDict[str, Tensor]:
         return self.stats_dict
 
     def __repr__(self) -> str:
-        return (
-            f"<{self.operator}> = {self['mean'].real:.9E} "
-            + f"± {self['se'].real:.3E} "
-            + f"[σ² = {self['var'].real:.3E}]"
-        )
+        mean = self["mean"]
+        se = self["se"]
+        var = self["var"]
+        return f"<{self.operator}> = {mean.real:.9E} ± {se.real:.3E} [σ² = {var.real:.3E}]"
