@@ -27,6 +27,7 @@ from utils.public_function import (
 from utils.tools import sys_info
 from utils.config import dtype_config
 from utils.enums import ElocMethod
+from utils.public_function import split_batch_idx
 
 from vmc.sample import ElocParams, Sampler
 from vmc.energy.flip import Func
@@ -158,6 +159,9 @@ class GFMC:
 
         # effective Hamiltonian
         mask = torch.cos(alpha + gamma) < 0.0
+        # fixed-node approximation
+        # sign = torch.sign(psi_x1[..., 0].unsqueeze(-1)) * torch.sign(psi_x1) * torch.sign(comb_hij)
+        # assert (sign[(~torch.eq(mask, sign < 0.0))]).abs().sum().item() == 0.0
         # x' != x
         hij_eff = torch.zeros(comb_hij.shape, dtype=psi_x1.dtype, device=device)
         hij_eff.real = torch.where(mask, comb_hij, 0.0)
@@ -174,6 +178,14 @@ class GFMC:
         K = dirac * Lambda - hij_eff
         green_kernel = psi_x1.conj() * K.conj() / psi_x1[..., 0].unsqueeze(-1).conj()
         eloc = ((psi_x1 / psi_x1[..., 0].unsqueeze(-1)) * hij_eff).sum(-1)  # [nbatch]
+
+        try:
+            assert torch.all(green_kernel >= 0)
+        except AssertionError:
+            index = green_kernel[..., 0].topk(10, largest=False)
+            value = green_kernel[index, 0]
+            logger.error(f"Green kernel is negative, min-value: {value}")
+            exit(-1)
 
         return eloc, green_kernel, comb_x
 
@@ -204,12 +216,14 @@ class GFMC:
         weight: Tensor,
         comb_x: Tensor,
         green_kernel: Tensor,
+        rand_num: Tensor = None,
     ) -> tuple[Tensor, Tensor, Tensor]:
 
-        assert torch.all(green_kernel >= 0), f"Green kernel is negative"
         beta = green_kernel.sum(-1, keepdim=True)  # [nbatch, 1]
         cum_prob = green_kernel.cumsum(-1) / beta
-        rand_num = torch.rand_like(beta)  # [nbatch, 1]
+        # rand_num = torch.rand_like(beta)  # [nbatch, 1]
+        if rand_num is None:
+            rand_num = torch.rand_like(beta) 
         index = torch.searchsorted(cum_prob, rand_num, right=False).reshape(-1)
 
         # update sample weight
@@ -232,6 +246,49 @@ class GFMC:
 
         x_new = x[index]
         return x_new
+
+    def _batch_green_kernel(
+        self,
+        sample: Tensor,
+        weight: Tensor,
+        Lambda: float,
+        idx_lst: list[int],
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, tuple[float, float]]:
+        dim = sample.size(0)
+        beta = torch.empty(dim, device=sample.device, dtype=torch.float64)
+        eloc = torch.empty_like(beta)
+        weight_new = torch.empty_like(weight)
+        sample_new = torch.empty_like(sample)
+        # avoid numerical different
+        rand_num = torch.rand(dim, 1, device=sample.device, dtype=torch.float64)
+
+        time_green = 0.0
+        time_sample = 0.0
+        start = 0
+        for end in idx_lst:
+            t0 = time.time_ns()
+            _sample = sample[start:end]
+            _weight = weight[start:end]
+            _eloc, _green_kernel, _comb_x = self.calculate_green_kernel(_sample, Lambda)
+
+            t1 = time.time_ns()
+            _sample_new, _weight_new, _beta = self.sample_update(
+                _sample,
+                _weight,
+                _comb_x,
+                _green_kernel,
+                rand_num[start:end],
+            )
+            # _weight_new /= _weight_new.max()
+            beta[start:end] = _beta.reshape(-1)
+            sample_new[start:end] = _sample_new
+            weight_new[start:end] = _weight_new
+            eloc[start:end] = _eloc
+            t2 = time.time_ns()
+            time_green = (t1 - t0) / 1.0e09
+            time_sample = (t2 - t1) / 1.0e09
+            start = end
+        return sample_new, weight_new, beta, eloc, (time_green, time_sample)
 
     @torch.no_grad()
     def run(self) -> None:
@@ -266,18 +323,46 @@ class GFMC:
             s += f"{'='*40} Begin GFMC{'='*40}"
             logger.info(s, master=True)
 
+        nbatch = self.sample.size(0)
         e_lst = []
         e_lst_1 = []
-        # p_step = self.p_step
+        p_step = self.p_step
         p_step = 50
-        cumprod_beta = torch.ones(self.sample.size(0), p_step, device=self.device)
+        cumprod_beta = torch.ones(nbatch, p_step, device=self.device)
         # TODO: 增加热浴时间
-        prob = torch.ones(self.sample.size(0), device=self.device) / self.sample.size(0)
+        prob = torch.ones(nbatch, device=self.device) / self.sample.size(0)
+        cost_time = []
+        idx_lst = split_batch_idx(nbatch, min_batch=nbatch)
         for epoch in range(self.max_iter):
-            t0 = time.time_ns()
+            # t0 = time.time_ns()
 
-            eloc, green_kernel, comb_x = self.calculate_green_kernel(self.sample, self.Lambda)
+            # eloc, green_kernel, comb_x = self.calculate_green_kernel(self.sample, self.Lambda)
 
+            # t1 = time.time_ns()
+
+            # # if epoch >= 100:
+            # #     breakpoint()
+            # sample_new, weight_new, beta = self.sample_update(
+            #     self.sample,
+            #     self.weight,
+            #     comb_x,
+            #     green_kernel,
+            # )
+
+            # weight_new /= weight_new.max()
+            # self.sample, self.weight = sample_new, weight_new
+            # t2 = time.time_ns()
+
+            sample_new, weight_new, beta, eloc, cost_time = self._batch_green_kernel(
+                self.sample,
+                self.weight,
+                self.Lambda,
+                idx_lst,
+            )
+            weight_new /= weight_new.max()
+            self.sample, self.weight = sample_new, weight_new
+
+            # mixed estimate energy
             eloc_mean = (self.weight * eloc).sum() / (self.weight.sum())
             e_total = eloc_mean.real.item() + self.ecore
 
@@ -290,19 +375,6 @@ class GFMC:
                 s = f"{epoch} iteration weight_e/cumprod_e {e_total:.9f} {cumprod_e:.9f}"
                 logger.info(s, master=True)
 
-            t1 = time.time_ns()
-
-            # if epoch >= 100:
-            #     breakpoint()
-            sample_new, weight_new, beta = self.sample_update(
-                self.sample,
-                self.weight,
-                comb_x,
-                green_kernel,
-            )
-            weight_new /= weight_new.max()
-            self.sample, self.weight = sample_new, weight_new
-
             weight_stats = operator_statistics(self.weight, prob, self.sample.size(0), "ω")
             beta_stats = operator_statistics(beta_prod, prob, self.sample.size(0), "β-prod")
             if self.rank == 0:
@@ -313,14 +385,14 @@ class GFMC:
             if epoch % 50 == 0:
                 logger.info(f"weight: min {self.weight.min()}")
             cumprod_beta[..., epoch % p_step] = beta.squeeze() / beta.max(0, keepdim=True)[0]
-
             # 能量计算在branching 前后？？
             # branching
             if epoch > 0 and (epoch % self.branch_interval == 0):
                 eloc, green_kernel, _ = self.calculate_green_kernel(self.sample, self.Lambda)
                 eloc_mean = (self.weight * eloc).sum() / (self.weight.sum())
                 e_total = eloc_mean.real.item() + self.ecore
-                cumprod_beta[..., epoch % p_step] = green_kernel.sum(-1)
+                beta = green_kernel.sum(-1)
+                cumprod_beta[..., epoch % p_step] = beta.square() / beta.max(0, keepdim=True)[0]
                 eloc_mean = (cumprod_beta.prod(-1) * eloc).sum() / cumprod_beta.prod(-1).sum()
                 cumprod_e = eloc_mean.item() + self.ecore
 
@@ -338,7 +410,8 @@ class GFMC:
                 eloc, green_kernel, _ = self.calculate_green_kernel(self.sample, self.Lambda)
                 eloc_mean = (self.weight * eloc).sum() / (self.weight.sum())
                 e_total = eloc_mean.real.item() + self.ecore
-                cumprod_beta[..., epoch % p_step] = green_kernel.sum(-1)
+                beta = green_kernel.sum(-1)
+                cumprod_beta[..., epoch % p_step] = beta.square() / beta.max(0, keepdim=True)[0]
                 eloc_mean = (cumprod_beta.prod(-1) * eloc).sum() / cumprod_beta.prod(-1).sum()
                 cumprod_e = eloc_mean.item() + self.ecore
 
@@ -347,11 +420,14 @@ class GFMC:
                         f"{epoch//self.branch_interval} branching total energy {e_total:.9f} {cumprod_e:.9f}",
                         master=True,
                     )
-
-            s = f"{epoch} iteration end {time.ctime()}\n"
+            delta_green, delta_sample = cost_time
+            s = f"Calculate Green's Function {delta_green:.3E} s, "
+            s += f"Update Sampling {delta_sample:.3E} s\n"
+            s += f"{epoch} iteration end {time.ctime()}\n"
             s += "=" * 100
             if self.rank == 0:
                 logger.info(s, master=True)
+            # del green_kernel, comb_x
 
         e_mean0 = np.mean(np.array(e_lst)[-50:])
         e_mean1 = np.mean(np.array(e_lst_1)[-50:])
