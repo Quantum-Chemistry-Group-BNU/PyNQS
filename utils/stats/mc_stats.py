@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import torch
-
 from typing import Optional, TypedDict
 from dataclasses import dataclass
 from torch import Tensor
 
 from utils.distributed import get_world_size
-from vmc.stats.dist_stats import dist_stats
+from utils.stats.dist_stats import dist_stats
 
 
 class StatsDict(TypedDict):

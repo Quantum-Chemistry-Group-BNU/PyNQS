@@ -23,15 +23,15 @@ from utils.public_function import (
     WavefunctionLUT,
     ElectronInfo,
     ansatz_batch,
+    split_batch_idx,
 )
 from utils.tools import sys_info
 from utils.config import dtype_config
 from utils.enums import ElocMethod
-from utils.public_function import split_batch_idx
+from utils.stats import operator_statistics
 
 from vmc.sample import ElocParams, Sampler
 from vmc.energy.flip import Func
-from vmc.stats import operator_statistics
 
 
 class GFMC:
@@ -182,8 +182,7 @@ class GFMC:
         try:
             assert torch.all(green_kernel >= 0)
         except AssertionError:
-            index = green_kernel[..., 0].topk(10, largest=False)
-            value = green_kernel[index, 0]
+            value = green_kernel[..., 0].topk(10, largest=False)[0]
             logger.error(f"Green kernel is negative, min-value: {value}")
             exit(-1)
 
@@ -247,7 +246,7 @@ class GFMC:
         x_new = x[index]
         return x_new
 
-    def _batch_green_kernel(
+    def batch_green_kernel(
         self,
         sample: Tensor,
         weight: Tensor,
@@ -353,7 +352,7 @@ class GFMC:
             # self.sample, self.weight = sample_new, weight_new
             # t2 = time.time_ns()
 
-            sample_new, weight_new, beta, eloc, cost_time = self._batch_green_kernel(
+            sample_new, weight_new, beta, eloc, cost_time = self.batch_green_kernel(
                 self.sample,
                 self.weight,
                 self.Lambda,

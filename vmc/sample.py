@@ -16,7 +16,6 @@ from loguru import logger
 from scipy import special
 
 from vmc.energy import total_energy
-from vmc.stats import operator_statistics
 from libs.C_extension import (
     onv_to_tensor,
     spin_flip_rand,
@@ -52,6 +51,7 @@ from utils.public_function import (
     SpinProjection,
 )
 from utils.det_helper import DetLUT
+from utils.stats import operator_statistics
 from utils.pyscf_helper.operator import spin_raising
 from utils.enums import ElocMethod
 from utils.tensor_typing import Float, Int, UInt8
@@ -405,6 +405,7 @@ class Sampler:
             logger.debug(f"rank: {self.rank} Acceptance ratio = {self.n_accept/self.n_sample:.3E}")
 
         # Single-Rank
+        # self.WF_LUT, _ = self.construct_FCI_lut()
         eloc, sloc, _ = self.calculate_energy(
             sample_unique,
             state_prob=sample_prob,
@@ -469,6 +470,9 @@ class Sampler:
 
         self.WF_LUT = WF_LUT
         # Notice: samples counts is placeholders/empty tensor
+        self.sample_unique = sample_unique
+        self.sample_counts = sample_counts
+        self.sample_prob = sample_prob
         return sample_unique, sample_counts, sample_prob
 
     def MCMC(
@@ -1063,6 +1067,7 @@ class Sampler:
         fp_batch: int = self.eloc_param["fp_batch"]
         f = self.ansatz_batch(x, self.nqs.module.extra, fp_batch)
         _f = f.conj() * f
+        # TODO: using LUT find
 
         # spin flip symmetry
         if self.use_spin_flip:
