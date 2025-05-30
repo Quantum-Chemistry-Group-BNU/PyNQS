@@ -103,7 +103,8 @@ class GFMC:
             dtype = dtype_config.default_dtype
         self.device = dtype_config.device
         self.dtype = dtype
-
+        self.real_dtype = dtype_config.default_dtype
+        self.complex_dtype = dtype_config.complex_dtype
         self.eloc_method = eloc_param["method"]
         # assert self.eloc_method == ElocMethod.SIMPLE
         self.use_unique = eloc_param["use_unique"]
@@ -312,12 +313,13 @@ class GFMC:
         idx_lst: list[int],
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, tuple[float, float]]:
         dim = sample.size(0)
-        beta = torch.empty(dim, device=sample.device, dtype=torch.float64)
-        eloc = torch.empty_like(beta)
+        beta = torch.empty(dim, device=sample.device, dtype=self.real_dtype)
+        # only support fixed-node approximation
+        eloc = torch.empty(dim, device=sample.device, dtype=self.real_dtype)
         weight_new = torch.empty_like(weight)
         sample_new = torch.empty_like(sample)
         # avoid numerical different
-        rand_num = torch.rand(dim, 1, device=sample.device, dtype=torch.float64)
+        rand_num = torch.rand(dim, 1, device=sample.device, dtype=self.real_dtype)
 
         time_green = 0.0
         time_sample = 0.0
@@ -340,6 +342,7 @@ class GFMC:
             beta[start:end] = _beta.reshape(-1)
             sample_new[start:end] = _sample_new
             weight_new[start:end] = _weight_new
+            breakpoint()
             eloc[start:end] = _eloc
             t2 = time.time_ns()
             time_green += (t1 - t0) / 1.0e09
@@ -464,8 +467,8 @@ class GFMC:
             all_reduce_tensor([sum_w, sum_b], dist.ReduceOp.SUM, self.world_size, True)
             stats_eloc = operator_statistics(eloc, self.weight/sum_w, self.sample.size(0), "E")
             stats_eloc_p = operator_statistics(eloc, beta_prod/sum_b, self.sample.size(0), "E-prod")
-            e_total = stats_eloc["mean"].item() + self.ecore
-            cumprod_e = stats_eloc_p["mean"].item() + self.ecore
+            e_total = stats_eloc["mean"].real.item() + self.ecore
+            cumprod_e = stats_eloc_p["mean"].real.item() + self.ecore
     
             e_lst.append(e_total)
             e_lst_1.append(cumprod_e)
