@@ -22,6 +22,8 @@ from utils.distributed import (
     all_gather_tensor,
     scatter_tensor,
     destroy_all_rank,
+    broadcast_tensor,
+    synchronize,
 )
 from utils.public_function import (
     diff_rank_seed,
@@ -77,13 +79,14 @@ class GFMC:
         ele_info: ElectronInfo,
         eloc_param: ElocParams,
         max_iter: int,
-        n_sample: int,
         branch_interval: int,
         vmc_sample_params: dict,
         p_step: int = 50,
         CI_wf: CIWavefunction = None,
         prefix: str = "GFMC",
         green_batch: int = 30000,
+        use_vmc_sample: bool = True,
+        n_sample: int = 10000,
     ) -> None:
 
         self.rank = get_rank()
@@ -120,6 +123,7 @@ class GFMC:
         self.p_step = p_step
         self.prefix = prefix
         self.green_batch = int(green_batch)
+        self.use_vmc_sample = use_vmc_sample
         assert self.green_batch == -1 or green_batch > 0
 
         self.vmc_sampler = Sampler(
@@ -268,7 +272,7 @@ class GFMC:
         comb_x: Tensor,
         green_kernel: Tensor,
         rand_num: Tensor = None,
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, float]:
 
         beta = green_kernel.sum(-1, keepdim=True)  # [nbatch, 1]
         cum_prob = green_kernel.cumsum(-1) / beta
@@ -276,12 +280,11 @@ class GFMC:
         if rand_num is None:
             rand_num = torch.rand_like(beta)
         index = torch.searchsorted(cum_prob, rand_num, right=False).reshape(-1)
-
         # update sample weight
         x_new = comb_x[torch.arange(beta.size(0)), index]
         weight_new = weight * beta.squeeze()
-
-        return x_new, weight_new, beta
+        accept_rate = index.nonzero().size(0) / index.size(0)
+        return x_new, weight_new, beta, accept_rate
 
     def batch_green_kernel(
         self,
@@ -306,6 +309,7 @@ class GFMC:
         time_green = 0.0
         time_sample = 0.0
         start = 0
+        rates = 0.0
         for end in idx_lst:
             t0 = time.time_ns()
             _sample = sample[start:end]
@@ -320,7 +324,7 @@ class GFMC:
             if not_sampling:
                 ...
             else:
-                _sample_new, _weight_new, _beta = self.sample_update(
+                _sample_new, _weight_new, _beta, _rate = self.sample_update(
                     _sample,
                     _weight,
                     _comb_x,
@@ -331,10 +335,13 @@ class GFMC:
                 beta[start:end] = _beta.reshape(-1)
                 sample_new[start:end] = _sample_new
                 weight_new[start:end] = _weight_new
+                rates += _rate
             t2 = time.time_ns()
             time_green += (t1 - t0) / 1.0e09
             time_sample += (t2 - t1) / 1.0e09
             start = end
+        if not not_sampling:
+            logger.info(f"Accept rates: {rates * 100 /len(idx_lst):.3f}%")
         return sample_new, weight_new, beta, eloc, (time_green, time_sample)
 
     def branching(
@@ -375,42 +382,65 @@ class GFMC:
         if self.rank == 0:
             logger.info(f"Begin GFMC iteration: {time.ctime()}", master=True)
 
+        start_gfmc = time.time_ns()
         self.WF_LUT = None
-        # if self.ci_ansatz is None:
         if True:
             initial_state = self.ci_space[0].clone().detach()
             state, state_prob, (eloc, sloc), (eloc_mean, sloc_mean) = self.vmc_sampler.run(
                 initial_state,
                 epoch=0,
             )
-            repeat_nums = (state_prob / self.world_size * self.vmc_sampler.n_sample).long()
-            # logger.info(repeat_nums.sum())
-            nums_all = gather_tensor(repeat_nums, self.device, self.world_size)
-            state_all = gather_tensor(state, self.device, self.world_size)
-            if self.rank == 0:
-                nums_all = torch.cat(nums_all)
-                state_all = torch.cat(state_all)
-                assert nums_all.sum() == self.vmc_sampler.n_sample
-                # logger.info(repeat_nums.sum())
-                sample_all = torch.repeat_interleave(state_all, nums_all, dim=0)
+            if self.use_vmc_sample:
+                # repeat_nums = (state_prob / self.world_size * self.vmc_sampler.n_sample).long()
+                # nums_all = gather_tensor(repeat_nums, self.device, self.world_size)
+                state_all = gather_tensor(state, self.device, self.world_size)
+                if self.rank == 0:
+                    nums_all = self.vmc_sampler.all_sample_counts
+                    state_all = torch.cat(state_all) if self.world_size > 1 else state_all[0]
+                    assert nums_all.sum() == self.vmc_sampler.n_sample
+                    # nums_all = torch.cat(nums_all) if self.world_size > 1 else nums_all[0]
+                    # assert torch.allclose(self.vmc_sampler.all_sample_counts, nums_all)
+                    sample_all = torch.repeat_interleave(state_all, nums_all, dim=0)
+                else:
+                    sample_all: Tensor = None
+                e_vmc = (eloc_mean + sloc_mean).real.item() + self.ecore
             else:
-                sample_all: Tensor = None
+                state_prob /= self.world_size
+                prob_all = gather_tensor(state_prob, self.device, self.world_size)
+                state_all = gather_tensor(state, self.device, self.world_size)
+                eloc_all = gather_tensor(eloc, self.device, self.world_size)
+                sloc_all = gather_tensor(sloc, self.device, self.world_size)
+                if self.rank == 0:
+                    prob_all = torch.cat(prob_all) if self.world_size > 1 else prob_all[0]
+                    state_all = torch.cat(state_all) if self.world_size > 1 else state_all[0]
+                    eloc_all = torch.cat(eloc_all) if self.world_size > 1 else eloc_all[0]
+                    sloc_all = torch.cat(sloc_all) if self.world_size > 1 else sloc_all[0]
+                    _counts = torch.multinomial(prob_all, self.n_sample, replacement=True)
+                    sample_all = state_all[_counts]
+                    eloc = eloc_all[_counts]
+                    sloc = sloc_all[_counts]
+                    e_vmc = (eloc + sloc).mean().real
+                    # _, _count = _counts.unique(sorted=True, return_counts=True)
+                    # logger.info(f"unique-counts: {_count.shape}")
+                    # logger.info(f"prob sum: {prob_all.sum()}")
+                else:
+                    sample_all: Tensor = None
+                    e_vmc = None
+
+                e_vmc = broadcast_tensor(e_vmc, self.device, self.real_dtype) + self.ecore
 
             sample_rank = scatter_tensor(sample_all, self.device, torch.uint8, self.world_size, 0)
             self.sample = sample_rank
             self.weight = torch.ones(self.sample.size(0), device=self.device)
-            e_vmc = (eloc_mean + sloc_mean).real.item() + self.ecore
-            # self.WF_LUT = self.vmc_sampler.WF_LUT
-            from utils.public_function import WavefunctionLUT
-
-            WF_LUT = WavefunctionLUT(
-                self.vmc_sampler.WF_LUT.bra_key,
-                self.vmc_sampler.WF_LUT.wf_value.real,
-                self.sorb,
-                self.device,
-                sort=True,
-            )
-            self.WF_LUT = WF_LUT
+            self.WF_LUT = self.vmc_sampler.WF_LUT
+            # WF_LUT = WavefunctionLUT(
+            #     self.vmc_sampler.WF_LUT.bra_key,
+            #     self.vmc_sampler.WF_LUT.wf_value.real,
+            #     self.sorb,
+            #     self.device,
+            #     sort=True,
+            # )
+            # self.WF_LUT = WF_LUT
         else:
             coeff = self.ci_ansatz.coeff
             space = self.ci_ansatz.onv
@@ -426,8 +456,10 @@ class GFMC:
             self.WF_LUT = None
 
         if self.rank == 0:
+            n_sample = self.vmc_sampler.n_sample if self.use_vmc_sample else self.n_sample
             s = f"VMC initial energy: {e_vmc:.9f}\n"
-            s += f"{'='*40} Begin GFMC{'='*40}"
+            s += f"{'='*40} Begin GFMC{'='*40}\n"
+            s += f"GFMC sample-nums: {n_sample}"
             logger.info(s, master=True)
         nbatch = self.sample.size(0)
         e_lst = []
@@ -435,13 +467,12 @@ class GFMC:
         p_step = self.p_step
         # p_step = 50
         cumprod_beta = torch.ones(nbatch, p_step, device=self.device)
-        # TODO: 增加热浴时间
         prob = torch.ones(nbatch, device=self.device) / self.sample.size(0)
         cost_time = []
         min_batch = nbatch if self.green_batch == -1 else self.green_batch
         idx_lst = split_batch_idx(nbatch, min_batch=min_batch)
         for epoch in range(self.max_iter):
-
+            setup_seed(self.seed + epoch)
             sample_new, weight_new, beta, eloc, cost_time = self.batch_green_kernel(
                 self.sample,
                 self.weight,
@@ -493,7 +524,7 @@ class GFMC:
             # 能量计算在branching 前后？？
             # branching
             if epoch > 0 and (epoch % self.branch_interval == 0):
-                # TODO: Buonaura and Sorella, Physical Review B 57, 11446–11456 (1998).
+                # Buonaura and Sorella, Physical Review B 57, 11446–11456 (1998).
                 start_branch = time.time_ns()
                 weight_new = torch.ones_like(self.weight)
                 sum_w = torch.tensor(self.weight.size(0) * 1.0, device=self.device)
@@ -547,8 +578,14 @@ class GFMC:
                 s += "=" * 100
                 logger.info(s, master=True)
 
+        total_time = (time.time_ns() - start_gfmc) / 1.0e09
+        synchronize()
         if self.rank == 0:
             e_mean0 = np.mean(np.array(e_lst)[-50:])
             e_mean1 = np.mean(np.array(e_lst_1)[-50:])
-            s = f"Last 50-th energy: {e_mean0:.10f} {e_mean1:.10f} vmc-e: {e_vmc:.10f}"
+            s = f"End GFMC iteration: {time.ctime()} "
+            s += f"total cost time: {total_time:.3E} s, "
+            s += f"{total_time/60:.3E} min {total_time/3600:.3E} h\n"
+            s += f"Last 50-th energy: {e_mean0:.10f} {e_mean1:.10f} vmc-e: {e_vmc:.10f}\n"
+            s += f"Delta-E: {(e_vmc - e_mean0)* 1000:.3f}/{(e_vmc - e_mean1)* 1000:.3f} mHa"
             logger.info(s, master=True)

@@ -177,6 +177,8 @@ class Sampler:
         self.last_n_sample = n_sample
         self.start_n_sample = start_n_sample
         self.n_sample = start_n_sample
+        # GFMC only in rank-0
+        self.all_sample_counts: Tensor = None
 
         # control eloc
         self.eloc_param = eloc_param
@@ -688,7 +690,8 @@ class Sampler:
                 # assert(torch.allclose(counts_test, merge_counts))
             else:
                 # every-rank sample is unique
-                merge_counts: Tensor = None
+                # merge_counts: Tensor = None
+                merge_counts = count_all
                 merge_prob = count_all / count_all.sum()
                 merge_unique = unique_all
                 if self.use_LUT:
@@ -701,6 +704,7 @@ class Sampler:
 
         t2 = time.time_ns()
 
+        self.all_sample_counts = merge_counts
         # FIXME:zbwu-24-04-17 remove counts-ranks
         # Scatter unique, counts
         unique_rank = scatter_tensor(merge_unique, self.device, torch.uint8, self.world_size)
