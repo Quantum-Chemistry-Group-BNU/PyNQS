@@ -4,8 +4,6 @@ import __main__
 import time
 import platform
 import os
-import subprocess
-import sys
 import warnings
 import torch
 import numpy as np
@@ -24,7 +22,6 @@ from utils.distributed import (
     get_world_size,
 )
 from utils import ElectronInfo, Dtype
-from utils.tools import sys_info
 from utils.config import dtype_config
 
 TORCH_VERSION: str = torch.__version__
@@ -133,7 +130,6 @@ class BaseVMCOptimizer(ABC):
         self.rank = get_rank()
         self.world_size = get_world_size()
         self.external_model = external_model
-        self.dump_input()
 
         # whether read nqs/h1e-h2e from external file
         if self.external_model is not None:
@@ -308,42 +304,6 @@ class BaseVMCOptimizer(ABC):
             self.grad_e_lst[1].extend(x["max_grad"])
         if "energy" in x.keys():
             self.e_lst.extend(x["energy"])
-
-    def dump_input(self) -> None:
-        """
-        print main file to resume
-        """
-        if self.rank == 0:
-            s = f"{'=' * 50} Begin PyNQS {'=' * 50}\n"
-            s += "System:\n"
-            s += f"System {str(platform.uname())}\n"
-            s += f"{sys_info()}\n"
-            s += f"Python {sys.version}\n"
-            s += f"numpy {np.__version__} torch {torch.__version__}\n"
-            s += f"Date: {time.ctime()}\n"
-            s += f"Device: {self.device}\n"
-            s += f"PyNQS Version: {self.get_version()}"
-            logger.info(s, master=True)
-            if hasattr(__main__, "__file__"):
-                filename = os.path.abspath(__main__.__file__)
-                s = f"Input file: {filename}\n"
-                logger.info(s, master=True)
-                os.system(f"cat {filename}")
-            logger.info("=" * 100, master=True)
-
-    @staticmethod
-    def get_version() -> str:
-        """
-        print Git version
-        """
-        command = "git rev-parse HEAD"
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        if len(result.stderr) != 0:
-            warnings.warn(f"PyNQS git-version not been found", UserWarning)
-            version = "0000000000000000"
-        else:
-            version = result.stdout
-        return version
 
     def save_grad_energy(self, e_total: float) -> None:
         r"""
