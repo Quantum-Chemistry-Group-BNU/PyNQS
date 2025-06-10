@@ -35,6 +35,7 @@ from utils.public_function import (
 from utils.config import dtype_config
 from utils.stats import operator_statistics
 from utils.ci import CIWavefunction
+from utils.tools import dump_input
 
 from vmc.sample import ElocParams, Sampler
 from vmc.energy.flip import Func
@@ -85,11 +86,12 @@ class GFMC:
         use_vmc_sample: bool = True,
         n_sample: int = 10000,
     ) -> None:
-
         self.rank = get_rank()
         self.world_size = get_world_size()
         # assert self.world_size == 1, f"dose not support {self.world_size} > 1"
 
+        if self.rank == 0:
+            logger.info(dump_input())
         seed = 2023
         self.seed = diff_rank_seed(seed, rank=self.rank)
         logger.info(f"GFMC sample-seed: {self.seed}")

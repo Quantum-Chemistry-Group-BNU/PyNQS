@@ -23,6 +23,7 @@ from utils.distributed import (
 )
 from utils import ElectronInfo, Dtype
 from utils.config import dtype_config
+from utils.tools import dump_input
 
 TORCH_VERSION: str = torch.__version__
 if TORCH_VERSION >= "2.0.0":
@@ -221,6 +222,7 @@ class BaseVMCOptimizer(ABC):
         self.k_step_clip = k_step_clip
 
         if self.rank == 0:
+            logger.info(dump_input())
             params_num = sum(map(torch.numel, self.model.parameters()))
             s = f"NQS model:\n{self.model}\n"
             s += f"The number param of NQS model: {params_num}\n"

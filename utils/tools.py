@@ -168,6 +168,8 @@ def dump_input() -> str:
     """
     print main file to resume
     """
+    if getattr(dump_input, "_has_dumped", False):
+        return ""
     s = f"{'=' * 50} Begin PyNQS {'=' * 50}\n"
     s += "System:\n"
     s += f"System {str(platform.uname())}\n"
@@ -179,13 +181,11 @@ def dump_input() -> str:
     if hasattr(__main__, "__file__"):
         filename = os.path.abspath(__main__.__file__)
         s += f"Input file: {filename}\n"
-        result = subprocess.run(f"cat {filename}", shell=True, capture_output=True, text=True)
-        s += result.stdout
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                s += f.read()
+        except Exception as e:
+            s += f"\nError reading file: {str(e)}\n"
         s += "=" * 100
+    dump_input._has_dumped = True 
     return s
-
-
-from utils.distributed import get_rank
-
-if get_rank() == 0:
-    print(dump_input(), flush=True)
