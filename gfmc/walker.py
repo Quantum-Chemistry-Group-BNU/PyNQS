@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 import torch
 import numpy as np
@@ -19,11 +18,11 @@ from utils.distributed import (
     get_world_size,
     all_reduce_tensor,
     gather_tensor,
-    all_gather_tensor,
     scatter_tensor,
     destroy_all_rank,
     broadcast_tensor,
     synchronize,
+    all_gather_tensor,
 )
 from utils.public_function import (
     diff_rank_seed,
@@ -33,9 +32,7 @@ from utils.public_function import (
     ansatz_batch,
     split_batch_idx,
 )
-from utils.tools import sys_info
 from utils.config import dtype_config
-from utils.enums import ElocMethod
 from utils.stats import operator_statistics
 from utils.ci import CIWavefunction
 
@@ -180,7 +177,7 @@ class GFMC:
         dtype: torch.dtype = torch.double,
         WF_LUT: WavefunctionLUT | None = None,
         use_unique: bool = True,
-    ) -> tuple[Tensor, Tensor, Tensor, bool]:
+    ) -> tuple[Tensor, Tensor, Tensor, bool, int]:
 
         device = h1e.device
         dim: int = x.dim()
@@ -194,7 +191,7 @@ class GFMC:
         bra_len = comb_x.shape[2]
         t2 = time.time_ns()
 
-        # hij = |hij|exp(i gamma)
+        # hij = |hij|exp(i gamma), 0/pi
         gamma = torch.where(comb_hij >= 0, 0, torch.pi)  # [nbatch, nSD]
 
         t3 = time.time_ns()
@@ -206,49 +203,40 @@ class GFMC:
         phase = torch.angle(psi_x1)  # [nbatch, nSD]
         alpha = phase - phase[..., 0].unsqueeze(-1)
 
-        # effective Hamiltonian
+        # effective Hamiltonian, fixed-node approximation
         mask = torch.cos(alpha + gamma) < 0.0
-        # fixed-node approximation
+        mask[..., 0] = True
         # sign = torch.sign(psi_x1[..., 0].unsqueeze(-1)) * torch.sign(psi_x1) * torch.sign(comb_hij)
         # assert (sign[(~torch.eq(mask, sign < 0.0))]).abs().sum().item() == 0.0
         # x' != x
         hij_eff = torch.zeros(comb_hij.shape, dtype=psi_x1.dtype, device=device)
         hij_eff.real = torch.where(mask, comb_hij, 0.0)
         # spin-flip potential
-        V_sf = comb_hij[..., 0].reshape(-1)  # [nbatch]
-        V_sf = V_sf + torch.sum(
-            torch.where(~mask, comb_hij, 0.0) * (psi_x1 / psi_x1[..., 0].unsqueeze(-1)), -1
-        )
-        hij_eff[..., 0] = V_sf
+        # V_sf = comb_hij[..., 0].reshape(-1).clone()  # [nbatch]
+        V_sf = torch.sum(torch.where(~mask, comb_hij, 0.0) * (psi_x1 / psi_x1[..., 0].unsqueeze(-1)), -1)
+        hij_eff[..., 0] += V_sf
+
+        eloc = ((psi_x1 / psi_x1[..., 0].unsqueeze(-1)) * hij_eff).sum(-1)  # [nbatch]
+        # eloc_1 = ((psi_x1 / psi_x1[..., 0].unsqueeze(-1)) * comb_hij).sum(-1)
+        # logger.info(f"Diff: {(eloc - eloc_1).norm().item():.7f}")
 
         # fixed-node G(x'<-x) = psi*(x')<x'|Lambda-H|x>/psi*(x)
         dirac = torch.zeros_like(hij_eff)
         dirac[..., 0] = Lambda
         K = dirac - hij_eff
         green_kernel = psi_x1.conj() * K.conj() / psi_x1[..., 0].unsqueeze(-1).conj()
-        eloc = ((psi_x1 / psi_x1[..., 0].unsqueeze(-1)) * hij_eff).sum(-1)  # [nbatch]
 
+        mask = green_kernel[..., 0] < 0
+        green_kernel[..., 0][mask] = 0.0
+        assert torch.all(green_kernel[..., 1:] >= 0)
         stop_flag = False
-        try:
-            assert torch.all(green_kernel[..., 0] >= 0)
-        except AssertionError:
-            value, index = green_kernel[..., 0].topk(5, largest=False)
-            s = f"Green kernel is negative, min-value: {value}\n"
-            s += f"x: {x[index]}\n"
-            s += f"psi: {psi_x1[index, 0]}\n"
-            s += f"eloc: {eloc[index]}\n"
-            s += f"idx: {index}"
-            logger.error(s)
-            # exit(-1)
-            stop_flag = True
+        return eloc, green_kernel, comb_x, stop_flag, mask
 
-        return eloc, green_kernel, comb_x, stop_flag
-
-    def calculate_green_kernel(self, x: Tensor, Lambda: float) -> tuple[Tensor, Tensor, Tensor, bool]:
+    def calculate_green_kernel(self, x: Tensor, Lambda: float) -> tuple[Tensor, Tensor, Tensor, bool, int]:
         unique_x, inverse = torch.unique(x, dim=0, return_inverse=True)
         # logger.info(f"unique_x: {unique_x.shape}")
         # logger.info(f"x: {x.shape}")
-        *result, stop_flag = self._calculate_green_kernel(
+        *result, stop_flag, dig_mask = self._calculate_green_kernel(
             unique_x,
             Lambda,
             self.h1e,
@@ -263,7 +251,9 @@ class GFMC:
             self.WF_LUT,
             self.use_unique,
         )
-        return *tuple(torch.index_select(x, 0, inverse) for x in result[:3]), stop_flag
+        dig_mask = torch.index_select(dig_mask, 0, inverse)
+        nums_lt = dig_mask.sum()
+        return *(torch.index_select(x, 0, inverse) for x in result[:3]), stop_flag, nums_lt
 
     def sample_update(
         self,
@@ -272,7 +262,7 @@ class GFMC:
         comb_x: Tensor,
         green_kernel: Tensor,
         rand_num: Tensor = None,
-    ) -> tuple[Tensor, Tensor, Tensor, float]:
+    ) -> tuple[Tensor, Tensor, Tensor, int]:
 
         beta = green_kernel.sum(-1, keepdim=True)  # [nbatch, 1]
         cum_prob = green_kernel.cumsum(-1) / beta
@@ -283,8 +273,8 @@ class GFMC:
         # update sample weight
         x_new = comb_x[torch.arange(beta.size(0)), index]
         weight_new = weight * beta.squeeze()
-        accept_rate = index.nonzero().size(0) / index.size(0)
-        return x_new, weight_new, beta, accept_rate
+        accept_nums = index.nonzero().size(0)
+        return x_new, weight_new, beta, accept_nums
 
     def batch_green_kernel(
         self,
@@ -292,7 +282,7 @@ class GFMC:
         weight: Tensor,
         Lambda: float,
         idx_lst: list[int],
-        not_sampling: bool = False,
+        sampling: bool = True,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, tuple[float, float]]:
         dim = sample.size(0)
         beta = torch.empty(dim, device=sample.device, dtype=self.real_dtype)
@@ -300,48 +290,49 @@ class GFMC:
         eloc = torch.empty(dim, device=sample.device, dtype=self.real_dtype)
         weight_new = torch.empty_like(weight)
         sample_new = torch.empty_like(sample)
-        if not_sampling:
-            ...
-        else:
+        if sampling:
             # avoid numerical different
             rand_num = torch.rand(dim, 1, device=sample.device, dtype=self.real_dtype)
 
         time_green = 0.0
         time_sample = 0.0
         start = 0
-        rates = 0.0
+        accept_nums = 0
+        dig_lt0 = 0
         for end in idx_lst:
             t0 = time.time_ns()
             _sample = sample[start:end]
             _weight = weight[start:end]
-            _eloc, _green_kernel, _comb_x, stop_flag = self.calculate_green_kernel(_sample, Lambda)
+            _eloc, _kernel, _comb_x, stop_flag, _nums_lt = self.calculate_green_kernel(_sample, Lambda)
             eloc[start:end] = _eloc
 
             # green's function < 0
-            destroy_all_rank(stop_flag, sample.device)
+            # destroy_all_rank(stop_flag, sample.device)
 
             t1 = time.time_ns()
-            if not_sampling:
-                ...
-            else:
-                _sample_new, _weight_new, _beta, _rate = self.sample_update(
+            if sampling:
+                _sample_new, _weight_new, _beta, _nums = self.sample_update(
                     _sample,
                     _weight,
                     _comb_x,
-                    _green_kernel,
+                    _kernel,
                     rand_num[start:end],
                 )
                 # _weight_new /= _weight_new.max()
                 beta[start:end] = _beta.reshape(-1)
                 sample_new[start:end] = _sample_new
                 weight_new[start:end] = _weight_new
-                rates += _rate
+                accept_nums += _nums
             t2 = time.time_ns()
             time_green += (t1 - t0) / 1.0e09
             time_sample += (t2 - t1) / 1.0e09
             start = end
-        if not not_sampling:
-            logger.info(f"Accept rates: {rates * 100 /len(idx_lst):.3f}%")
+            dig_lt0 += _nums_lt
+        if sampling:
+            N = sample.size(0)
+            s = f"Accept nums: {N} -> {accept_nums}, {accept_nums/N * 100:.3f} % "
+            s += f"Diagonal less 0: {dig_lt0}"
+            logger.info(s)
         return sample_new, weight_new, beta, eloc, (time_green, time_sample)
 
     def branching(
@@ -358,22 +349,60 @@ class GFMC:
 
         # x_new = x[index]
 
-        # TODO: gather rand_prod/cum_prod to master-rank
-        # distributed
+        # simple distributed
+        # x_all = gather_tensor(x, self.device, self.world_size, 0)
+        # w_all = gather_tensor(weight, self.device, self.world_size, 0)
+        # if self.rank == 0:
+        #     x_all = torch.cat(x_all) if self.world_size > 1 else x_all[0]
+        #     w_all = torch.cat(w_all) if self.world_size > 1 else w_all[0]
+        #     batch = x_all.size(0)
+        #     xi = torch.rand(batch, device=self.device)
+        #     rand_prob = (torch.arange(batch, device=self.device) + xi) / batch
+        #     cum_prob = (w_all / w_all.sum(0)).cumsum(0)
+        #     index = torch.searchsorted(cum_prob, rand_prob, right=False).reshape(-1)
+        #     x_new = x_all[index]
+        # else:
+        #     x_new: Tensor = None
+        # x_new = scatter_tensor(x_new, self.device, torch.uint8, self.world_size)
+
+        w_sum = all_gather_tensor(weight.sum(0, keepdim=True), self.device, self.world_size)
+        w_sum_all = torch.cat(w_sum).cumsum(0)
+        x_size = torch.tensor([x.size(0)], dtype=torch.int64, device=self.device)
+        x_size_all = all_gather_tensor(x_size, self.device, self.world_size)
+        x_size_all = torch.cat(x_size_all).cumsum(0)
+
+        # rank: rand-prod
+        offset = x_size_all[self.rank] - x_size_all[0]
+        batch = x.size(0)
+        xi = torch.rand(batch, device=self.device)  
+        # logger.info(f"seed: {self.seed}") # check rank random-seed
+        rand_prob = (torch.arange(offset, batch + offset, device=self.device) + xi) / x_size_all[-1]
+
+        # rank cum-prod
+        pre_sum = 0 if self.rank == 0 else w_sum_all[self.rank - 1]
+        offset = pre_sum / w_sum_all[-1]
+        cum_prob = (weight / w_sum_all[-1]).cumsum(0) + offset
+        cum_prob.clamp_(max=1.0)
+
+        # comm batch * (8 * bra_len + 8 + 8) bytes
         x_all = gather_tensor(x, self.device, self.world_size, 0)
-        w_all = gather_tensor(weight, self.device, self.world_size, 0)
+        cum_prob_all = gather_tensor(cum_prob, self.device, self.world_size, 0)
+        rand_prob_all = gather_tensor(rand_prob, self.device, self.world_size, 0)
+        # w_all = gather_tensor(weight, self.device, self.world_size, 0)
+
         if self.rank == 0:
             x_all = torch.cat(x_all) if self.world_size > 1 else x_all[0]
-            w_all = torch.cat(w_all) if self.world_size > 1 else w_all[0]
-            batch = x_all.size(0)
-            xi = torch.rand(batch, device=self.device)
-            rand_prob = (torch.arange(batch, device=self.device) + xi) / batch
-            cum_prob = (w_all / w_all.sum(0)).cumsum(0)
-            index = torch.searchsorted(cum_prob, rand_prob, right=False).reshape(-1)
+            cum_prob_all = torch.cat(cum_prob_all) if self.world_size > 1 else cum_prob_all[0]
+            rand_prob_all = torch.cat(rand_prob_all) if self.world_size > 1 else rand_prob_all[0]
+            index = torch.searchsorted(cum_prob_all, rand_prob_all, right=False).reshape(-1)
             x_new = x_all[index]
+            # w_all = torch.cat(w_all) if self.world_size > 1 else w_all[0]
+            # cum_prob0 = (w_all / w_all.sum(0)).cumsum(0)
+            # assert torch.allclose(cum_prob0, cum_prob_all)
         else:
             x_new: Tensor = None
         x_new = scatter_tensor(x_new, self.device, torch.uint8, self.world_size)
+
         return x_new
 
     @torch.no_grad()
@@ -461,11 +490,15 @@ class GFMC:
             s += f"{'='*40} Begin GFMC{'='*40}\n"
             s += f"GFMC sample-nums: {n_sample}"
             logger.info(s, master=True)
+
+        # save energy/max-weight, max-beta
         nbatch = self.sample.size(0)
         e_lst = []
         e_lst_1 = []
         p_step = self.p_step
         # p_step = 50
+        # max_w = torch.zeros(self.max_iter, device=self.device)
+        # max_b = torch.zeros(self.max_iter, device=self.device)
         cumprod_beta = torch.ones(nbatch, p_step, device=self.device)
         prob = torch.ones(nbatch, device=self.device) / self.sample.size(0)
         cost_time = []
@@ -478,34 +511,37 @@ class GFMC:
                 self.weight,
                 self.Lambda,
                 idx_lst,
+                sampling=True,
             )
-            max_w = weight_new.max() * self.world_size
-            max_b = beta.max() * self.world_size
-            all_reduce_tensor([max_w, max_b], dist.ReduceOp.MAX, self.world_size, True)
-            weight_new /= max_w
-            self.sample, self.weight = sample_new, weight_new
-            cumprod_beta[..., epoch % p_step] = beta / max_b
+
+            delta_CE = self.Lambda - e_vmc
+            if self.rank == 0:
+                logger.info(f"Λ-E: {delta_CE:.5f}", master=True)
+            if delta_CE < 0:
+                destroy_all_rank(True, self.device)
+
+            # mixed estimate energy
             beta_prod = cumprod_beta.prod(-1)
-
-            # mixed estimate energy
-            # eloc_mean = (self.weight * eloc).sum() / (self.weight.sum())
-            # e_total = eloc_mean.real.item() + self.ecore
-
-            # beta_prod = cumprod_beta.prod(-1)
-            # eloc_mean = (beta_prod * eloc).sum() / beta_prod.sum()
-            # cumprod_e = eloc_mean.item() + self.ecore
-
-            # mixed estimate energy
-            sum_w = self.weight.sum()
-            sum_b = beta_prod.sum()
-            all_reduce_tensor([sum_w, sum_b], dist.ReduceOp.SUM, self.world_size, True)
-            stats_eloc = operator_statistics(eloc, self.weight / sum_w, self.sample.size(0), "E")
-            stats_eloc_p = operator_statistics(eloc, beta_prod / sum_b, self.sample.size(0), "E-prod")
+            _sum_w = self.weight.sum()
+            _sum_b = beta_prod.sum()
+            all_reduce_tensor([_sum_w, _sum_b], dist.ReduceOp.SUM, self.world_size, True)
+            stats_eloc = operator_statistics(eloc, self.weight / _sum_w, self.sample.size(0), "E")
+            stats_eloc_p = operator_statistics(eloc, beta_prod / _sum_b, self.sample.size(0), "E-prod")
             e_total = stats_eloc["mean"].real.item() + self.ecore
             cumprod_e = stats_eloc_p["mean"].real.item() + self.ecore
-
+            e_se = stats_eloc["se"].real.item()
             e_lst.append(e_total)
             e_lst_1.append(cumprod_e)
+
+            # update sample
+            _max_w = weight_new.max() * self.world_size
+            _max_b = beta.max() * self.world_size
+            all_reduce_tensor([_max_w, _max_b], dist.ReduceOp.MAX, self.world_size, True)
+            # cumprod_beta[..., epoch % p_step] = beta / _max_b
+            cumprod_beta[..., epoch % p_step] = beta / delta_CE
+            weight_new /= delta_CE
+            self.sample, self.weight = sample_new, weight_new
+
             if self.rank == 0:
                 s = f"{epoch} iteration weight_e/cumprod_e {e_total:.9f} {cumprod_e:.9f}\n"
                 s += str(stats_eloc) + "\n"
@@ -521,17 +557,16 @@ class GFMC:
 
             if epoch % 50 == 0:
                 logger.info(f"weight: min {self.weight.min():.4E}")
-            # 能量计算在branching 前后？？
             # branching
             if epoch > 0 and (epoch % self.branch_interval == 0):
                 # Buonaura and Sorella, Physical Review B 57, 11446–11456 (1998).
                 start_branch = time.time_ns()
                 weight_new = torch.ones_like(self.weight)
-                sum_w = torch.tensor(self.weight.size(0) * 1.0, device=self.device)
-                all_reduce_tensor([sum_w], dist.ReduceOp.SUM, self.world_size, True)
+                _sum_w = torch.tensor(self.weight.size(0) * 1.0, device=self.device)
+                all_reduce_tensor([_sum_w], dist.ReduceOp.SUM, self.world_size, True)
                 sample_new: Tensor = None
                 n_reconfigure = 0
-                max_reconfigure = 10
+                max_reconfigure = 1
                 while True:
                     sample_new = self.branching(self.sample, self.weight)
 
@@ -540,24 +575,25 @@ class GFMC:
                         weight_new,
                         self.Lambda,
                         idx_lst,
-                        not_sampling=True,
+                        sampling=True,
                     )[-2]
-                    stats_eloc = operator_statistics(eloc_new, weight_new / sum_w, sample_new.size(0), "E")
+                    stats_eloc = operator_statistics(eloc_new, weight_new / _sum_w, sample_new.size(0), "E")
                     e_total_new = stats_eloc["mean"].real.item() + self.ecore
                     diff = abs(e_total_new - e_total) * 1000
                     n_reconfigure += 1
-                    if diff <= 0.1:
+                    threshold = e_se * 3.0 * 1000
+                    if diff <= threshold:
                         if self.rank == 0:
-                            s = f"Finished reconfigure, Delta-E: {diff:.5f} mHa < 0.1 mHa"
+                            s = f"Finished reconfigure, Delta-E: {diff:.5f} mHa < {threshold:.5f} mHa"
                             logger.info(s, master=True)
                         break
                     else:
                         if self.rank == 0:
-                            s = f"Continued reconfigure, Delta-E: {diff:.5f} mHa > 0.1 mHa"
+                            s = f"Continued reconfigure, Delta-E: {diff:.5f} mHa > {threshold:.5f} mHa"
                             logger.info(s, master=True)
                         self.seed += 1
                         setup_seed(self.seed)
-                    if n_reconfigure > max_reconfigure:
+                    if n_reconfigure >= max_reconfigure:
                         if self.rank == 0:
                             logger.info(f"Out of max reconfigure times {max_reconfigure}", master=True)
                         break
