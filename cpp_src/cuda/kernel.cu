@@ -18,7 +18,7 @@ __global__ void tensor_to_onv_kernel(const uint8_t *bra, uint8_t *states,
   size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   if (idn >= n)
     return;
-  int idx = idn % m, idy = idn / m;
+  int64_t idx = idn % m, idy = idn / m;
   for (int i = 0; i < 8 && idx * 8 + i < sorb; i++) {
     uint8_t value = reinterpret_cast<uint8_t>(bra[sorb * idy + idx * 8 + i]);
     states[idy * 8 * _len + idx] |= (value << i);
@@ -74,8 +74,8 @@ __global__ void get_Hij_kernel_2D(T *Hmat, const unsigned long *bra,
                                   const unsigned long *ket, const T *h1e,
                                   const T *h2e, const size_t sorb,
                                   const size_t nele, const int n, const int m) {
-  int idn = blockIdx.x * blockDim.x + threadIdx.x;
-  int idm = blockIdx.y * blockDim.y + threadIdx.y;
+  size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t idm = blockIdx.y * blockDim.y + threadIdx.y;
   // // XXX: error when _len >= 2, why?
   // __shared__ unsigned long _bra_sh[_len * THREAD];
   // __shared__ unsigned long _ket_sh[_len * THREAD];
@@ -101,8 +101,8 @@ __global__ void get_Hij_kernel_3D(T *Hmat, const unsigned long *bra,
                                   const unsigned long *ket, const T *h1e,
                                   const T *h2e, const size_t sorb,
                                   const size_t nele, const int n, const int m) {
-  int idn = blockIdx.x * blockDim.x + threadIdx.x;
-  int idm = blockIdx.y * blockDim.y + threadIdx.y;
+  size_t idn = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t idm = blockIdx.y * blockDim.y + threadIdx.y;
   if (idn >= n || idm >= m)
     return;
   Hmat[idn * m + idm] =
@@ -147,7 +147,7 @@ __host__ void squant::get_Hij_2D_cuda(T *Hmat, const unsigned long *bra,
 template <const int _len>
 __global__ void get_merged_ovlst_kernel(const unsigned long *bra, int *merged,
                                         int sorb, int nele, int n) {
-  int idm = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t idm = blockIdx.x * blockDim.x + threadIdx.x;
   if (idm >= n)
     return;
   squant::get_ovlst_cuda(&bra[idm * _len], &merged[idm * sorb], sorb, nele,
@@ -211,7 +211,7 @@ __global__ void get_comb_SD_kernel(unsigned long *comb, const int *merged,
   }
   __syncthreads();
 
-  int idy = idn - idx * (_comb_thread * blockDim.x);
+  int64_t idy = idn - idx * (_comb_thread * blockDim.x);
   if (idy >= ncomb || idy == 0)
     return;
   // if(idx == 1)
@@ -229,7 +229,7 @@ get_comb_SD_fused_kernel(unsigned long *bra, unsigned long *comb,
                          const int nbatch, const int ncomb) {
   __shared__ int _merged_sh[MAX_SORB_LEN * 64];
   __shared__ unsigned long n0[MAX_SORB_LEN];
-  int idn = blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t idn = blockIdx.x * blockDim.x + threadIdx.x;
   const int _comb_thread = (ncomb - 1) / blockDim.x + 1;
   const int idx = blockIdx.x / _comb_thread;
   if (idx >= nbatch)
@@ -323,7 +323,7 @@ __global__ void permuate_sgn_kernel(const int64_t *image2,
                                     const int64_t *onstate, int64_t *index,
                                     int64_t *sgn, const int size,
                                     const size_t nbatch) {
-  int idm = blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t idm = blockIdx.x * blockDim.x + threadIdx.x;
   if (idm >= nbatch)
     return;
   sgn[idm] = squant::permute_sgn_cuda(image2, &onstate[idm * size],
@@ -694,7 +694,7 @@ __global__ void spin_flip_rand_kernel(unsigned long *bra, const int32_t *merged,
                                       const int noA, const int noB,
                                       const int64_t nbatch, const int ncomb,
                                       const int seed) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= nbatch) {
     return;
   }
