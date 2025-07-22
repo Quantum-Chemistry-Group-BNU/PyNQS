@@ -11,12 +11,7 @@ from typing import Tuple, Optional
 from utils.distributed import (
     all_gather_tensor,
     all_reduce_tensor,
-    gather_tensor,
-    scatter_tensor,
-    get_rank,
-    get_world_size,
     synchronize,
-    broadcast_tensor,
 )
 
 

@@ -97,7 +97,7 @@ tuple_tensor_2d spin_flip_rand_cuda(const Tensor &bra_tensor, const int sorb,
 Tensor get_Hij_tensor_cuda(const Tensor &bra_tensor, const Tensor &ket_tensor,
                            const Tensor &h1e_tensor, const Tensor &h2e_tensor,
                            const int sorb, const int nele) {
-  int n = 0, m = 0;
+  int64_t n = 0, m = 0;
   auto ket_dim = ket_tensor.dim();
   bool flag_eloc = false;
   const int bra_len = (sorb - 1) / 64 + 1;
@@ -144,7 +144,7 @@ Tensor get_merged_tensor_cuda(const Tensor bra, const int nele, const int sorb,
                               const int noA, const int noB) {
   // bra: (nbatch, bra_len * 8)
   const int bra_len = (sorb - 1) / 64 + 1;
-  const int nbatch = bra.size(0);
+  const int64_t nbatch = bra.size(0);
   auto options = torch::TensorOptions()
                      .dtype(torch::kInt32)
                      .layout(bra.layout())
@@ -165,8 +165,8 @@ tuple_tensor_2d get_comb_tensor_fused_cuda(const Tensor &bra_tensor,
                                            const Tensor &h1e,
                                            const Tensor &h2e) {
   // bra_tensor: (nbatch, bra_len * 8)
-  const int bra_len = (sorb - 1) / 64 + 1;
-  const int ncomb = squant::get_Num_SinglesDoubles_cuda(sorb, noA, noB) + 1;
+  const int64_t bra_len = (sorb - 1) / 64 + 1;
+  const int64_t ncomb = squant::get_Num_SinglesDoubles_cuda(sorb, noA, noB) + 1;
   const int nbatch = bra_tensor.size(0);
 
   Tensor comb, Hmat;
@@ -218,9 +218,9 @@ tuple_tensor_2d get_comb_tensor_cuda(const Tensor &bra_tensor, const int sorb,
                                      const int nele, const int noA,
                                      const int noB, bool flag_bit) {
   // bra_tensor: (nbatch, bra_len * 8)
-  const int bra_len = (sorb - 1) / 64 + 1;
-  const int ncomb = squant::get_Num_SinglesDoubles_cuda(sorb, noA, noB) + 1;
-  const int nbatch = bra_tensor.size(0);
+  const int64_t bra_len = (sorb - 1) / 64 + 1;
+  const int64_t ncomb = squant::get_Num_SinglesDoubles_cuda(sorb, noA, noB) + 1;
+  const int64_t nbatch = bra_tensor.size(0);
   Tensor comb, comb_bit;
 
   // bra is empty

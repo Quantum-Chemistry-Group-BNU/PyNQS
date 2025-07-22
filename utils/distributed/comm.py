@@ -1,3 +1,4 @@
+import sys
 import torch
 import torch.distributed as dist
 
@@ -345,3 +346,10 @@ class SyncFunction(torch.autograd.Function):
         idx_from = torch.distributed.get_rank() * ctx.batch_size
         idx_to = (torch.distributed.get_rank() + 1) * ctx.batch_size
         return grad_input[idx_from:idx_to]
+
+def destroy_all_rank(stop: bool = True, device: str = "cuda") -> None:
+    stop_flag = torch.tensor([int(stop)], device=device)
+    dist.all_reduce(stop_flag, op=dist.ReduceOp.MAX)
+    if stop_flag.item() == 1:
+        dist.destroy_process_group()
+        sys.exit(1)

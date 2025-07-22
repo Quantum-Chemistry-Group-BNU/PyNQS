@@ -1,6 +1,14 @@
-import sys
+import os
+import platform
 import re
+import subprocess
+import sys
+import time
+import warnings
+
+import numpy as np
 import torch
+import __main__
 
 from subprocess import PIPE, check_output
 
@@ -140,3 +148,44 @@ def sys_info() -> str:
         backend += f"Distributed: {torch.distributed.get_backend_config()}"
 
     return cpu + cuda + backend
+
+
+def get_version() -> str:
+    """
+    print Git version
+    """
+    command = "git rev-parse HEAD"
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    if len(result.stderr) != 0:
+        warnings.warn(f"PyNQS git-version not been found", UserWarning)
+        version = None
+    else:
+        version = result.stdout
+    return version
+
+
+def dump_input() -> str:
+    """
+    print main file to resume
+    """
+    if getattr(dump_input, "_has_dumped", False):
+        return ""
+    s = f"{'=' * 50} Begin PyNQS {'=' * 50}\n"
+    s += "System:\n"
+    s += f"System {str(platform.uname())}\n"
+    s += f"{sys_info()}\n"
+    s += f"Python {sys.version}\n"
+    s += f"numpy {np.__version__} torch {torch.__version__}\n"
+    s += f"Date: {time.ctime()}\n"
+    s += f"PyNQS Version: {get_version()}\n"
+    if hasattr(__main__, "__file__"):
+        filename = os.path.abspath(__main__.__file__)
+        s += f"Input file: {filename}\n"
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                s += f.read()
+        except Exception as e:
+            s += f"\nError reading file: {str(e)}\n"
+        s += "=" * 100
+    dump_input._has_dumped = True 
+    return s
