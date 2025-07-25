@@ -1,5 +1,7 @@
 # PyNQS: Neural-Network Quantum States for Quantum Chemistry 
 
+See arXiv:XXX (to be added) for details.
+
 ## Requirement
 
 - torch >= 2.0.0
@@ -17,7 +19,7 @@
 ## Available ansatze 
 
 1. RBM
-2. RNN
+2. RNN and BDG-RNN
 3. Transformer
 
 ## Installation 
