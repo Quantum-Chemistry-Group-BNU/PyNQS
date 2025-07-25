@@ -49,17 +49,7 @@ See arXiv:XXX (to be added) for details.
 ```bash
 > ls # check main directory
 # ci  cpp_src  docs  libs  main.py  README.md  test  utils  vmc
-> mv test/example_H4.py ../
-> ./run.sh example_H4.py # You can find the *.png, *.pth and *.npz file in ./tmp/  
+> cp example/Fe2S2/Fe2S2-OO-dcut-20.py ./
+> mkdir ./tmp/
+> ./run.sh Fe2S2-OO-dcut-20.py
 ```
-
-## Flowchart
-
-#### VMC process
-
-![process](./docs/flowchart.png)
-
-<!-- #### Eloc Distributed process -->
-
-<!-- ![process](./docs/eloc-dist.png) -->
-
