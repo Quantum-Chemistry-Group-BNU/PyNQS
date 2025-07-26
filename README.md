@@ -1,4 +1,9 @@
-# PyNQS: Neural-Network Quantum States for Quantum Chemistry 
+<div align="left">
+  <img src="https://github.com/Quantum-Chemistry-Group-BNU/PyNQS/blob/main/docs/logo.png" height="60px"/>
+</div>
+
+Neural-Network Quantum States for Quantum Chemistry 
+-----------------------------------------------
 
 See arXiv:XXX (to be added) for details.
 
