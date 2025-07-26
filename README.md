@@ -5,8 +5,6 @@
 Neural-Network Quantum States for Quantum Chemistry 
 -----------------------------------------------
 
-See arXiv:XXX (to be added) for details.
-
 ## Requirement
 
 - torch >= 2.0.0
@@ -58,3 +56,11 @@ See arXiv:XXX (to be added) for details.
 > mkdir ./tmp/
 > ./run.sh Fe2S2-OO-dcut-20.py
 ```
+
+## Documentation
+
+Documentation can be found here.
+
+## How to cite
+
+When using PyNQS for research projects, please cite: arXiv:XXX (to be added).
