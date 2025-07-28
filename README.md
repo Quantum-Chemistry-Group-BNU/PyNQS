@@ -64,3 +64,7 @@ Documentation can be found here.
 ## How to cite
 
 When using PyNQS for research projects, please cite: https://arxiv.org/abs/2507.19276.
+
+## License
+
+[Apache License 2.0](https://github.com/Quantum-Chemistry-Group-BNU/PyNQS/blob/main/LICENSE)
