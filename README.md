@@ -51,7 +51,7 @@ Neural-Network Quantum States for Quantum Chemistry
 
 ```bash
 > ls # check main directory
-# ci  cpp_src  docs  libs  main.py  README.md  test  utils  vmc
+# README.md  ci  ci_vmc  cpp_src  docs  example  gfmc  libs  main.py  requirements.txt  run.sh  utils  vmc
 > cp example/Fe2S2/Fe2S2-OO-dcut-20.py ./
 > mkdir ./tmp/
 > ./run.sh Fe2S2-OO-dcut-20.py
@@ -63,4 +63,4 @@ Documentation can be found here.
 
 ## How to cite
 
-When using PyNQS for research projects, please cite: arXiv:XXX (to be added).
+When using PyNQS for research projects, please cite: https://arxiv.org/abs/2507.19276.
