@@ -59,7 +59,7 @@ Neural-Network Quantum States for Quantum Chemistry
 
 ## Documentation
 
-[Documentation](https://pyscf-helper.readthedocs.io/en/latest) can be found here.
+[Documentation](https://pynqs.readthedocs.io/en/latest/) can be found here.
 
 ## How to cite
 
