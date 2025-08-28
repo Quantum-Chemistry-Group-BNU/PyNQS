@@ -122,7 +122,9 @@ extra_compile_args={"cxx": ["-O3", "-fopenmp", "-std=c++17", "-UGPU"]}\
                 echo -e "\033[36mComplie CPU and GPU code\033[0m"
                 sed -i '/from torch.utils/a from torch.utils.cpp_extension import CUDAExtension' setup.py
                 sed -i '/C_extension/a \
-sources = glob.glob("*/*.cpp") + glob.glob("*/*.cu")\
+# sources = glob.glob("*/*.cpp") + glob.glob("*/*.cu")\
+sources = [f for f in glob.glob("*/*.cpp") + glob.glob("*/*.cu")\
+           if not f.startswith("test/")]\
 torch_LIB = torch_DIR + "/lib"\
 if use_magma:\
     magma_INCLUDE = magma_DIR +"/include"\

@@ -30,10 +30,11 @@ Neural-Network Quantum States for Quantum Chemistry
 #### Compile CPP/CUDA sources
 ```bash
 > cd cpp_src
-> sh compile.sh -h
+> chmod +x compile.sh
+> ./compile.sh -h
 # Use shell script to Compile CPU or GPU code with conditional compilation.
 #         sh compile.sh -s CPU or -s GPU
-> sh compile.sh -s GPU
+> ./compile.sh -s GPU
 > ls  # you can find the 'setup.py', Check compilers CC and CXX
 # cpu cuda common tensor compile.sh setup.py
 # set magma_DIR and torch_DIR in 'setup.py'
