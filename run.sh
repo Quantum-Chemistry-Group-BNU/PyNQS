@@ -3,7 +3,7 @@ export CUDA_VISIBLE_DEVICES="0"
 export OMP_NUM_THREADS=1
 export MASTER_ADDR="127.0.0.1"
 export MASTER_PORT=$((RANDOM + 20000))
-export NPROC_PER_NODE=1
+export NPROC_PER_NODE=2
 RUN_FILE=$1
 echo ${RUN_FILE}
 echo "==================run pytorch=================="

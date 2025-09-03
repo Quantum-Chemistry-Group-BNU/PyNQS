@@ -117,11 +117,13 @@ class BaseVMCOptimizer(ABC):
     ) -> None:
         if dtype is None:
             if dtype_config.use_complex:
-                dtype = dtype_config.complex_dtype
+                self.dtype = dtype_config.complex_dtype
             else:
-                dtype = dtype_config.default_dtype
+                self.dtype = dtype_config.default_dtype
             self.device = dtype_config.device
         else:
+            warnings.warn(f"set dtype and device using 'dtype_config'",
+                                DeprecationWarning, stacklevel=2)
             self.dtype = dtype.dtype
             self.device = dtype.device
             assert self.dtype.to_real() == dtype_config.default_dtype

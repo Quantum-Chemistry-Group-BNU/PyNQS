@@ -382,6 +382,7 @@ class Sampler:
         stats_eloc = operator_statistics(eloc, sample_prob, float("inf"), "E")
         eloc_mean = stats_eloc["mean"]
         # e_total = eloc_mean + self.ecore
+        logger.info(f"prob-sum: {sample_prob.sum()}")
         if self.rank == 0:
             logger.info(str(stats_eloc), master=True)
 
@@ -1048,7 +1049,7 @@ class Sampler:
         state_prob = (psi_rank * psi_rank.conj()).real / norm_all
         if self.rank == 0:
             logger.info(f"End construct, cost time: {(t1-t0)/1.0e9:.3E} s", master=True)
-        return WF_LUT, state_prob
+        return WF_LUT, state_prob * self.world_size
 
     @torch.no_grad
     def ansatz_batch(
