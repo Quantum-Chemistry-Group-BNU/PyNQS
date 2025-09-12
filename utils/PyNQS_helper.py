@@ -48,14 +48,38 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
     find_num = lambda line: list(map(float, re_num.findall(line)))
 
     memory = []
+    flag_start = False  # Begin VMC iteration
+    flag_rank_out_0 = False  # rank: 0 Completed AR Sampling ... old
+    flag_rank_out_1 = False  # [rank0] Completed AR Sampling ... new
     with open(filename, encoding="utf-8") as f:
         for line in f:
+            if not flag_start:
+               if line.startswith("Begin VMC iteration"):
+                  flag_start = True
+               else:
+                  continue
+            if flag_rank_out_0 or flag_rank_out_1:
+               ...
+            else:
+               if re_sample.search(line):
+                  if line.startswith("rank: 0"):
+                     flag_rank_out_0 = True
+                  elif line.startswith("[rank0]"):
+                     flag_rank_out_1 = True
+                  else:
+                     raise NotImplementedError 
             if re_comm.search(line):
                 # Sample-Comm, Gather: 1.284E-02 s, Scatter: 1.934E-02 s, merge: 4.328E-04 s
                 sample_comm_time.append(find_num(line))
             elif re_sample.search(line):
                 # rank: 0 Completed AR Sampling: 3.640E-02 s, unique sample: 1000000 -> 36
-                t = float(line.split()[5])
+                # [rank0] Completed AR Sampling: 3.640E-02 s, unique sample: 1000000 -> 36
+                if flag_rank_out_0:
+                    t = float(line.split()[5])
+                elif flag_rank_out_1:
+                    t = float(line.split()[4])
+                else:
+                     raise NotImplementedError 
                 sample_time.append(t)
             elif re_eloc_detail.search(line):
                 # Total energy cost time: 1.303E+01 ms, Detail time: 8.932E-02 ms 9.644E-03 ms 4.761E+00 ms
@@ -321,7 +345,8 @@ def read_time_from_log(filename: str, verbose: bool = False, save_file: bool = F
     data = np.column_stack(data)
 
     df_time = pd.DataFrame(data, columns=columns)
-    df_time["n-sample"] = np.int64(df_time["n-sample"])
+    if 'n-sample' in df_time.columns:
+        df_time["n-sample"] = np.int64(df_time["n-sample"])
     # df_time["n-sample"].dtype = np.int64
 
     if save_file:
