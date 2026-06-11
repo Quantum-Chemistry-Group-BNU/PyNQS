@@ -1,5 +1,5 @@
 <div align="left">
-  <img src="https://github.com/Quantum-Chemistry-Group-BNU/PyNQS/blob/main/docs/logo.png" height="60px"/>
+  <img src="./docs/logo-pynqs.jpg" height="80px"/>
 </div>
 
 Neural-Network Quantum States for Quantum Chemistry 
@@ -7,64 +7,93 @@ Neural-Network Quantum States for Quantum Chemistry
 
 ## Requirement
 
-- torch >= 2.0.0
-- numpy >= 1.24.0, < 2.0.0
+- python >= 3.10.0
+- torch >= 2.6.0
+- numpy >= 1.24.0
 - scipy >= 1.10.0
+- pybind11
 - loguru
+- jaxtyping (conda install -c conda-forge jaxtyping)
+- matplotlib
 - [pandas >= 2.0.0]
-- [torchinfo >= 1.7.0]
 - [pyscf >= 2.5.0]
 - [memory_profiler]
 - [line_profiler]
 - [renormalizer]
-- [matplotlib]
 
-## Available ansatze 
+## Available ansatze
 
 1. RBM
 2. RNN and BDG-RNN
 3. Transformer
+4. NNBF
+5. BF-MPS
 
-## Installation 
+## Installation
 
 #### Compile CPP/CUDA sources
+
+Edit setup.py and build
+
 ```bash
-> cd cpp_src
-> chmod +x compile.sh
-> ./compile.sh -h
-# Use shell script to Compile CPU or GPU code with conditional compilation.
-#         sh compile.sh -s CPU or -s GPU
-> ./compile.sh -s GPU
+> cd src
 > ls  # you can find the 'setup.py', Check compilers CC and CXX
-# cpu cuda common tensor compile.sh setup.py
-# set magma_DIR and torch_DIR in 'setup.py'
+# build common compile.sh compile_linux.sh compile_mac.sh cpu cuda pyproject.toml setup.py tensor test
+#
+# set magma_DIR and CUDA_HOME in 'setup.py'
 # if not use magma, set 'use_magma: bool = False'
 # magma: Matrix Algebra on GPU and Multicore Architectures
-> vim common/default.h # change MAX_SORB_LEN
-# sorb in (0, 64], MAX_SORB_LEN = 1; sorb in (64, 128], MAX_SORB_LEN = 2
-# sorb in (128, 192], MAX_SORB_LEN = 3, does not support sorb > 192.
-> python setup.py develop # begin compile
-# ....
-> mv C_extension.so ../libs/   # move 'C_extension.so' to '../libs' 
+# if not use CUDA(default True), use 'USE_CUDA=0' in terminal
+# select set MAX_SORB_LEN in 'setup.py' (default 1/2/3/4)
+# sorb in (0, 64], MAX_SORB_LEN = 1
+# sorb in (64, 128], MAX_SORB_LEN = 2
+# sorb in (128, 192], MAX_SORB_LEN = 3
+# sorb in (192, 256], MAX_SORB_LEN = 4
+# currently supports sorb <= 256. For sorb > 256, modify 'pynqs/libs/C_extension.py'.
+#
+> ./compile_linux.sh or ./compile_mac.sh
 ```
 
-#### run example
+Add following lines to .bashrc
+```bash
+export PYTHONPATH="/yourpath/PyNQS:${PYTHONPATH}"
+export LD_LIBRARY_PATH=/yourpath/PyNQS/pynqs/libs:$LD_LIBRARY_PATH
+```
+or for mac
+```bash
+export PYTHONPATH="/yourpath/PyNQS:${PYTHONPATH}"
+export DYLD_LIBRARY_PATH=/yourpath/PyNQS/pynqs/libs:$DYLD_LIBRARY_PATH
+```
+
+#### Run example
 
 ```bash
 > ls # check main directory
-# README.md  ci  ci_vmc  cpp_src  docs  example  gfmc  libs  main.py  requirements.txt  run.sh  utils  vmc
-> cp example/Fe2S2/Fe2S2-OO-dcut-20.py ./
-> mkdir ./tmp/
-> ./run.sh Fe2S2-OO-dcut-20.py
+# README.md docs example pynqs requirements.txt run.sh src
+> cd example/mpsrnn
+> ./cpurun.sh Fe2S2-OO-dcut-20.py
 ```
 
 ## Documentation
 
-[Documentation](https://pynqs.readthedocs.io/en/latest/) can be found here.
+[Documentation](https://pynqs-docs.pages.dev/) can be found here.
 
 ## How to cite
 
-When using PyNQS for research projects, please cite: https://arxiv.org/abs/2507.19276.
+When using PyNQS for research projects, please cite
+
+```bash
+@article{wu2025hybrid,
+  title={Hybrid tensor network and neural network quantum states for quantum chemistry},
+  author={Wu, Zibo and Zhang, Bohan and Fang, Wei-Hai and Li, Zhendong},
+  journal={Journal of Chemical Theory and Computation},
+  volume={21},
+  number={20},
+  pages={10252--10262},
+  year={2025},
+  publisher={ACS Publications}
+}
+```
 
 ## License
 

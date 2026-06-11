@@ -1,0 +1,10 @@
+[tool.black]
+line-length = 110
+target-version = ["py312"]
+extend-exclude = '''
+/(
+  pynqs/libs
+  | pynqs/utils/det_helper
+  | pynqs/utils/mps_helper
+)/
+'''

@@ -10,6 +10,7 @@ PyNQS
    methods/symmetry
    methods/ansatz
    methods/ci
+   methods/rgn
 
 .. toctree::
    :maxdepth: 2

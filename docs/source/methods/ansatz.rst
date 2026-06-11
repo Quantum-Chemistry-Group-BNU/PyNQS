@@ -17,6 +17,7 @@ Ansätze
 - **Transformer**
 - **Mix-Ansatz**
 
+
 RBM
 ---
 
@@ -56,12 +57,12 @@ Define: :math:`\psi(n) = f_n\phi(n), \ket{n} \sim |\phi(n)|^2`.
 :math:`f_n` is **RBM**, **MLP**, **Jastrow Factor**, **Transformer** and so on.
 
 .. math::
-    \begin{align}
+    \begin{aligned}
         B & = \left\langle |f_n|^2\right\rangle_{n \sim{|\phi(n)|^2} } \\
         \widetilde{f}_n & = f_n /\sqrt{B} \\
         E_{\rm loc}(n) &= \dfrac{\dfrac{\sum_m f_n^* H_{nm}f_m\phi(m)}{\phi(m)}}{\langle |f_n|^2\rangle} = \dfrac{\sum_m \widetilde{f}_n^* H_{nm}\widetilde{f}_m\phi(m)}{\phi(n)} \\ 
         \partial_\theta \langle E\rangle &= 2\Re\big\langle (\partial_\theta (\ln(f_n\phi(n)))^*)(E_{\rm loc}(n) - \langle E\rangle|\widetilde{f}_n|^2) \big\rangle_{n\sim |\phi(n)|^2} \\
-    \end{align}
+    \end{aligned}
 
 
 .. _spin_flip:
@@ -73,10 +74,10 @@ Spin-flip
 see: ``branch spin-flip``
 
 .. math:: 
-    \begin{align}
+    \begin{aligned}
     B & = \bigg\langle |f_n|^2 + \eta f^*_n f_{\bar n }\frac{\phi(\bar n)}{\phi(n)}\bigg\rangle_{n \sim{\phi_n^2} } \\
     \widetilde{f}_n & = f_n /\sqrt{B} \\
     E_{\rm loc}(n) &= \frac{\sum_m \widetilde{f}_n^* H_{nm} (\widetilde{f}_m\phi_m + \eta\widetilde{f}_{\bar m}\phi_{\bar m})} {\phi_n} \\
     C & =   \frac{|f_n|^2 + \eta f^*_n f_{\bar n }\frac{\phi(\bar n)}{\phi(n)}}{B} \\
     \partial_\theta E &= 2\Re\left< (\partial_\theta (\ln(\phi_n f_n))^*)(E_{\rm loc}(n) - \left\langle E \right\rangle   C) \right> 
-    \end{align}
+    \end{aligned}
