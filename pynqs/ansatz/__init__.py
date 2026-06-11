@@ -7,6 +7,7 @@ from .hybrid.hybrid import HybridWaveFunction
 from .hybrid.hqc import HybridQCWaveFunction
 from .hybrid.multi import MultiPsi
 from .hybrid.alpha import AlphaPsi
+from .hybrid.excited import Excitedwavefunctions, Targetwavefunctions
 from .transformer.mps_transformer import MPSdecoder
 from .rnn.graph_mpsrnn import Graph_MPS_RNN
 from .rnn.mps_rnn import MPS_RNN_2D
